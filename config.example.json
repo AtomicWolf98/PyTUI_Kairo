@@ -1,0 +1,96 @@
+{
+  "llm": {
+    "active_provider": "minimax",
+    "active_model": "MiniMax-M3",
+    "defaults": {
+      "temperature": 0.2,
+      "max_tokens": 4000,
+      "context_window": 128000
+    },
+    "providers": [
+      {
+        "name": "minimax",
+        "base_url": "https://api.minimaxi.com/v1",
+        "api_key_env": "KAIRO_MINIMAX_API_KEY",
+        "models": [
+          {
+            "name": "MiniMax-M3",
+            "temperature": 0.2,
+            "max_tokens": 40000,
+            "context_window": 128000
+          }
+        ]
+      },
+      {
+        "name": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "KAIRO_DEEPSEEK_API_KEY",
+        "models": [
+          {
+            "name": "deepseek-chat",
+            "temperature": 0.2,
+            "max_tokens": 8000,
+            "context_window": 128000
+          }
+        ]
+      }
+    ]
+  },
+  "context_management": {
+    "enabled": true,
+    "auto_compress": true,
+    "trigger_percent": 85,
+    "target_percent": 60,
+    "preserve_recent_turns": 4
+  },
+  "ui": {
+    "mode": "auto",
+    "theme": "kairo-dark",
+    "animation": "full",
+    "mascot": true,
+    "dock_breakpoint": 120,
+    "dock_width_ratio": 0.333,
+    "dock_min_width": 36,
+    "dock_max_width": 64,
+    "reduced_motion": false,
+    "workspace_enabled": true,
+    "workspace_refresh_seconds": 2.0,
+    "workspace_max_files": 2000,
+    "workspace_diff_max_bytes": 204800
+  },
+  "policy": {
+    "workspace_path": {
+      "allow_absolute_outside": false
+    },
+    "network": {
+      "allow_hosts": [],
+      "deny_hosts": [],
+      "deny_private_loopback": true
+    },
+    "command": {
+      "allow_patterns": [],
+      "deny_patterns": [],
+      "require_confirmation_for_chained": true
+    },
+    "python": {
+      "deny_builtins": ["exec", "eval", "compile", "__import__", "open"],
+      "deny_modules": ["os", "subprocess", "sys", "socket", "urllib"]
+    },
+    "skills": {
+      "require_hash": false
+    },
+    "resource_limits": {
+      "max_read_bytes": 1048576,
+      "max_search_bytes": 1048576,
+      "max_fetch_bytes": 1048576,
+      "max_search_depth": 10,
+      "max_search_results": 100
+    }
+  },
+  "workspace_root": ".",
+  "skills_dir": "./skills",
+  "shell_type": "cmd",
+  "authorization_level": "manual",
+  "plan_mode": false,
+  "thinking_mode": false
+}

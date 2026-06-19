@@ -1,0 +1,312 @@
+import importlib.util
+import unittest
+from unittest.mock import patch
+
+if importlib.util.find_spec("textual") is None:
+    raise unittest.SkipTest("textual is not installed in the current test environment")
+
+from agent.config import Config
+from agent.ui.app import KairoApp
+from agent.ui.mascot import KAI_FRAMES, KAI_HEIGHT, KAI_WIDTH, KaiMascot
+from agent.ui.widgets import (
+    CommandPalette,
+    Composer,
+    ConversationView,
+    ExpandableToolOutput,
+    ThoughtView,
+    WorkspacePanel,
+    WorkspaceTree,
+)
+from tools.base import BaseTool, ToolRegistry
+
+
+class TestKaiFrames(unittest.TestCase):
+    def test_all_animation_frames_use_fixed_grid(self):
+        expected_states = {
+            "idle", "listening", "connecting", "thinking", "streaming",
+            "tool_wait", "tool_run", "compressing", "success", "error",
+        }
+        self.assertEqual(set(KAI_FRAMES), expected_states)
+        for frames in KAI_FRAMES.values():
+            for frame in frames:
+                lines = frame.splitlines()
+                self.assertEqual(len(lines), KAI_HEIGHT)
+                self.assertTrue(all(len(line) == KAI_WIDTH for line in lines))
+
+
+class TestKairoApp(unittest.IsolatedAsyncioTestCase):
+    def make_app(self, animation=False):
+        config = Config("config.json")
+        config.ui["workspace_enabled"] = False
+        config.ui["dock_width_ratio"] = 0.333
+        config.ui["dock_min_width"] = 36
+        config.ui["dock_max_width"] = 64
+        return KairoApp(config, ToolRegistry(), animation=animation, reduced_motion=not animation)
+
+    async def test_responsive_dock_and_focus(self):
+        narrow = self.make_app()
+        async with narrow.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            self.assertTrue(narrow.screen.has_class("narrow"))
+            self.assertTrue(narrow.query_one("#composer", Composer).has_focus)
+
+        wide = self.make_app()
+        async with wide.run_test(size=(160, 40)) as pilot:
+            await pilot.pause()
+            self.assertFalse(wide.screen.has_class("narrow"))
+            self.assertEqual(wide.query_one("#status-dock").region.width, 53)
+            await pilot.press("ctrl+b")
+            self.assertTrue(wide.query_one(WorkspaceTree).has_focus)
+            await pilot.press("ctrl+b")
+            self.assertTrue(wide.query_one("#composer", Composer).has_focus)
+            wide.query_one("#composer", Composer).text = "draft"
+            await pilot.resize_terminal(192, 40)
+            await pilot.pause()
+            self.assertEqual(wide.query_one("#status-dock").region.width, 64)
+            self.assertEqual(wide.query_one("#composer", Composer).text, "draft")
+
+        below_breakpoint = self.make_app()
+        async with below_breakpoint.run_test(size=(119, 30)) as pilot:
+            await pilot.pause()
+            self.assertTrue(below_breakpoint.screen.has_class("narrow"))
+            self.assertEqual(below_breakpoint.query_one("#status-dock").region.width, 119)
+
+        at_breakpoint = self.make_app()
+        async with at_breakpoint.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            self.assertFalse(at_breakpoint.screen.has_class("narrow"))
+            self.assertEqual(at_breakpoint.query_one("#status-dock").region.width, 40)
+            diff_region = at_breakpoint.query_one("#diff-viewer").region
+            footer_region = at_breakpoint.query_one("#dock-status-footer").region
+            dock_region = at_breakpoint.query_one("#status-dock").region
+            self.assertLessEqual(diff_region.bottom, footer_region.y)
+            self.assertLessEqual(footer_region.bottom, dock_region.bottom)
+
+        capped = self.make_app()
+        async with capped.run_test(size=(240, 40)) as pilot:
+            await pilot.pause()
+            self.assertEqual(capped.query_one("#status-dock").region.width, 64)
+
+    async def test_command_completion_and_new_session(self):
+        app = self.make_app()
+        async with app.run_test(size=(100, 30)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "/se"
+            await pilot.pause()
+            await pilot.press("tab")
+            self.assertEqual(composer.text, "/sessions ")
+
+            await app.handle_command("/new UI Test")
+            self.assertEqual(app.agent.active_session_name, "UI Test")
+
+            composer.text = "/help"
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+up")
+            self.assertEqual(composer.text, "/help")
+
+    async def test_streaming_worker_updates_history_without_losing_focus(self):
+        app = self.make_app()
+
+        def fake_stream(*_args, **_kwargs):
+            yield "content", "Hello "
+            yield "content", "from Kai"
+            yield "usage", {"prompt_tokens": 10, "completion_tokens": 4}
+
+        async with app.run_test(size=(100, 30)) as pilot:
+            with patch.object(app.agent.llm, "stream_response", side_effect=fake_stream):
+                composer = app.query_one("#composer", Composer)
+                composer.text = "hello"
+                await pilot.press("enter")
+                for _ in range(12):
+                    await pilot.pause(0.05)
+
+            self.assertFalse(app.busy)
+            self.assertEqual(app.agent.history[-1]["content"], "Hello from Kai")
+            self.assertTrue(composer.has_focus)
+            self.assertGreaterEqual(len(app.query_one("#conversation", ConversationView).children), 3)
+
+    async def test_reduced_motion_keeps_mascot_static(self):
+        app = self.make_app(animation=False)
+        async with app.run_test(size=(140, 35)) as pilot:
+            mascot = app.query_one("#header-kai", KaiMascot)
+            initial = mascot.render()
+            mascot.set_state("thinking")
+            await pilot.pause(0.3)
+            self.assertEqual(mascot.frame_index, 0)
+            self.assertNotEqual(str(initial), str(mascot.render()))
+
+    async def test_tool_approval_modal_unblocks_agent_worker(self):
+        class DemoTool(BaseTool):
+            name = "demo_tool"
+            description = "Demo"
+            parameters = {"type": "object", "properties": {}}
+
+            def execute(self):
+                self.emit_output("live output")
+                return "tool result"
+
+        registry = ToolRegistry()
+        registry.register(DemoTool())
+        config = Config("config.json")
+        config.auto_mode = False
+        config.ui["workspace_enabled"] = False
+        app = KairoApp(config, registry, animation=False, reduced_motion=True)
+        responses = [
+            [("tool_calls", [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "demo_tool", "arguments": "{}"},
+            }])],
+            [("content", "finished")],
+        ]
+
+        def fake_stream(*_args, **_kwargs):
+            yield from responses.pop(0)
+
+        async with app.run_test(size=(120, 35)) as pilot:
+            with patch.object(app.agent.llm, "stream_response", side_effect=fake_stream):
+                composer = app.query_one("#composer", Composer)
+                composer.text = "use the tool"
+                await pilot.press("enter")
+                for _ in range(10):
+                    await pilot.pause(0.03)
+                    if len(app.screen_stack) > 1:
+                        break
+                self.assertGreater(len(app.screen_stack), 1)
+                await pilot.press("enter")
+                for _ in range(20):
+                    await pilot.pause(0.03)
+                    if not app.busy:
+                        break
+
+            self.assertFalse(app.busy)
+            self.assertEqual(app.agent.history[-1]["content"], "finished")
+            self.assertIn("tool result", str(app.agent.history))
+
+    async def test_thought_and_long_tool_output_are_expandable(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            view = app.query_one("#conversation", ConversationView)
+            await view.start_assistant()
+            view.append_thought("reasoning " * 100)
+            view.finish_assistant()
+            thought = view.query_one(ThoughtView)
+            self.assertTrue(thought.has_class("collapsed-thought"))
+            thought.on_click()
+            self.assertFalse(thought.has_class("collapsed-thought"))
+
+            await view.add_tool_result("demo", "x" * 2000)
+            output = view.query_one(ExpandableToolOutput)
+            self.assertFalse(output.expanded)
+            output.on_click()
+            self.assertTrue(output.expanded)
+            await pilot.pause()
+
+    async def test_slash_palette_supports_arrows_completion_and_escape(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            palette = app.query_one("#suggestions", CommandPalette)
+            composer.text = "/"
+            await pilot.pause()
+            self.assertTrue(palette.has_class("visible"))
+            self.assertEqual(palette.index, 0)
+            self.assertEqual(len(palette.matches), 16)
+
+            for _ in range(8):
+                await pilot.press("down")
+            await pilot.pause()
+            self.assertEqual(palette.index, 8)
+            self.assertGreater(palette.scroll_y, 0)
+
+            composer.text = "/"
+            await pilot.pause()
+            await pilot.press("up")
+            await pilot.pause()
+            self.assertEqual(palette.index, 15)
+            self.assertGreater(palette.scroll_y, 0)
+
+            composer.text = "/c"
+            await pilot.pause()
+            self.assertEqual(palette.matches, ["/clear", "/compress", "/config"])
+            await pilot.press("down", "down", "enter")
+            self.assertEqual(composer.text, "/config ")
+
+            composer.text = "/se"
+            await pilot.pause()
+            await pilot.press("enter")
+            self.assertEqual(composer.text, "/sessions ")
+            self.assertFalse(palette.has_class("visible"))
+
+            composer.text = "/does-not-exist"
+            await pilot.pause()
+            self.assertFalse(palette.has_class("visible"))
+
+            composer.text = "/"
+            await pilot.pause()
+            await pilot.press("escape")
+            self.assertEqual(composer.text, "/")
+            self.assertFalse(palette.has_class("visible"))
+
+    async def test_exact_slash_command_executes(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "/help"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(composer.text, "")
+            self.assertGreaterEqual(len(app.query_one("#conversation", ConversationView).children), 2)
+
+    async def test_config_command_can_emit_console_content_on_ui_thread(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "/config"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertEqual(composer.text, "")
+            self.assertGreaterEqual(len(app.query_one("#conversation", ConversationView).children), 2)
+            self.assertTrue(composer.has_focus)
+
+    async def test_workspace_modal_and_context_threshold_colors(self):
+        app = self.make_app()
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause(0.2)
+            self.assertTrue(app.screen.has_class("narrow"))
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            self.assertGreater(len(app.screen_stack), 1)
+            self.assertIsNotNone(app.screen.query_one(WorkspacePanel))
+            await pilot.press("escape")
+
+            tracker = app.agent.token_tracker
+            tracker.context_window = 100
+            tracker.set_context_used(70)
+            app.refresh_dock()
+            self.assertTrue(app.query_one("#context-bar").has_class("context-warning"))
+            tracker.set_context_used(90)
+            app.refresh_dock()
+            self.assertTrue(app.query_one("#context-bar").has_class("context-danger"))
+
+    async def test_workspace_worker_populates_without_losing_composer_focus(self):
+        config = Config("config.json")
+        config.ui["workspace_enabled"] = True
+        config.ui["workspace_refresh_seconds"] = 10.0
+        config.ui["workspace_max_files"] = 200
+        app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+        async with app.run_test(size=(140, 35)) as pilot:
+            for _ in range(30):
+                await pilot.pause(0.05)
+                if app.workspace_snapshot.files:
+                    break
+            self.assertTrue(app.workspace_snapshot.files)
+            self.assertTrue(app.query_one("#composer", Composer).has_focus)
+
+
+if __name__ == "__main__":
+    unittest.main()
