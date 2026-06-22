@@ -18,6 +18,13 @@ class Composer(TextArea):
     MAX_VISIBLE_LINES = 8
     FRAME_HEIGHT = 2
     MAX_HEIGHT = MAX_VISIBLE_LINES + FRAME_HEIGHT
+    NEWLINE_KEYS = {
+        "shift+enter",
+        "ctrl+enter",
+        "ctrl+shift+enter",
+        "ctrl+j",
+        "newline",
+    }
 
     class Submitted(Message):
         def __init__(self, value: str):
@@ -58,7 +65,7 @@ class Composer(TextArea):
             event.prevent_default()
             event.stop()
             self.post_message(self.PaletteAccepted())
-        elif event.key in ("ctrl+enter", "shift+enter"):
+        elif any(alias in self.NEWLINE_KEYS for alias in event.aliases):
             # Insert a newline instead of submitting.
             event.prevent_default()
             event.stop()

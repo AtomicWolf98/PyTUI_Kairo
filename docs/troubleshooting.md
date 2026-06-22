@@ -42,6 +42,10 @@ kairo --help
 
 命令菜单视口约显示 7 行，但完整目录都已载入。使用 `Up` / `Down` 或鼠标滚轮继续浏览；输入前缀可过滤。如果第 8 条以后无法选中，运行 `tests/test_kairo_ui.py` 检查是否启动了旧安装。
 
+## `Shift+Enter` 或 `Ctrl+Enter` 提交了消息
+
+Windows 版本会通过输入适配器保留 Enter 的 Shift/Ctrl 状态。若终端不支持增强键盘协议或仍把组合键发送为普通 Enter，可使用 `Ctrl+J` 插入换行。确认已重新执行 `python -m pip install -e .`，避免运行旧版本。
+
 ## Dock 宽度或窄屏底栏不正确
 
 默认宽屏 Dock 为终端宽度的约三分之一，限制在 36 至 64 列；低于 120 列时切换为全宽底栏。旧 `dock_width` 会在加载时迁移为新比例配置。检查本地 `config.json` 的 `dock_width_ratio`、`dock_min_width`、`dock_max_width` 和 `dock_breakpoint`。

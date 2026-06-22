@@ -105,6 +105,7 @@ Workspace 审查是只读的，不会暂存、恢复或改写文件。
 | `Enter` | 提交；打开命令菜单时补全高亮项 |
 | `Shift+Enter` | 插入换行 |
 | `Ctrl+Enter` | 插入换行 |
+| `Ctrl+J` | 旧终端中的换行后备键 |
 | `Tab` | 补全高亮命令 |
 | `Up` / `Down` | 命令菜单中循环选择 |
 | `Esc` | 关闭命令菜单 |
@@ -115,6 +116,8 @@ Workspace 审查是只读的，不会暂存、恢复或改写文件。
 | `Ctrl+T` | 切换 Thinking Mode |
 
 Composer 会按照显式换行和自动折行后的视觉行数增高，最多显示 8 行；超过后可在输入框内部滚动。普通长文本和 Markdown 表格会在对话区折行显示。
+
+在 Windows Terminal 中，Kairo 会保留 Enter 的 Shift/Ctrl 修饰状态。如果其它终端仍把组合键识别为普通 Enter，请使用 `Ctrl+J` 插入换行。
 
 ## 常见问题速查
 

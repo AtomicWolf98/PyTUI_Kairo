@@ -38,6 +38,7 @@
 - 修复快速连续切换 workspace 时旧扫描结果覆盖新 Dock 的问题。
 - 修复 Markdown 表格超长单元格被静默裁剪的问题。
 - 修复 Composer 只能显示一行以及 soft-wrap 后不增高的问题。
+- 修复 Windows Terminal 中 Shift/Ctrl+Enter 被识别为普通 Enter 并直接提交的问题。
 
 ### Security
 

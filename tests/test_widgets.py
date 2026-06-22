@@ -17,6 +17,12 @@ from agent.tui_widgets import (
     truncate_to_width,
 )
 from agent.ui.widgets import Composer, MessageBody
+from agent.ui.windows_keys import (
+    LEFT_CTRL_PRESSED,
+    SHIFT_PRESSED,
+    VK_RETURN,
+    encode_windows_key,
+)
 
 
 class _MessageBodyHarness(App[None]):
@@ -89,6 +95,23 @@ class TestTUIWidgets(unittest.TestCase):
         self.assertEqual(selected_idx, 2)
 
 
+class TestWindowsModifiedEnter(unittest.TestCase):
+    def test_shift_enter_is_encoded_for_textual(self):
+        self.assertEqual(
+            encode_windows_key("\r", VK_RETURN, SHIFT_PRESSED),
+            "\x1b[13;2u",
+        )
+
+    def test_ctrl_enter_is_encoded_for_textual(self):
+        self.assertEqual(
+            encode_windows_key("\r", VK_RETURN, LEFT_CTRL_PRESSED),
+            "\x1b[13;5u",
+        )
+
+    def test_plain_enter_is_unchanged(self):
+        self.assertEqual(encode_windows_key("\r", VK_RETURN, 0), "\r")
+
+
 class _ComposerHarness(App[None]):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -110,17 +133,34 @@ class TestComposer(unittest.IsolatedAsyncioTestCase):
         app = _ComposerHarness()
         async with app.run_test(size=(80, 20)) as pilot:
             await pilot.pause()
+            app.composer.text = "line1"
+            app.composer.move_cursor((0, 5))
             await pilot.press("ctrl+enter")
             await pilot.pause()
-            self.assertIn("\n", app.composer.text)
+            self.assertEqual(app.composer.text, "line1\n")
+            self.assertEqual(app.submitted, [])
 
     async def test_shift_enter_inserts_newline(self):
         app = _ComposerHarness()
         async with app.run_test(size=(80, 20)) as pilot:
             await pilot.pause()
+            app.composer.text = "line1"
+            app.composer.move_cursor((0, 5))
             await pilot.press("shift+enter")
             await pilot.pause()
-            self.assertIn("\n", app.composer.text)
+            self.assertEqual(app.composer.text, "line1\n")
+            self.assertEqual(app.submitted, [])
+
+    async def test_ctrl_j_alias_inserts_newline(self):
+        app = _ComposerHarness()
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause()
+            app.composer.text = "line1"
+            app.composer.move_cursor((0, 5))
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            self.assertEqual(app.composer.text, "line1\n")
+            self.assertEqual(app.submitted, [])
 
     async def test_enter_submits_non_empty_text(self):
         app = _ComposerHarness()
