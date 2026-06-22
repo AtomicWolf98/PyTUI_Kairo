@@ -1,6 +1,10 @@
 import json
-import sys
 from pathlib import Path
+from typing import Optional
+
+from agent.config import Config
+from agent.repl import ShellSession, PythonREPL
+from agent.workspace_context import WorkspaceContext
 from tools.base import BaseTool
 from tools.policy import (
     classify_command_scope,
@@ -10,8 +14,6 @@ from tools.policy import (
     Permission,
     WorkspacePathPolicy,
 )
-from agent.config import Config
-from agent.repl import ShellSession, PythonREPL
 
 
 def _parse_tool_args(arguments):
@@ -43,7 +45,7 @@ class ShellExecutor(BaseTool):
                 "type": "boolean",
                 "description": (
                     "Set to true to confirm execution of commands that contain shell "
-                    "chaining metacharacters (e.g. ; & | $() ` or newlines)."
+                    "chaining metacharacters (e.g. ; & | || && > >> < $() ` or newlines)."
                 ),
                 "default": False
             }
@@ -52,7 +54,7 @@ class ShellExecutor(BaseTool):
     }
     permission = Permission.EXECUTE
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, workspace_context: Optional[WorkspaceContext] = None):
         self.config = config
         command_policy_config = config.policy.get("command", {})
         self.command_policy = CommandPolicy(
@@ -62,13 +64,38 @@ class ShellExecutor(BaseTool):
                 "require_confirmation_for_chained", True
             ),
         )
-        workspace_path_config = config.policy.get("workspace_path", {})
-        self.policy = WorkspacePathPolicy(
-            Path(config.workspace_root).resolve(),
-            allow_absolute_outside=workspace_path_config.get("allow_absolute_outside", False),
-        )
+        if workspace_context is not None:
+            self.policy = WorkspacePathPolicy(
+                workspace_context.root,
+                allow_absolute_outside=False,
+            )
+            self.workspace_context = workspace_context
+        else:
+            workspace_path_config = config.policy.get("workspace_path", {})
+            self.policy = WorkspacePathPolicy(
+                Path(config.workspace_root).resolve(),
+                allow_absolute_outside=workspace_path_config.get("allow_absolute_outside", False),
+            )
+            self.workspace_context = None
         # Persistent shell session
-        self.session = ShellSession(shell_type=config.shell_type)
+        self.session = ShellSession(
+            shell_type=config.shell_type,
+            cwd=self.policy.root,
+        )
+        if workspace_context is not None:
+            workspace_context.add_listener(self._on_workspace_moved)
+
+    def _on_workspace_moved(self, new_root: Path) -> None:
+        """Restart the persistent shell session in the new workspace."""
+        self.policy = WorkspacePathPolicy(new_root, allow_absolute_outside=False)
+        try:
+            self.session.close()
+        except Exception:
+            pass
+        self.session = ShellSession(
+            shell_type=self.config.shell_type,
+            cwd=new_root,
+        )
 
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)
@@ -116,10 +143,13 @@ class PythonExecutor(BaseTool):
     }
     permission = Permission.EXECUTE
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, workspace_context: Optional[WorkspaceContext] = None):
         self.config = config
         policy = None
-        if config is not None and hasattr(config, "policy"):
+        if workspace_context is not None:
+            workspace_root = workspace_context.root
+            allow_absolute_outside = False
+        elif config is not None and hasattr(config, "policy"):
             policy = config.policy.get("python")
             workspace_path_config = config.policy.get("workspace_path", {})
             workspace_root = Path(config.workspace_root).resolve()
@@ -130,6 +160,12 @@ class PythonExecutor(BaseTool):
         self.policy = WorkspacePathPolicy(workspace_root, allow_absolute_outside=allow_absolute_outside)
         # Persistent python REPL
         self.repl = PythonREPL(policy=policy)
+        if workspace_context is not None:
+            workspace_context.add_listener(self._on_workspace_moved)
+
+    def _on_workspace_moved(self, new_root: Path) -> None:
+        """Update the Python executor's policy root when the workspace moves."""
+        self.policy = WorkspacePathPolicy(new_root, allow_absolute_outside=False)
 
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)

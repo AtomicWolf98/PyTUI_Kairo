@@ -148,6 +148,12 @@ AI 相关配置优先级从高到低：
 - `skills.require_hash`：是否要求 skill 文件附带 `.sha256` 摘要。
 - `resource_limits`：文件读取、搜索、网页抓取的大小与深度限制。
 
+`authorization_level` 只控制调用前是否弹出确认。即使使用 `yolo`，上述工具策略仍会执行并可能拒绝路径越界、受限网络、链式命令或受禁 Python 能力。
+
+## LLM 传输行为
+
+`LLMClient` 自动遵循进程环境中的 `HTTP_PROXY` 和 `HTTPS_PROXY`。当前重试策略是代码内默认行为，尚未暴露为 JSON 字段：最多重试 3 次，退避约为 1、2、4 秒；429、服务端错误和可重试的网络错误会重试，认证错误、普通客户端错误和上下文长度错误不会进入通用重试。上下文长度错误由 Agent 的上下文治理单独执行一次紧急压缩或裁剪重试。
+
 ## 启动参数
 
 | 参数 | 说明 |
@@ -168,3 +174,5 @@ AI 相关配置优先级从高到低：
 旧版 `model_profiles` 结构仍可读取，启动时会归一化为新的 `llm.providers` 运行时结构；`save()` 会按新结构写回。
 
 `auto_mode: true` 的旧字段会被映射为 `authorization_level: "auto"`，保存后不再写入 `auto_mode`。
+
+旧 `ui.dock_width` 会迁移为比例 Dock 配置。新文件应使用 `dock_width_ratio`、`dock_min_width` 和 `dock_max_width`，不再写入 `dock_width`。

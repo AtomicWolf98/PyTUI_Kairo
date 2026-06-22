@@ -240,5 +240,98 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(saved["llm"]["active_provider"], "deepseek")
         self.assertEqual(saved["llm"]["active_model"], "deepseek-chat")
 
+    def test_policy_round_trips_untouched(self):
+        custom_policy = {
+            "workspace_path": {"allow_absolute_outside": True},
+            "network": {"allow_hosts": ["example.com"], "deny_hosts": ["evil.com"]},
+            "command": {"allow_patterns": [], "deny_patterns": ["rm"], "require_confirmation_for_chained": False},
+            "python": {"deny_builtins": ["open"], "deny_modules": ["os"]},
+            "skills": {"require_hash": True},
+            "resource_limits": {"max_read_bytes": 2048},
+        }
+        data = {
+            "llm": {
+                "active_provider": "test",
+                "active_model": "test-model",
+                "defaults": {"temperature": 0.2, "max_tokens": 4000, "context_window": 128000},
+                "providers": [],
+            },
+            "policy": custom_policy,
+        }
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        config = Config(config_path=str(self.config_path))
+        self.assertEqual(config.policy["workspace_path"]["allow_absolute_outside"], True)
+        self.assertEqual(config.policy["network"]["allow_hosts"], ["example.com"])
+
+        config.save()
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        saved_policy = saved["policy"]
+        self.assertEqual(saved_policy["workspace_path"]["allow_absolute_outside"], True)
+        self.assertEqual(saved_policy["network"]["allow_hosts"], ["example.com"])
+        self.assertEqual(saved_policy["network"]["deny_hosts"], ["evil.com"])
+        self.assertEqual(saved_policy["command"]["deny_patterns"], ["rm"])
+        self.assertEqual(saved_policy["python"]["deny_builtins"], ["open"])
+        self.assertEqual(saved_policy["skills"]["require_hash"], True)
+        self.assertEqual(saved_policy["resource_limits"]["max_read_bytes"], 2048)
+
+    def test_unknown_extension_fields_are_preserved(self):
+        data = {
+            "llm": {
+                "active_provider": "test",
+                "active_model": "test-model",
+                "defaults": {"temperature": 0.2, "max_tokens": 4000, "context_window": 128000},
+                "providers": [],
+            },
+            "custom_extension": {"foo": "bar"},
+            "another_field": 42,
+        }
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        config = Config(config_path=str(self.config_path))
+        config.save()
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved.get("custom_extension"), {"foo": "bar"})
+        self.assertEqual(saved.get("another_field"), 42)
+
+    def test_malformed_json_prevents_save(self):
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            f.write("this is not json")
+
+        config = Config(config_path=str(self.config_path))
+        self.assertIsNotNone(config._load_error)
+        with self.assertRaises(RuntimeError):
+            config.save()
+
+    def test_atomic_save_keeps_existing_config_on_interrupt(self):
+        data = {
+            "llm": {
+                "active_provider": "test",
+                "active_model": "test-model",
+                "defaults": {"temperature": 0.2, "max_tokens": 4000, "context_window": 128000},
+                "providers": [],
+            },
+            "authorization_level": "manual",
+        }
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        config = Config(config_path=str(self.config_path))
+        config.authorization_level = "yolo"
+
+        tmp_path = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
+        # Simulate an interrupted previous save by creating a stale tmp file.
+        tmp_path.write_text("stale partial content", encoding="utf-8")
+
+        config.save()
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["authorization_level"], "yolo")
+        self.assertFalse(tmp_path.exists())
+
 if __name__ == "__main__":
     unittest.main()

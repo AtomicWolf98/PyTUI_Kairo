@@ -112,9 +112,10 @@ class PythonREPL:
 
 
 class ShellSession:
-    def __init__(self, shell_type: str = "cmd", command_timeout: float = 30.0, on_output=None):
+    def __init__(self, shell_type: str = "cmd", command_timeout: float = 30.0, on_output=None, cwd: Optional[str] = None):
         self.shell_type = shell_type.lower()
         self.command_timeout = command_timeout
+        self.cwd = cwd
         self.process = None
         self.lock = threading.Lock()
         self.on_output = on_output
@@ -127,6 +128,10 @@ class ShellSession:
         else: # default cmd
             cmd = ["cmd.exe", "/Q", "/K"] # /Q for echo off, /K to keep running
 
+        kwargs = {}
+        if self.cwd is not None:
+            kwargs["cwd"] = self.cwd
+
         # Start process with pipes
         self.process = subprocess.Popen(
             cmd,
@@ -134,7 +139,8 @@ class ShellSession:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, # merge stderr into stdout
             text=True,
-            bufsize=0
+            bufsize=0,
+            **kwargs,
         )
         
         # Consume startup messages by running a quick dummy command

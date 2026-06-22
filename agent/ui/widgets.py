@@ -1,20 +1,24 @@
-from pathlib import PurePosixPath
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.text import Text
 from textual import events
 from textual.containers import Horizontal, ScrollableContainer, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, ListItem, ListView, ProgressBar, Static, TextArea, Tree
+from textual.widgets import Input, Label, ListItem, ListView, Markdown, ProgressBar, Static, TextArea, Tree
 
 from agent.ui.mascot import KaiMascot
-from agent.workspace import ChangedFile, WorkspaceSnapshot
+from agent.workspace import WorkspaceSnapshot
 
 
 class Composer(TextArea):
+    MIN_HEIGHT = 3
+    MAX_VISIBLE_LINES = 8
+    FRAME_HEIGHT = 2
+    MAX_HEIGHT = MAX_VISIBLE_LINES + FRAME_HEIGHT
+
     class Submitted(Message):
         def __init__(self, value: str):
             super().__init__()
@@ -54,12 +58,17 @@ class Composer(TextArea):
             event.prevent_default()
             event.stop()
             self.post_message(self.PaletteAccepted())
+        elif event.key in ("ctrl+enter", "shift+enter"):
+            # Insert a newline instead of submitting.
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
         elif event.key == "enter":
-            value = self.text.strip()
-            if value:
+            raw_value = self.text
+            if raw_value.strip():
                 event.prevent_default()
                 event.stop()
-                self.post_message(self.Submitted(value))
+                self.post_message(self.Submitted(raw_value.rstrip("\n")))
         elif event.key == "tab":
             event.prevent_default()
             event.stop()
@@ -72,6 +81,21 @@ class Composer(TextArea):
             event.prevent_default()
             event.stop()
             self.post_message(self.HistoryRequested(1))
+
+    def update_height(self) -> None:
+        """Grow or shrink the composer to fit wrapped visual lines."""
+        visual_lines = max(1, self.document.line_count, self.virtual_size.height)
+        target = min(
+            self.MAX_HEIGHT,
+            max(self.MIN_HEIGHT, visual_lines + self.FRAME_HEIGHT),
+        )
+        self.styles.height = target
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area is self:
+            # TextArea updates its wrapped document during refresh. Measuring on
+            # the next refresh includes soft-wrapped rows, not just explicit \n.
+            self.call_after_refresh(self.update_height)
 
 
 class CommandPalette(ListView):
@@ -162,21 +186,57 @@ class ExpandableToolOutput(Static):
         self.update(self._render_content())
 
 
+class MessageBody(VerticalScroll):
+    """Unified message renderer: Markdown for prose, scrollable for wide blocks."""
+
+    DEFAULT_CSS = """
+    MessageBody MarkdownTableContent > .cell,
+    MessageBody MarkdownTableContent > .header {
+        text-overflow: fold;
+    }
+    """
+
+    def __init__(self, content: str = "", *, is_markdown: bool = True, **kwargs):
+        super().__init__(**kwargs)
+        self._content = content
+        self._is_markdown = is_markdown
+
+    def compose(self):
+        if self._is_markdown:
+            yield Markdown(self._content)
+        else:
+            yield Static(self._content)
+
+    def update_content(self, content: str) -> None:
+        self._content = content
+        if self._is_markdown:
+            self.query_one(Markdown).update(content)
+        else:
+            self.query_one(Static).update(content)
+
+    def append_content(self, chunk: str) -> None:
+        self._content += chunk
+        self.update_content(self._content)
+
+
 class ConversationView(VerticalScroll):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._assistant_widget: Optional[Static] = None
+        self._assistant_widget: Optional[MessageBody] = None
         self._assistant_text = ""
         self._thought_widget: Optional[ThoughtView] = None
         self._thought_text = ""
 
     async def add_user(self, text: str):
-        widget = Static(Markdown(text), classes="message user-message")
+        widget = MessageBody(text, is_markdown=True, classes="message user-message")
         await self.mount(widget)
         self.scroll_end(animate=False)
 
     async def add_notice(self, content, classes: str = "notice-message"):
-        widget = Static(content, classes=f"message {classes}")
+        if isinstance(content, str):
+            widget = MessageBody(content, is_markdown=True, classes=f"message {classes}")
+        else:
+            widget = MessageBody(content, is_markdown=False, classes=f"message {classes}")
         await self.mount(widget)
         self.scroll_end(animate=False)
 
@@ -202,21 +262,21 @@ class ConversationView(VerticalScroll):
             elif role == "user":
                 await self.add_user(content)
             elif role == "assistant":
-                await self.add_notice(Markdown(content or "_Tool request_"), "assistant-message")
+                await self.add_notice(content or "_Tool request_", "assistant-message")
             elif role == "tool":
                 await self.add_notice(Text(f"{message.get('name', 'tool')}\n{content}", style="#c6a0f6"), "tool-message")
 
     async def start_assistant(self):
         self._assistant_text = ""
         self._thought_text = ""
-        self._assistant_widget = Static("", classes="message assistant-message")
+        self._assistant_widget = MessageBody("", is_markdown=True, classes="message assistant-message")
         self._thought_widget = ThoughtView("", classes="message thought-message hidden")
         await self.mount(self._thought_widget, self._assistant_widget)
 
     def append_content(self, chunk: str):
         self._assistant_text += chunk
         if self._assistant_widget:
-            self._assistant_widget.update(Markdown(self._assistant_text + " ▌"))
+            self._assistant_widget.update_content(self._assistant_text + " ▌")
         self.scroll_end(animate=False)
 
     def append_thought(self, chunk: str):
@@ -228,7 +288,7 @@ class ConversationView(VerticalScroll):
 
     def finish_assistant(self):
         if self._assistant_widget:
-            self._assistant_widget.update(Markdown(self._assistant_text or "_No response content._"))
+            self._assistant_widget.update_content(self._assistant_text or "_No response content._")
         if self._thought_widget:
             self._thought_widget.add_class("collapsed-thought")
 
@@ -245,7 +305,7 @@ class BrandHeader(Horizontal):
         yield KaiMascot(id="header-kai", reduced_motion=self.reduced_motion)
         yield Static(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.1[/#7f849c]\n"
                 f"[#a5adcb]{self.profile or self.model}[/#a5adcb]  [#6e738d]({self.model})[/#6e738d]\n"
                 f"[#7f849c]{self.cwd}[/#7f849c]"
             ),
@@ -256,7 +316,7 @@ class BrandHeader(Horizontal):
         self.model, self.profile, self.cwd = model, profile, cwd
         self.query_one("#brand-meta", Static).update(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.1[/#7f849c]\n"
                 f"[#a5adcb]{profile or model}[/#a5adcb]  [#6e738d]({model})[/#6e738d]\n"
                 f"[#7f849c]{cwd}[/#7f849c]"
             )
@@ -275,7 +335,9 @@ class WorkspaceTree(Tree[str]):
         self._tree_signature = ()
 
     def update_snapshot(self, snapshot: WorkspaceSnapshot):
+        root_path = Path(snapshot.root).resolve()
         signature = (
+            str(root_path),
             snapshot.files,
             tuple((change.path, change.status) for change in snapshot.changes),
         )
@@ -283,12 +345,12 @@ class WorkspaceTree(Tree[str]):
             return
         expanded = self._expanded_paths(self.root)
         self.clear()
-        self.root.label = PurePosixPath(snapshot.root).name or snapshot.root
+        self.root.label = root_path.name or str(root_path)
         self.root.data = ""
         nodes = {"": self.root}
         change_map = {change.path: change for change in snapshot.changes}
         for file_path in snapshot.files:
-            parts = PurePosixPath(file_path).parts
+            parts = Path(file_path).parts
             parent_key = ""
             for index, part in enumerate(parts):
                 current_key = "/".join(parts[:index + 1])
@@ -332,9 +394,12 @@ class ChangedFiles(ListView):
 
     async def update_snapshot(self, snapshot: WorkspaceSnapshot):
         selected = snapshot.selected_file
-        signature = tuple(
-            (change.path, change.status, change.session_touched, change.staged)
-            for change in snapshot.changes
+        signature = (
+            str(Path(snapshot.root).resolve()),
+            tuple(
+                (change.path, change.status, change.session_touched, change.staged)
+                for change in snapshot.changes
+            ),
         )
         if signature == self._change_signature:
             if selected in self.paths:
@@ -373,6 +438,7 @@ class DiffViewer(ScrollableContainer):
 
     def update_snapshot(self, snapshot: WorkspaceSnapshot):
         signature = (
+            str(Path(snapshot.root).resolve()),
             snapshot.selected_file, snapshot.diff, snapshot.diff_truncated, snapshot.error,
         )
         if signature == self._diff_signature:

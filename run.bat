@@ -9,7 +9,7 @@ echo ==========================================
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python is not installed or not in PATH.
-    echo Please install Python 3.8+ and try again.
+    echo Please install Python 3.10+ and try again.
     pause
     exit /b 1
 )
@@ -36,7 +36,7 @@ if errorlevel 1 (
 :: Install / Update dependencies from pyproject.toml
 echo Installing/updating dependencies from pyproject.toml...
 python -m pip install --upgrade pip >nul
-pip install -e ".[dev]"
+pip install -e .
 if errorlevel 1 (
     echo [ERROR] Failed to install dependencies. Please check pyproject.toml and your network.
     pause

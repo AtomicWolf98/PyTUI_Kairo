@@ -2,6 +2,9 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Optional
+
+from agent.workspace_context import WorkspaceContext
 from tools.base import BaseTool
 from tools.policy import OperationScope, Permission, SecurityError, WorkspacePathPolicy
 
@@ -16,6 +19,33 @@ def _parse_tool_args(arguments):
         return {}
     except Exception:
         return {}
+
+
+def _workspace_policy(
+    config,
+    workspace_context: Optional[WorkspaceContext],
+) -> WorkspacePathPolicy:
+    """Build a WorkspacePathPolicy from the single WorkspaceContext or config."""
+    if workspace_context is not None:
+        return WorkspacePathPolicy(
+            workspace_context.root,
+            allow_absolute_outside=False,
+        )
+    allow_absolute_outside = False
+    if config is not None:
+        allow_absolute_outside = config.policy.get("workspace_path", {}).get("allow_absolute_outside", False)
+    return WorkspacePathPolicy(Path.cwd(), allow_absolute_outside=allow_absolute_outside)
+
+
+def _attach_policy_listener(tool, workspace_context: Optional[WorkspaceContext]) -> None:
+    """Attach a listener that updates *tool.policy* when the workspace moves."""
+    if workspace_context is None:
+        return
+
+    def _on_move(new_root: Path) -> None:
+        tool.policy = WorkspacePathPolicy(new_root, allow_absolute_outside=False)
+
+    workspace_context.add_listener(_on_move)
 
 
 class SearchFileTool(BaseTool):
@@ -44,21 +74,20 @@ class SearchFileTool(BaseTool):
         "required": ["query"]
     }
 
-    def __init__(self, config=None):
-        allow_absolute_outside = False
+    def __init__(self, config=None, workspace_context: Optional[WorkspaceContext] = None):
         max_search_bytes = 1_048_576
         max_search_depth = 10
         max_search_results = 100
         if config is not None:
-            allow_absolute_outside = config.policy.get("workspace_path", {}).get("allow_absolute_outside", False)
             limits = config.policy.get("resource_limits", {})
             max_search_bytes = limits.get("max_search_bytes", max_search_bytes)
             max_search_depth = limits.get("max_search_depth", max_search_depth)
             max_search_results = limits.get("max_search_results", max_search_results)
-        self.policy = WorkspacePathPolicy(Path.cwd(), allow_absolute_outside=allow_absolute_outside)
+        self.policy = _workspace_policy(config, workspace_context)
         self.max_bytes = max(1024, int(max_search_bytes))
         self.max_depth = max(1, int(max_search_depth))
         self.max_results = max(1, int(max_search_results))
+        _attach_policy_listener(self, workspace_context)
 
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)
@@ -157,11 +186,9 @@ class PatchFileTool(BaseTool):
         "required": ["path", "search_block", "replace_block"]
     }
 
-    def __init__(self, config=None):
-        allow_absolute_outside = False
-        if config is not None:
-            allow_absolute_outside = config.policy.get("workspace_path", {}).get("allow_absolute_outside", False)
-        self.policy = WorkspacePathPolicy(Path.cwd(), allow_absolute_outside=allow_absolute_outside)
+    def __init__(self, config=None, workspace_context: Optional[WorkspaceContext] = None):
+        self.policy = _workspace_policy(config, workspace_context)
+        _attach_policy_listener(self, workspace_context)
 
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)

@@ -1,4 +1,3 @@
-import os
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -12,7 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Static, TextArea
 
-from agent.commands import build_help_markdown, get_command_map
+from agent.commands import build_help_markdown, CommandDispatcher, get_command_map
 from agent.core import Agent
 from agent.ui.events import AgentEvent, EventConsole
 from agent.ui.mascot import KaiMascot
@@ -30,6 +29,7 @@ from agent.ui.widgets import (
     WorkspaceTree,
 )
 from agent.workspace import WorkspaceMonitor, WorkspaceSnapshot
+from agent.workspace_context import WorkspaceContext
 
 
 COMMANDS: Dict[str, str] = get_command_map()
@@ -105,6 +105,7 @@ class KairoApp(App):
         height: auto;
         margin-bottom: 1;
         padding: 0 1;
+        overflow-x: auto;
     }
 
     .user-message {
@@ -179,7 +180,7 @@ class KairoApp(App):
     #composer-wrap {
         height: auto;
         min-height: 5;
-        max-height: 10;
+        max-height: 12;
         padding: 0 2 1 2;
         background: $bg;
     }
@@ -196,7 +197,7 @@ class KairoApp(App):
         width: 1fr;
         height: 3;
         min-height: 3;
-        max-height: 8;
+        max-height: 10;
         background: $surface;
         border: solid #343b44;
         padding: 0 1;
@@ -410,7 +411,16 @@ class KairoApp(App):
         self.registry = registry
         self.animation = animation
         self.reduced_motion = reduced_motion or not animation
-        self.agent = Agent(config, registry, console=EventConsole(self.emit_from_worker))
+        self.workspace_context = WorkspaceContext(
+            config.workspace_root,
+            allow_absolute_outside=config.policy.get("workspace_path", {}).get("allow_absolute_outside", False),
+        )
+        self.agent = Agent(
+            config,
+            registry,
+            console=EventConsole(self.emit_from_worker),
+            workspace_context=self.workspace_context,
+        )
         self.agent.workspace_changed = self._on_workspace_changed
         self.registry.set_output_callback(lambda chunk: self.emit_from_worker("tool_output", chunk))
         self.busy = False
@@ -418,17 +428,13 @@ class KairoApp(App):
         self.input_history: List[str] = []
         self.history_index = 0
         self.command_matches: List[str] = []
-        workspace_root = Path(config.workspace_root).expanduser().resolve()
-        self.workspace_monitor = WorkspaceMonitor(
-            workspace_root,
-            max_files=int(config.ui.get("workspace_max_files", 2000)),
-            max_diff_bytes=int(config.ui.get("workspace_diff_max_bytes", 204800)),
-        )
-        self.workspace_snapshot = WorkspaceSnapshot(root=str(workspace_root))
+        self.workspace_monitor = self._make_workspace_monitor()
+        self.workspace_snapshot = WorkspaceSnapshot(root=str(self.workspace_monitor.root))
         self.workspace_selected_file = ""
         self.workspace_active_tool = ""
         self.workspace_scan_running = False
         self.workspace_scan_pending = False
+        self.workspace_generation = 0
         self.workspace_modal = None
         self._main_screen = None
         self._ui_thread_id = None
@@ -577,14 +583,22 @@ class KairoApp(App):
     async def on_agent_event(self, event: AgentEvent):
         kind, payload = event.kind, event.payload
         if kind == "workspace_snapshot":
-            self.workspace_snapshot = payload
-            self.workspace_selected_file = payload.selected_file
+            if isinstance(payload, tuple):
+                generation, snapshot = payload
+                if generation != self.workspace_generation:
+                    # Stale worker result; ignore.
+                    return
+            else:
+                # Backwards-compatible path for empty snapshots posted directly.
+                snapshot = payload
+            self.workspace_snapshot = snapshot
+            self.workspace_selected_file = snapshot.selected_file
             try:
-                await self.main_query("#status-dock", StatusDock).update_workspace(payload)
+                await self.main_query("#status-dock", StatusDock).update_workspace(snapshot)
             except NoMatches:
                 return
             if self.workspace_modal and self.workspace_modal.is_mounted:
-                await self.workspace_modal.query_one(WorkspacePanel).update_snapshot(payload)
+                await self.workspace_modal.query_one(WorkspacePanel).update_snapshot(snapshot)
             self.refresh_dock()
             return
         view = self.main_query("#conversation", ConversationView)
@@ -668,7 +682,7 @@ class KairoApp(App):
         raw_text = event.text_area.text
         text = raw_text.strip()
         suggestions = self.main_query("#suggestions", CommandPalette)
-        if raw_text.startswith("/") and " " not in raw_text:
+        if raw_text.startswith("/") and " " not in raw_text and "\n" not in raw_text:
             self.command_matches = [command for command in COMMANDS if command.startswith(text)]
         else:
             self.command_matches = []
@@ -757,8 +771,15 @@ class KairoApp(App):
 
     @work(thread=True, group="workspace")
     def scan_workspace(self, selected_file: str):
-        snapshot = self.workspace_monitor.refresh(selected_file)
-        self.call_from_thread(self.post_message, AgentEvent("workspace_snapshot", snapshot))
+        # Capture the monitor and generation at invocation time so a stale worker
+        # cannot overwrite a newer workspace context.
+        monitor = self.workspace_monitor
+        generation = self.workspace_generation
+        snapshot = monitor.refresh(selected_file)
+        self.call_from_thread(
+            self.post_message,
+            AgentEvent("workspace_snapshot", (generation, snapshot)),
+        )
         self.call_from_thread(self._workspace_scan_finished)
 
     def _workspace_scan_finished(self):
@@ -770,14 +791,29 @@ class KairoApp(App):
     def on_workspace_file_selected(self, event: WorkspaceFileSelected):
         self.request_workspace_refresh(event.path)
 
-    def _on_workspace_changed(self, new_root: str):
-        root = Path(new_root).expanduser().resolve()
-        self.workspace_monitor = WorkspaceMonitor(
-            root,
+    def _make_workspace_monitor(self) -> WorkspaceMonitor:
+        return WorkspaceMonitor(
+            self.workspace_context.root,
             max_files=int(self.config.ui.get("workspace_max_files", 2000)),
             max_diff_bytes=int(self.config.ui.get("workspace_diff_max_bytes", 204800)),
         )
-        self.workspace_snapshot = WorkspaceSnapshot(root=str(root))
+
+    def _on_workspace_changed(self, new_root: str):
+        root = Path(new_root).expanduser().resolve()
+        self.workspace_generation += 1
+        self.workspace_selected_file = ""
+        self.workspace_active_tool = ""
+        self.workspace_monitor = self._make_workspace_monitor()
+        empty_snapshot = WorkspaceSnapshot(root=str(root))
+        self.workspace_snapshot = empty_snapshot
+        # Immediately clear the Dock so the user does not continue seeing the old workspace.
+        self.post_message(AgentEvent("workspace_snapshot", empty_snapshot))
+        try:
+            self.main_query("#brand-header", BrandHeader).update_meta(
+                self.config.model, self.config.active_model_profile, str(root)
+            )
+        except Exception:
+            pass
         self.request_workspace_refresh()
 
     def action_workspace(self):
@@ -854,56 +890,86 @@ class KairoApp(App):
         return result[0]
 
     async def handle_command(self, raw: str):
-        parts = raw.strip().split(maxsplit=1)
-        command = parts[0].lower()
-        argument = parts[1].strip() if len(parts) > 1 else ""
+        dispatcher = CommandDispatcher(self.agent)
+        result = dispatcher.dispatch(raw)
         view = self.main_query("#conversation", ConversationView)
 
-        if command in ("/exit", "/quit"):
+        if not result.handled:
+            await view.add_notice(Text(f"Unknown command: {raw.strip().split()[0].lower()}", style="#ed8796"), "error-message")
+            return
+
+        if result.exit_app:
             self.exit()
-        elif command == "/help":
+            return
+
+        kind = result.data.get("kind") if isinstance(result.data, dict) else None
+
+        if kind == "help":
             await view.add_notice(Markdown(build_help_markdown().replace("Available Slash Commands", "Kairo commands")))
-        elif command in ("/plan", "/auto", "/think", "/skills", "/config"):
-            self.agent.handle_command(raw)
+            return
+
+        if kind == "skills":
+            skills = result.data.get("skills", [])
+            skills_text = "".join(f"- **{item['name']}**: {item['description']}\n" for item in skills)
+            await view.add_notice(Markdown(skills_text or "No skills loaded."))
             self.refresh_dock()
-        elif command == "/clear":
-            self.agent.handle_command(raw)
+            return
+
+        if kind == "config":
+            await view.add_notice(Markdown(result.message))
+            self.refresh_dock()
+            return
+
+        if kind == "new":
+            await view.clear_messages()
+            await view.add_notice(Text(result.message, style="#8bd5ca"))
+            self.refresh_dock()
+            return
+
+        if kind == "clear":
             await view.clear_messages()
             self.refresh_dock()
-        elif command == "/undo":
-            self.agent.handle_command(raw)
+            return
+
+        if kind == "undo":
             await view.render_history(self.agent.history)
             self.refresh_dock()
-        elif command == "/new":
-            session = self.agent.conversations.create_session(argument or None)
-            await view.clear_messages()
-            await view.add_notice(Text(f"Created conversation: {session.name}", style="#8bd5ca"))
+            return
+
+        if kind == "workspace_moved":
+            await view.add_notice(Text(result.message, style="#8bd5ca"))
             self.refresh_dock()
-        elif command == "/sessions":
-            options = self.agent.conversations.session_menu_options()
-            current = next(
-                (i for i, session in enumerate(self.agent.conversations.sessions)
-                 if session.id == self.agent.conversations.active_session_id), 0
-            )
-            self.push_screen(
-                ChoiceModal("Switch conversation", options, current),
-                self._session_selected,
-            )
-        elif command == "/model":
-            profiles = self.config.get_model_profile_names()
-            current = profiles.index(self.config.active_model_profile) if self.config.active_model_profile in profiles else 0
-            self.push_screen(
-                ChoiceModal("Select provider / model", profiles, current),
-                self._model_selected,
-            )
-        elif command == "/compress":
+            return
+
+        if kind == "workspace_show":
+            await view.add_notice(Text(result.message, style="#a5adcb"))
+            return
+
+        if result.message:
+            style = "#8bd5ca" if result.success else "#ed8796"
+            await view.add_notice(Text(result.message, style=style))
+
+        if result.interactive:
+            if kind == "sessions":
+                self.push_screen(
+                    ChoiceModal("Switch conversation", result.data["options"], result.data["default_index"]),
+                    self._session_selected,
+                )
+            elif kind == "model":
+                self.push_screen(
+                    ChoiceModal("Select provider / model", result.data["profiles"], result.data["default_index"]),
+                    self._model_selected,
+                )
+            return
+
+        if kind == "compress":
             self.busy = True
             self.set_kai_state("compressing")
             self.run_compression()
-        elif command == "/workspace":
-            self.action_workspace()
-        else:
-            await view.add_notice(Text(f"Unknown command: {command}", style="#ed8796"), "error-message")
+            return
+
+        if result.refresh_ui:
+            self.refresh_dock()
 
     def _session_selected(self, choice):
         if choice is None or choice < 0:
@@ -922,7 +988,7 @@ class KairoApp(App):
         self.agent.conversations.set_context_window(self.config.context_window)
         self.config.save()
         self.main_query("#brand-header", BrandHeader).update_meta(
-            self.config.model, self.config.active_model_profile, str(Path.cwd())
+            self.config.model, self.config.active_model_profile, str(self.workspace_context.root)
         )
         self.post_message(AgentEvent("model_selected", profiles[choice]))
         self.refresh_dock()

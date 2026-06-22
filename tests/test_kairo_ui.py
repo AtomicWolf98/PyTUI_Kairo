@@ -1,5 +1,8 @@
 import importlib.util
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 if importlib.util.find_spec("textual") is None:
@@ -7,8 +10,10 @@ if importlib.util.find_spec("textual") is None:
 
 from agent.config import Config
 from agent.ui.app import KairoApp
+from agent.workspace import WorkspaceSnapshot
 from agent.ui.mascot import KAI_FRAMES, KAI_HEIGHT, KAI_WIDTH, KaiMascot
 from agent.ui.widgets import (
+    BrandHeader,
     CommandPalette,
     Composer,
     ConversationView,
@@ -35,13 +40,81 @@ class TestKaiFrames(unittest.TestCase):
 
 
 class TestKairoApp(unittest.IsolatedAsyncioTestCase):
+    def _make_temp_config(self):
+        """Create a temporary config file so tests never mutate the repo config."""
+        data = {
+            "llm": {
+                "active_provider": "test",
+                "active_model": "test-model",
+                "defaults": {
+                    "temperature": 0.2,
+                    "max_tokens": 4000,
+                    "context_window": 128000,
+                },
+                "providers": [
+                    {
+                        "name": "test",
+                        "base_url": "https://test.api.com/v1",
+                        "models": [
+                            {
+                                "name": "test-model",
+                                "temperature": 0.2,
+                                "max_tokens": 4000,
+                                "context_window": 128000,
+                            }
+                        ],
+                    }
+                ],
+            },
+            "ui": {
+                "mode": "auto",
+                "theme": "kairo-dark",
+                "animation": "full",
+                "mascot": True,
+                "dock_breakpoint": 120,
+                "dock_width_ratio": 0.333,
+                "dock_min_width": 36,
+                "dock_max_width": 64,
+                "reduced_motion": False,
+                "workspace_enabled": True,
+                "workspace_refresh_seconds": 2.0,
+                "workspace_max_files": 2000,
+                "workspace_diff_max_bytes": 204800,
+            },
+            "workspace_root": ".",
+            "skills_dir": "./skills",
+            "shell_type": "cmd",
+            "authorization_level": "auto",
+            "plan_mode": False,
+            "thinking_mode": False,
+        }
+        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+        json.dump(data, handle)
+        handle.close()
+        return handle.name
+
     def make_app(self, animation=False):
-        config = Config("config.json")
+        config_path = self._track_config(self._make_temp_config())
+        config = Config(config_path)
         config.ui["workspace_enabled"] = False
         config.ui["dock_width_ratio"] = 0.333
         config.ui["dock_min_width"] = 36
         config.ui["dock_max_width"] = 64
         return KairoApp(config, ToolRegistry(), animation=animation, reduced_motion=not animation)
+
+    def tearDown(self):
+        # Clean up temporary config files created by _make_temp_config.
+        for path in getattr(self, "_configs", []):
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _track_config(self, path: str) -> str:
+        if not hasattr(self, "_configs"):
+            self._configs = []
+        self._configs.append(path)
+        return path
 
     async def test_responsive_dock_and_focus(self):
         narrow = self.make_app()
@@ -148,7 +221,8 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
 
         registry = ToolRegistry()
         registry.register(DemoTool())
-        config = Config("config.json")
+        config_path = self._track_config(self._make_temp_config())
+        config = Config(config_path)
         config.auto_mode = False
         config.ui["workspace_enabled"] = False
         app = KairoApp(config, registry, animation=False, reduced_motion=True)
@@ -294,11 +368,12 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.query_one("#context-bar").has_class("context-danger"))
 
     async def test_workspace_worker_populates_without_losing_composer_focus(self):
-        config = Config("config.json")
-        config.ui["workspace_enabled"] = True
-        config.ui["workspace_refresh_seconds"] = 10.0
-        config.ui["workspace_max_files"] = 200
-        app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+        app = self.make_app()
+        app.config.ui["workspace_enabled"] = True
+        app.config.ui["workspace_refresh_seconds"] = 10.0
+        app.config.ui["workspace_max_files"] = 200
+        app.workspace_monitor = app._make_workspace_monitor()
+        app.workspace_snapshot = WorkspaceSnapshot(root=str(app.workspace_monitor.root))
         async with app.run_test(size=(140, 35)) as pilot:
             for _ in range(30):
                 await pilot.pause(0.05)
@@ -306,6 +381,206 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
                     break
             self.assertTrue(app.workspace_snapshot.files)
             self.assertTrue(app.query_one("#composer", Composer).has_focus)
+
+    async def test_manual_command_sets_authorization_level(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "/manual"
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(app.config.authorization_level, "manual")
+
+    async def test_yolo_command_sets_authorization_level(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "/yolo"
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(app.config.authorization_level, "yolo")
+
+    async def test_workspace_move_command_switches_root(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp:
+            other = Path(temp) / "other"
+            other.mkdir()
+            config_path = self._track_config(self._make_temp_config())
+            config = Config(config_path)
+            config.ui["workspace_enabled"] = False
+            config.ui["dock_width_ratio"] = 0.333
+            config.ui["dock_min_width"] = 36
+            config.ui["dock_max_width"] = 64
+            app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+            async with app.run_test(size=(140, 35)) as pilot:
+                composer = app.query_one("#composer", Composer)
+                composer.text = f"/workspace move {other}"
+                await pilot.press("enter")
+                for _ in range(20):
+                    await pilot.pause(0.05)
+                    if app.workspace_context.root.resolve() == other.resolve():
+                        break
+                self.assertEqual(app.workspace_context.root.resolve(), other.resolve())
+                self.assertEqual(app.config.workspace_root, str(other.resolve()))
+
+    async def test_workspace_tree_refreshes_when_file_structures_are_identical(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp:
+            old = Path(temp) / "old"
+            new = Path(temp) / "new"
+            old.mkdir()
+            new.mkdir()
+            (old / "same.txt").write_text("old", encoding="utf-8")
+            (new / "same.txt").write_text("new", encoding="utf-8")
+
+            config_path = self._track_config(self._make_temp_config())
+            config = Config(config_path)
+            config.workspace_root = str(old)
+            config.ui["workspace_enabled"] = True
+            config.ui["workspace_refresh_seconds"] = 10.0
+            app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+            async with app.run_test(size=(140, 35)) as pilot:
+                # Wait for initial scan.
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_snapshot.files:
+                        break
+                tree = app.query_one("#workspace-tree", WorkspaceTree)
+                self.assertEqual(str(tree.root.label), "old")
+
+                composer = app.query_one("#composer", Composer)
+                composer.text = f"/workspace move {new}"
+                await pilot.press("enter")
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_context.root.resolve() == new.resolve():
+                        break
+                self.assertEqual(app.workspace_context.root.resolve(), new.resolve())
+                # Tree root label must reflect the new directory even though file list is identical.
+                self.assertEqual(str(tree.root.label), "new")
+
+    async def test_workspace_tree_updates_for_different_file_structures(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp:
+            old = Path(temp) / "old"
+            new = Path(temp) / "new"
+            old.mkdir()
+            new.mkdir()
+            (old / "old_file.txt").write_text("x", encoding="utf-8")
+            (new / "new_file.txt").write_text("y", encoding="utf-8")
+
+            config_path = self._track_config(self._make_temp_config())
+            config = Config(config_path)
+            config.workspace_root = str(old)
+            config.ui["workspace_enabled"] = True
+            config.ui["workspace_refresh_seconds"] = 10.0
+            app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+            async with app.run_test(size=(140, 35)) as pilot:
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_snapshot.files:
+                        break
+                tree = app.query_one("#workspace-tree", WorkspaceTree)
+                initial_files = set(str(node.label) for node in tree.root.children)
+                self.assertIn("old_file.txt", initial_files)
+
+                composer = app.query_one("#composer", Composer)
+                composer.text = f"/workspace move {new}"
+                await pilot.press("enter")
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_context.root.resolve() == new.resolve():
+                        break
+                self.assertEqual(app.workspace_context.root.resolve(), new.resolve())
+                new_files = set(str(node.label) for node in tree.root.children)
+                self.assertIn("new_file.txt", new_files)
+                self.assertNotIn("old_file.txt", new_files)
+
+    async def test_workspace_switch_consistency_across_components(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp:
+            old = Path(temp) / "old"
+            new = Path(temp) / "new"
+            old.mkdir()
+            new.mkdir()
+            (old / "file.txt").write_text("x", encoding="utf-8")
+            (new / "file.txt").write_text("y", encoding="utf-8")
+
+            config_path = self._track_config(self._make_temp_config())
+            config = Config(config_path)
+            config.workspace_root = str(old)
+            config.ui["workspace_enabled"] = True
+            config.ui["workspace_refresh_seconds"] = 10.0
+            app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+            async with app.run_test(size=(140, 35)) as pilot:
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_snapshot.files:
+                        break
+
+                composer = app.query_one("#composer", Composer)
+                composer.text = f"/workspace move {new}"
+                await pilot.press("enter")
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_context.root.resolve() == new.resolve():
+                        break
+
+                tree = app.query_one("#workspace-tree", WorkspaceTree)
+                brand = app.query_one("#brand-header", BrandHeader)
+                self.assertEqual(app.workspace_context.root.resolve(), new.resolve())
+                self.assertEqual(app.workspace_monitor.root.resolve(), new.resolve())
+                self.assertEqual(Path(app.workspace_snapshot.root).resolve(), new.resolve())
+                self.assertEqual(str(tree.root.label), "new")
+                self.assertIn(str(new.resolve()), brand.cwd)
+                self.assertEqual(Path(config.workspace_root).resolve(), new.resolve())
+
+    async def test_rapid_workspace_switches_do_not_revert(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp:
+            a = Path(temp) / "a"
+            b = Path(temp) / "b"
+            c = Path(temp) / "c"
+            for d in (a, b, c):
+                d.mkdir()
+                (d / "marker.txt").write_text(d.name, encoding="utf-8")
+
+            config_path = self._track_config(self._make_temp_config())
+            config = Config(config_path)
+            config.workspace_root = str(a)
+            config.ui["workspace_enabled"] = True
+            config.ui["workspace_refresh_seconds"] = 10.0
+            app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
+            async with app.run_test(size=(140, 35)) as pilot:
+                for _ in range(30):
+                    await pilot.pause(0.05)
+                    if app.workspace_snapshot.files:
+                        break
+
+                composer = app.query_one("#composer", Composer)
+                for target in (b, c):
+                    composer.text = f"/workspace move {target}"
+                    await pilot.press("enter")
+
+                for _ in range(40):
+                    await pilot.pause(0.05)
+                    if app.workspace_context.root.resolve() == c.resolve():
+                        break
+
+                tree = app.query_one("#workspace-tree", WorkspaceTree)
+                self.assertEqual(app.workspace_context.root.resolve(), c.resolve())
+                self.assertEqual(str(tree.root.label), "c")
+                self.assertEqual(Path(app.workspace_snapshot.root).resolve(), c.resolve())
 
 
 if __name__ == "__main__":

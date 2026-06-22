@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,8 @@ class Config:
         self._base_url_override: Optional[str] = None
         self._model_override: Optional[str] = None
         self._context_window_override: Optional[int] = None
+        self._load_error: Optional[Exception] = None
+        self._extra_fields: Dict[str, Any] = {}
 
         self.api_key: str = ""
         self.base_url: str = "https://api.openai.com/v1"
@@ -328,12 +331,29 @@ class Config:
     def load(self):
         """Load configuration from JSON and environment variables."""
         data: Dict[str, Any] = {}
+        self._load_error = None
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as handle:
                     data = json.load(handle) or {}
             except Exception as exc:
+                self._load_error = exc
                 print(f"[Warning] Failed to load config from {self.config_path}: {exc}")
+                data = {}
+
+        # Preserve truly unknown top-level fields so we do not silently drop user
+        # extensions. Legacy fields that have been migrated to the new llm block are
+        # intentionally excluded from extra preservation.
+        known_keys = {
+            "llm", "context_management", "ui", "workspace_root", "skills_dir",
+            "shell_type", "authorization_level", "auto_mode", "plan_mode",
+            "thinking_mode", "policy",
+            # Legacy fields consumed during migration; must not be written back.
+            "api_key", "base_url", "model", "models", "active_provider",
+            "active_model", "active_model_profile", "model_profiles",
+            "profile_defaults", "temperature", "max_tokens", "context_window",
+        }
+        self._extra_fields = {key: value for key, value in data.items() if key not in known_keys}
 
         self.workspace_root = str(data.get("workspace_root", self.workspace_root))
         self.skills_dir = str(data.get("skills_dir", self.skills_dir))
@@ -383,6 +403,12 @@ class Config:
 
     def save(self):
         """Save configuration using the provider-centric llm structure."""
+        if self._load_error is not None:
+            raise RuntimeError(
+                f"Config at {self.config_path} could not be loaded ({self._load_error}); "
+                "fix or rebuild it before saving."
+            ) from self._load_error
+
         providers: List[Dict[str, Any]] = []
         for provider in self.llm["providers"]:
             serialized_provider = {
@@ -410,7 +436,7 @@ class Config:
                 serialized_provider["models"].append(serialized_model)
             providers.append(serialized_provider)
 
-        data = {
+        data: Dict[str, Any] = {
             "llm": {
                 "active_provider": self.llm["active_provider"],
                 "active_model": self.llm["active_model"],
@@ -425,12 +451,26 @@ class Config:
             "authorization_level": self.authorization_level,
             "plan_mode": self.plan_mode,
             "thinking_mode": self.thinking_mode,
+            "policy": copy.deepcopy(self.policy),
         }
+        # Restore user-defined extension fields so they are not silently dropped.
+        for key, value in self._extra_fields.items():
+            if key not in data:
+                data[key] = value
+
+        tmp_path = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
         try:
-            with open(self.config_path, "w", encoding="utf-8") as handle:
+            with open(tmp_path, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, self.config_path)
         except Exception as exc:
             print(f"[Error] Failed to save config to {self.config_path}: {exc}")
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def __repr__(self) -> str:
         return (

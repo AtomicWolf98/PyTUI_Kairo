@@ -1,11 +1,12 @@
 import json
 import os
+import socket
 import tempfile
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 from agent.config import Config
-from tools.base import ToolRegistry
 from tools.file_ops import ReadFileTool, WriteFileTool, ListDirTool
 from tools.patch_ops import PatchFileTool, SearchFileTool
 from tools.policy import (
@@ -61,12 +62,38 @@ class TestNetworkPolicy(TestCase):
 
     def test_allows_public_host(self):
         policy = NetworkPolicy()
-        policy.validate_url("https://example.com/page")  # should not raise
+        with patch("tools.policy.socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 443)),
+        ]):
+            policy.validate_url("https://example.com/page")  # should not raise
 
     def test_allow_hosts_restricts_others(self):
         policy = NetworkPolicy(allow_hosts=["example.com"])
         with self.assertRaises(SecurityError):
             policy.validate_url("https://other.com/page")
+
+    def test_localhost_is_rejected(self):
+        policy = NetworkPolicy()
+        with self.assertRaises(SecurityError):
+            policy.validate_url("http://localhost/page")
+
+    def test_dns_resolves_to_private_ip(self):
+        policy = NetworkPolicy()
+        with patch("tools.policy.socket.getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.1.1", 80)),
+        ]):
+            with self.assertRaises(SecurityError):
+                policy.validate_url("http://private.example.com/page")
+
+    def test_ipv6_loopback_is_rejected(self):
+        policy = NetworkPolicy()
+        with self.assertRaises(SecurityError):
+            policy.validate_url("http://[::1]/page")
+
+    def test_decimal_ip_literal_is_rejected(self):
+        policy = NetworkPolicy()
+        with self.assertRaises(SecurityError):
+            policy.validate_url("http://2130706433/page")
 
 
 class TestCommandPolicy(TestCase):
@@ -203,6 +230,24 @@ class TestCommandScopeClassification(TestCase):
     def test_external_absolute_path(self):
         self.assertEqual(classify_command_scope("cat /etc/passwd", self.policy), OperationScope.EXTERNAL)
 
+    def test_cd_parent_is_system(self):
+        self.assertEqual(classify_command_scope("cd ..", self.policy), OperationScope.SYSTEM)
+
+    def test_quoted_outside_path_is_external(self):
+        self.assertEqual(classify_command_scope('type "C:\\Windows\\system.ini"', self.policy), OperationScope.EXTERNAL)
+
+    def test_pipe_is_system(self):
+        self.assertEqual(classify_command_scope("echo ok | findstr ok", self.policy), OperationScope.SYSTEM)
+
+    def test_redirect_is_system(self):
+        self.assertEqual(classify_command_scope("echo x > file.txt", self.policy), OperationScope.SYSTEM)
+
+    def test_env_variable_is_system(self):
+        self.assertEqual(classify_command_scope("echo %PATH%", self.policy), OperationScope.SYSTEM)
+
+    def test_and_chain_is_system(self):
+        self.assertEqual(classify_command_scope("echo a && echo b", self.policy), OperationScope.SYSTEM)
+
 
 class TestPythonScopeClassification(TestCase):
     def setUp(self):
@@ -228,6 +273,22 @@ class TestPythonScopeClassification(TestCase):
     def test_external_file_open(self):
         code = "with open('/etc/passwd') as f: print(f.read())"
         self.assertEqual(classify_python_scope(code, self.policy), OperationScope.EXTERNAL)
+
+    def test_pathlib_write_text_is_external(self):
+        code = "from pathlib import Path; Path('x.txt').write_text('hi')"
+        self.assertEqual(classify_python_scope(code, self.policy), OperationScope.EXTERNAL)
+
+    def test_io_open_is_external(self):
+        code = "import io; io.open('x.txt')"
+        self.assertEqual(classify_python_scope(code, self.policy), OperationScope.EXTERNAL)
+
+    def test_eval_is_system(self):
+        code = "eval('1+1')"
+        self.assertEqual(classify_python_scope(code, self.policy), OperationScope.SYSTEM)
+
+    def test_importlib_is_system(self):
+        code = "import importlib; importlib.import_module('os')"
+        self.assertEqual(classify_python_scope(code, self.policy), OperationScope.SYSTEM)
 
 
 class TestConfigAuthorizationAndWorkspace(TestCase):
@@ -294,8 +355,11 @@ class TestWorkspaceMoveCommand(TestCase):
             json.dump(data, f)
         self.other_dir = Path(self.temp_dir.name) / "other"
         self.other_dir.mkdir()
+        self.agent = None
 
     def tearDown(self):
+        if self.agent is not None:
+            self.agent.shutdown()
         self.temp_dir.cleanup()
 
     def test_workspace_move_updates_root(self):
@@ -303,8 +367,8 @@ class TestWorkspaceMoveCommand(TestCase):
         from agent.config import Config
 
         config = Config(config_path=str(self.config_path))
-        agent = build_agent(config)
-        handled = agent.handle_command(f"/workspace move {self.other_dir}")
+        self.agent = build_agent(config)
+        handled = self.agent.handle_command(f"/workspace move {self.other_dir}")
         self.assertTrue(handled)
         self.assertEqual(Path(config.workspace_root).resolve(), self.other_dir.resolve())
 
@@ -313,7 +377,37 @@ class TestWorkspaceMoveCommand(TestCase):
         from agent.config import Config
 
         config = Config(config_path=str(self.config_path))
-        agent = build_agent(config)
-        handled = agent.handle_command("/workspace move /does/not/exist")
+        self.agent = build_agent(config)
+        handled = self.agent.handle_command("/workspace move /does/not/exist")
         self.assertTrue(handled)
         self.assertNotEqual(Path(config.workspace_root).resolve(), Path("/does/not/exist").resolve())
+
+    def test_workspace_move_does_not_delete_existing_sentinel(self):
+        from agent.bootstrap import build_agent
+        from agent.config import Config
+
+        sentinel = self.other_dir / ".kairo_write_test"
+        sentinel.write_text("user data", encoding="utf-8")
+
+        config = Config(config_path=str(self.config_path))
+        self.agent = build_agent(config)
+        handled = self.agent.handle_command(f"/workspace move {self.other_dir}")
+        self.assertTrue(handled)
+        self.assertTrue(sentinel.exists())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "user data")
+
+    def test_workspace_move_updates_tool_policy_roots(self):
+        from agent.bootstrap import build_agent
+        from agent.config import Config
+        from tools.file_ops import ReadFileTool
+
+        config = Config(config_path=str(self.config_path))
+        self.agent = build_agent(config)
+        read_tool = self.agent.registry.tools["read_file"]
+        self.assertIsInstance(read_tool, ReadFileTool)
+        initial_root = read_tool.policy.root
+
+        handled = self.agent.handle_command(f"/workspace move {self.other_dir}")
+        self.assertTrue(handled)
+        self.assertEqual(read_tool.policy.root.resolve(), self.other_dir.resolve())
+        self.assertNotEqual(read_tool.policy.root.resolve(), initial_root.resolve())

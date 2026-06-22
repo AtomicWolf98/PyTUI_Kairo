@@ -20,7 +20,7 @@ kairo
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev]"
+python -m pip install -e .
 kairo
 ```
 
@@ -86,6 +86,8 @@ Kairo 有三种授权级别，控制工具调用前是否弹窗确认：
 - `/workspace` 显示当前 workspace 路径。
 - `/workspace move <path>` 切换到另一个目录，工具边界会立即跟随新目录生效。
 
+切换成功后 Header、右侧文件树、改动列表和 Diff 会共同刷新。快速连续切换时，过期目录扫描结果不会覆盖最新 workspace。
+
 Workspace 审查是只读的，不会暂存、恢复或改写文件。
 
 ## 会话与上下文
@@ -102,6 +104,7 @@ Workspace 审查是只读的，不会暂存、恢复或改写文件。
 | --- | --- |
 | `Enter` | 提交；打开命令菜单时补全高亮项 |
 | `Shift+Enter` | 插入换行 |
+| `Ctrl+Enter` | 插入换行 |
 | `Tab` | 补全高亮命令 |
 | `Up` / `Down` | 命令菜单中循环选择 |
 | `Esc` | 关闭命令菜单 |
@@ -110,6 +113,8 @@ Workspace 审查是只读的，不会暂存、恢复或改写文件。
 | `Ctrl+A` | 循环授权级别 |
 | `Ctrl+P` | 切换 Plan Mode |
 | `Ctrl+T` | 切换 Thinking Mode |
+
+Composer 会按照显式换行和自动折行后的视觉行数增高，最多显示 8 行；超过后可在输入框内部滚动。普通长文本和 Markdown 表格会在对话区折行显示。
 
 ## 常见问题速查
 

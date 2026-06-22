@@ -18,7 +18,7 @@ kairo --tui
 若仍失败，检查 `textual` 是否已安装：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -e .
 ```
 
 ## `/config` 后出现 `call_from_thread` RuntimeError
@@ -34,7 +34,7 @@ python -m pytest tests/test_kairo_ui.py
 若仍出现旧堆栈，重新执行 editable install：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -e .
 kairo --help
 ```
 
@@ -61,6 +61,15 @@ kairo --help
 - 路径不存在或不是目录；
 - Kairo 对该目录没有写权限（会尝试创建并删除临时测试文件来验证）。
 
+如果命令提示成功但 Dock 仍显示旧目录，请先确认版本为 `0.2.1` 或更高。该版本会立即清空旧 Tree，并忽略切换过程中返回的过期扫描结果。
+
+## 多行输入或宽文本显示不完整
+
+- `Shift+Enter` 或 `Ctrl+Enter` 在 Composer 中插入换行，普通 Enter 提交。
+- Composer 最多展开 8 个视觉行，更多内容在输入框内部滚动。
+- 普通文本和 Markdown 表格会自动折行；代码块和 Diff 可能保留横向滚动以维持格式。
+- 若输入框仍固定为一行，重新执行 `python -m pip install -e .`，避免启动旧 editable install。
+
 ## 工具一直等待确认
 
 当前不是 `yolo` 级别。若被判定为外部/系统/危险操作，即使在 `auto` 级别也会弹窗。确认弹窗中会显示操作分类，如 `[SYSTEM] Execute tool 'run_command'?`。
@@ -77,6 +86,12 @@ kairo --help
 2. 确认 provider 的 `api_key_env` 环境变量存在。
 3. 检查 provider 是否兼容 `/chat/completions` 流式 SSE。
 4. 401/403 通常是凭据问题；context-length 错误会由上下文管理执行一次紧急重试。
+
+Kairo 会读取 `HTTP_PROXY` / `HTTPS_PROXY`，并对 429、服务端错误和部分网络错误做有限重试。若代理环境变量配置错误，请先在同一终端检查并修正；认证、普通 4xx 和 context-length 错误不会被通用重试掩盖。
+
+## `yolo` 下工具仍被拒绝
+
+`yolo` 只跳过授权确认，不关闭工具策略。请根据错误检查 `policy.workspace_path`、`policy.network`、`policy.command`、`policy.python` 和资源上限。启用 `require_confirmation_for_chained` 时，含 `;`、`&&` 或 `|` 的 Shell 命令还可能要求工具参数显式传入 `confirmed=true`。
 
 ## 模型切换后立即接近上下文上限
 

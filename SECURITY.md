@@ -16,6 +16,8 @@ Kairo 是本地执行型 Agent，不是隔离沙箱。Shell、Python、文件写
 
 自 0.2.x 起，内置工具受 `policy` 配置约束：
 
+授权确认与工具策略是两层机制：`manual`、`auto`、`yolo` 决定调用前是否需要用户确认；路径、网络、命令、Python、skill 与资源策略在获准执行后仍然检查。`yolo` 会跳过授权弹窗，但不会绕过这些策略。
+
 - `workspace_path.allow_absolute_outside`（默认 `false`）：`read_file`、`write_file`、`list_dir`、`search_file`、`patch_file` 的目标路径必须位于启动工作区内，禁止 `..` 逃逸。
 - `network.allow_hosts/deny_hosts` 与 `deny_private_loopback`（默认 `true`）：`web_fetch` 默认不能访问私有/回环地址。
 - `command.allow_patterns/deny_patterns` 与 `require_confirmation_for_chained`（默认 `true`）：`run_command` 对含 `;`、`&&`、`|` 等 shell 链式字符的命令要求二次确认。
@@ -23,6 +25,8 @@ Kairo 是本地执行型 Agent，不是隔离沙箱。Shell、Python、文件写
 - `skills.require_hash`（默认 `false`）：开启后，`skills/` 目录下的 `.py` 必须附带同名的 `.py.sha256` 摘要文件才能加载。
 
 这些策略是**最小可行沙箱**，不能替代操作系统级隔离。处理不可信代码或高敏感数据时，应在虚拟机/容器中使用 Kairo。
+
+当 `command.require_confirmation_for_chained` 开启时，链式 Shell 命令可能要求工具参数显式包含 `confirmed=true`。这属于工具策略校验，即使授权级别为 `yolo` 也可能返回拒绝信息。
 
 ## 凭据处理
 

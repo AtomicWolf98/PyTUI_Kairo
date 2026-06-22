@@ -4,6 +4,26 @@ import re
 from tools.base import BaseTool
 from tools.policy import NetworkPolicy, OperationScope, Permission, SecurityError
 
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that refuses to follow any redirects."""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        raise SecurityError(f"Redirects are not allowed (HTTP {code}).")
+
+    def http_error_301(self, req, fp, code, msg, headers):
+        raise SecurityError(f"Redirects are not allowed (HTTP {code}).")
+
+    def http_error_303(self, req, fp, code, msg, headers):
+        raise SecurityError(f"Redirects are not allowed (HTTP {code}).")
+
+    def http_error_307(self, req, fp, code, msg, headers):
+        raise SecurityError(f"Redirects are not allowed (HTTP {code}).")
+
+    def http_error_308(self, req, fp, code, msg, headers):
+        raise SecurityError(f"Redirects are not allowed (HTTP {code}).")
+
+
 class WebFetchTool(BaseTool):
     name = "web_fetch"
     description = "Fetches the HTML content of a website URL and extracts the main text."
@@ -20,8 +40,8 @@ class WebFetchTool(BaseTool):
     permission = Permission.NETWORK
 
     def classify_scope(self, arguments: str) -> OperationScope:
-        """Network boundaries are enforced by NetworkPolicy; scope is internal."""
-        return OperationScope.INTERNAL
+        """Network access is always treated as external."""
+        return OperationScope.EXTERNAL
 
     def __init__(self, config=None):
         self.network_policy: NetworkPolicy
@@ -49,9 +69,13 @@ class WebFetchTool(BaseTool):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
 
+        # Build an opener that refuses automatic redirects so SSRF via Location
+        # headers is not possible.
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with opener.open(req, timeout=10) as response:
                 content_length = response.headers.get("Content-Length")
                 if content_length is not None and int(content_length) > self.max_bytes:
                     return (
