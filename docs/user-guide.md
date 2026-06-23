@@ -20,7 +20,7 @@ kairo
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 kairo
 ```
 
@@ -53,7 +53,7 @@ $env:KAIRO_MINIMAX_API_KEY = "sk-..."
 
 3. 按需修改 `config.json` 中的 `llm.active_provider`、`llm.active_model` 等字段。
 
-> 不要把密钥写入仓库脚本。`config.json` 已被 `.gitignore` 忽略，但环境变量更安全。
+> 不要把密钥写入仓库脚本。`config.json` 和 `.kairo/` 已被 `.gitignore` 忽略，但环境变量更安全。
 
 ## 授权级别
 
@@ -84,18 +84,25 @@ Kairo 有三种授权级别，控制工具调用前是否弹窗确认：
 - 宽屏右侧 Dock 显示当前 workspace 的文件树、Git 改动、会话触达文件和只读 Diff。
 - `Ctrl+B` 在 Composer 与 Workspace 之间切换焦点；窄屏会打开全屏 Workspace Modal。
 - `/workspace` 显示当前 workspace 路径。
-- `/workspace move <path>` 切换到另一个目录，工具边界会立即跟随新目录生效。
-
-切换成功后 Header、右侧文件树、改动列表和 Diff 会共同刷新。快速连续切换时，过期目录扫描结果不会覆盖最新 workspace。
+- `/workspace move <path>` 切换到另一个目录，无需重启：
+  - 文件工具、搜索、patch 的边界立即切换。
+  - 持久 Shell 的当前目录切换到新 workspace。
+  - Python REPL 被重置，旧变量不会继续指向旧目录。
+  - Custom skills 会重新从新 workspace 的 `skills_dir` 加载。
+  - 当前会话的 runtime state 被更新，下一次 LLM 请求会知道新的 workspace root。
 
 Workspace 审查是只读的，不会暂存、恢复或改写文件。
 
 ## 会话与上下文
 
 - `/new [名称]` 创建新会话，`/sessions` 切换会话。
-- 会话只存在于内存中，关闭 Kairo 后不会恢复。
+- 默认情况下，会话会自动持久化到 `config.json` 中 `sessions.storage_dir` 指定的目录（默认 `.kairo/sessions`）。
+- 关闭 Kairo 后重新启动，之前的会话列表、历史记录、token 占用和压缩次数都会恢复。
+- 每个会话独立保存为一个 JSON 文件；`index.json` 记录会话列表和上次活跃的会话。
+- Session 文件中可能包含代码、命令输出、文件内容或敏感信息，默认 `.kairo/` 已加入 `.gitignore`，不建议将其提交到仓库。
+- 如需临时禁用持久化，将 `config.json` 中 `sessions.enabled` 设为 `false`，Kairo 会退回纯内存行为。
 - Dock 中的 `Context` 进度条显示即将发送给模型的估算 token 占用。
-- 达到阈值后 Kairo 会自动压缩早期轮次；必要时按完整轮次裁剪，始终保护系统提示和当前用户轮次。
+- 达到阈值后 Kairo 会自动压缩早期轮次；必要时按完整轮次裁剪，始终保护系统提示、runtime state 和当前用户轮次。
 - `/compress` 手动触发压缩，`/clear` 清空当前会话，`/undo` 撤销当前会话最后一轮。
 
 ## Composer 键盘
@@ -114,8 +121,6 @@ Workspace 审查是只读的，不会暂存、恢复或改写文件。
 | `Ctrl+A` | 循环授权级别 |
 | `Ctrl+P` | 切换 Plan Mode |
 | `Ctrl+T` | 切换 Thinking Mode |
-
-Composer 会按照显式换行和自动折行后的视觉行数增高，最多显示 8 行；超过后可在输入框内部滚动。普通长文本和 Markdown 表格会在对话区折行显示。
 
 在 Windows Terminal 中，Kairo 会保留 Enter 的 Shift/Ctrl 修饰状态。如果其它终端仍把组合键识别为普通 Enter，请使用 `Ctrl+J` 插入换行。
 

@@ -61,7 +61,9 @@ class TestConversationManager(unittest.TestCase):
         self.manager.apply_summary("important summary", retained)
         prefix, turns = split_complete_turns(self.manager.active.history)
         self.assertEqual(len(turns), 2)
-        self.assertTrue(prefix[1]["content"].startswith(SUMMARY_PREFIX))
+        # History starts with system prompt + runtime state, followed by summary.
+        self.assertTrue(prefix[2]["content"].startswith(SUMMARY_PREFIX))
+        self.assertEqual(prefix[1].get("name"), "kairo_runtime_state")
 
     def test_rolling_summary_replaces_previous_summary(self):
         for index in range(1, 4):
@@ -83,8 +85,10 @@ class TestConversationManager(unittest.TestCase):
     def test_trim_removes_whole_turns_and_keeps_latest_user(self):
         for index in range(1, 5):
             add_turn(self.manager.active.history, index, with_tool=index == 2)
+        # Account for the runtime state message when computing the budget.
         latest_turn_size = self.manager.estimator.estimate_messages(
-            [self.manager.active.history[0]] + split_complete_turns(self.manager.active.history)[1][-1]
+            [self.manager.active.history[0], self.manager.active.history[1]]
+            + split_complete_turns(self.manager.active.history)[1][-1]
         )
 
         removed, fits = self.manager.trim_oldest_to_budget(latest_turn_size + 10)
@@ -94,11 +98,14 @@ class TestConversationManager(unittest.TestCase):
         self.assertIn("user-4", serialized)
         self.assertNotIn("call-2", serialized)
         self.assertNotIn("tool-2", serialized)
+        # Runtime state must survive trimming.
+        self.assertEqual(self.manager.active.history[1].get("name"), "kairo_runtime_state")
 
 
 class TestAgentContextManagement(unittest.TestCase):
     def setUp(self):
         self.config = Config()
+        self.config.sessions["enabled"] = False
         self.config.context_window = 128000
         self.config.max_tokens = 4000
         self.config.context_management = {

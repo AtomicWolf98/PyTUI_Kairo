@@ -4,9 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from agent.workspace_context import WorkspaceMoveError
-
-
 COMMAND_CATALOG: List[Dict[str, str]] = [
     {
         "name": "/help",
@@ -352,33 +349,7 @@ class CommandDispatcher:
         argument = parts[1] if len(parts) > 1 else ""
         if argument.lower().startswith("move "):
             target = argument[4:].strip()
-            target_path = Path(target).expanduser().resolve()
-            try:
-                self.agent.workspace_context.move(target_path)
-            except WorkspaceMoveError as exc:
-                return CommandResult(
-                    handled=True,
-                    success=False,
-                    message=f"Workspace move failed: {exc}",
-                )
-            except Exception as exc:
-                return CommandResult(
-                    handled=True,
-                    success=False,
-                    message=f"Workspace move failed: {exc}",
-                )
-
-            self.agent.config.workspace_root = str(target_path)
-            self.agent.config.save()
-            if self.agent.workspace_changed:
-                self.agent.workspace_changed(str(target_path))
-            return CommandResult(
-                handled=True,
-                success=True,
-                message=f"Workspace moved to: {target_path}",
-                refresh_ui=True,
-                data={"kind": "workspace_moved", "root": str(target_path)},
-            )
+            return self.agent.move_workspace(target)
 
         return CommandResult(
             handled=True,

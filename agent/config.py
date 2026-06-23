@@ -16,6 +16,13 @@ from agent.provider_registry import (
 )
 
 ACTIVE_LLM_FIELDS = ("api_key", "base_url", "model", "temperature", "max_tokens", "context_window")
+SESSION_DEFAULTS = {
+    "enabled": True,
+    "storage_dir": ".kairo/sessions",
+    "autosave": True,
+    "save_interval_seconds": 1.0,
+    "max_sessions": 200,
+}
 CONTEXT_MANAGEMENT_DEFAULTS = {
     "enabled": True,
     "auto_compress": True,
@@ -65,6 +72,7 @@ class Config:
         self.context_management_defaults: Dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
         self.context_management: Dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
         self.ui: Dict[str, Any] = dict(UI_DEFAULTS)
+        self.sessions: Dict[str, Any] = dict(SESSION_DEFAULTS)
         self.workspace_root: str = "."
         self.skills_dir: str = "./skills"
         self.shell_type: str = "cmd"
@@ -121,6 +129,16 @@ class Config:
 
     def _format_profile_label(self, provider_name: str, model_name: str) -> str:
         return f"{provider_name} / {model_name}"
+
+    def _normalize_sessions(self, value: Any) -> Dict[str, Any]:
+        settings = dict(SESSION_DEFAULTS)
+        if isinstance(value, dict):
+            settings.update({key: value[key] for key in settings if key in value})
+        settings["enabled"] = bool(settings["enabled"])
+        settings["autosave"] = bool(settings["autosave"])
+        settings["save_interval_seconds"] = max(0.0, float(settings["save_interval_seconds"]))
+        settings["max_sessions"] = max(1, int(settings["max_sessions"]))
+        return settings
 
     def _normalize_context_management(self, value: Any) -> Dict[str, Any]:
         settings = dict(CONTEXT_MANAGEMENT_DEFAULTS)
@@ -345,9 +363,9 @@ class Config:
         # extensions. Legacy fields that have been migrated to the new llm block are
         # intentionally excluded from extra preservation.
         known_keys = {
-            "llm", "context_management", "ui", "workspace_root", "skills_dir",
-            "shell_type", "authorization_level", "auto_mode", "plan_mode",
-            "thinking_mode", "policy",
+            "llm", "context_management", "ui", "sessions", "workspace_root",
+            "skills_dir", "shell_type", "authorization_level", "auto_mode",
+            "plan_mode", "thinking_mode", "policy",
             # Legacy fields consumed during migration; must not be written back.
             "api_key", "base_url", "model", "models", "active_provider",
             "active_model", "active_model_profile", "model_profiles",
@@ -370,6 +388,8 @@ class Config:
         self.context_management_defaults = self._normalize_context_management(
             data.get("context_management", self.context_management_defaults)
         )
+        self.sessions = self._normalize_sessions(data.get("sessions", self.sessions))
+
         configured_ui = data.get("ui", {})
         if isinstance(configured_ui, dict):
             self.ui.update({key: configured_ui[key] for key in UI_DEFAULTS if key in configured_ui})
@@ -445,6 +465,7 @@ class Config:
             },
             "context_management": dict(self.context_management_defaults),
             "ui": dict(self.ui),
+            "sessions": dict(self.sessions),
             "workspace_root": self.workspace_root,
             "skills_dir": self.skills_dir,
             "shell_type": self.shell_type,

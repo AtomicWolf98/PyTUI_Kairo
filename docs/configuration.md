@@ -53,6 +53,13 @@ AI 相关配置优先级从高到低：
     "target_percent": 60,
     "preserve_recent_turns": 4
   },
+  "sessions": {
+    "enabled": true,
+    "storage_dir": ".kairo/sessions",
+    "autosave": true,
+    "save_interval_seconds": 1.0,
+    "max_sessions": 200
+  },
   "ui": {
     "mode": "auto",
     "theme": "kairo-dark",
@@ -125,6 +132,16 @@ AI 相关配置优先级从高到低：
 - `trigger_percent`：触发压缩/裁剪的占用率。
 - `target_percent`：压缩或裁剪后的目标占用率。
 - `preserve_recent_turns`：优先保留的最近完整轮次数。
+
+### `sessions`
+
+- `enabled`：是否启用 session 持久化。`false` 时退回纯内存行为，方便测试和临时会话。
+- `storage_dir`：session 存储目录。支持绝对路径；相对路径相对于 `config.json` 所在目录解析。
+- `autosave`：是否在 history 变化、压缩、撤销、清空、切换模型、切换 workspace 等关键操作后自动保存。
+- `save_interval_seconds`：自动保存间隔（0.2.2 中作为保留字段，当前实现为关键路径直接保存）。
+- `max_sessions`：启动时自动加载的最大 session 数量，不自动删除用户文件。
+
+Session 文件中可能包含代码、命令输出、文件内容或敏感信息，建议将 `storage_dir` 加入 `.gitignore`。默认 `.kairo/sessions` 已被忽略。
 
 ### `ui`
 

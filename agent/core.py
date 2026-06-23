@@ -1,15 +1,17 @@
+from pathlib import Path
 from typing import Any, Callable, List, Dict, Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from agent.commands import CommandDispatcher
+from agent.commands import CommandDispatcher, CommandResult
 from agent.config import Config
 from agent.context_manager import ConversationManager
 from agent.interaction import InteractionRunner
 from agent import tui_widgets
-from agent.workspace_context import WorkspaceContext
+from agent.session_store import SessionStore
+from agent.workspace_context import WorkspaceContext, WorkspaceMoveError
 from tools.base import ToolRegistry
 
 
@@ -53,7 +55,22 @@ class Agent:
             "5. If a tool fails, report the error and suggest a fix.\n"
             "6. Prefer safe, reversible changes; never run destructive commands silently."
         )
-        self.conversations = ConversationManager(self.system_instruction, config.context_window)
+
+        session_store = None
+        if config.sessions.get("enabled", True):
+            session_store = SessionStore(
+                config.sessions.get("storage_dir", ".kairo/sessions"),
+                config.config_path,
+            )
+
+        self.conversations = ConversationManager(
+            self.system_instruction,
+            config.context_window,
+            session_store=session_store,
+            workspace_root=str(workspace_context.root),
+            model_profile=config.active_model_profile,
+            authorization_level=config.authorization_level,
+        )
         self.runner = InteractionRunner(
             config=config,
             registry=registry,
@@ -104,8 +121,76 @@ class Agent:
         """Resets the chat history to only the system instruction."""
         self.conversations.clear_active()
 
+    def move_workspace(self, target: str | Path) -> CommandResult:
+        """Move the workspace root to *target* and update all dependent state.
+
+        This is the single transaction entry point used by both plain and TUI modes.
+        """
+        target_path = Path(target).expanduser().resolve()
+        try:
+            self.workspace_context.move(target_path)
+        except WorkspaceMoveError as exc:
+            return CommandResult(
+                handled=True,
+                success=False,
+                message=f"Workspace move failed: {exc}",
+                data={"kind": "workspace_moved", "root": str(target_path)},
+            )
+        except Exception as exc:
+            return CommandResult(
+                handled=True,
+                success=False,
+                message=f"Workspace move failed: {exc}",
+                data={"kind": "workspace_moved", "root": str(target_path)},
+            )
+
+        new_root = str(target_path)
+        self.config.workspace_root = new_root
+        self.config.save()
+
+        self.conversations.update_runtime_state(
+            workspace_root=new_root,
+            model_profile=self.config.active_model_profile,
+            authorization_level=self.config.authorization_level,
+        )
+        self.conversations.save_active(reason="workspace_move")
+
+        # Reset Python REPL so old variables and cwd semantics do not leak.
+        python_executor = self.registry.tools.get("run_python_code")
+        if python_executor is not None and hasattr(python_executor, "reset_repl"):
+            try:
+                python_executor.reset_repl()
+                self.console.print("[dim]Python REPL reset after workspace move.[/dim]")
+            except Exception as exc:
+                self.console.print(f"[yellow]Python REPL reset failed: {exc}[/yellow]")
+
+        # Reload custom skills from the new workspace.
+        if hasattr(self.registry, "reload_custom_skills"):
+            try:
+                self.registry.reload_custom_skills(
+                    self.config.skills_dir,
+                    require_hash=self.config.policy.get("skills", {}).get("require_hash", False),
+                    workspace_root=target_path,
+                )
+            except Exception as exc:
+                self.console.print(f"[yellow]Custom skills reload failed: {exc}[/yellow]")
+
+        if self.workspace_changed:
+            self.workspace_changed(new_root)
+
+        notice = f"Workspace moved to: {target_path}"
+        self.conversations.append_message({"role": "system", "content": notice})
+        return CommandResult(
+            handled=True,
+            success=True,
+            message=notice,
+            refresh_ui=True,
+            data={"kind": "workspace_moved", "root": new_root},
+        )
+
     def shutdown(self):
-        """Release persistent resources held by registered tools."""
+        """Release persistent resources held by registered tools and save sessions."""
+        self.conversations.save_all(reason="shutdown")
         for tool in self.registry.tools.values():
             if hasattr(tool, "session") and hasattr(tool.session, "close"):
                 try:
@@ -133,7 +218,7 @@ class Agent:
         welcome_text.append(f"Thinking Mode: {'ON' if self.config.thinking_mode else 'OFF'}\n", style="yellow" if self.config.thinking_mode else "gray")
         welcome_text.append("Type /help to see available commands.", style="dim")
 
-        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.1"))
+        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.2"))
 
     def handle_command(self, user_input: str) -> bool:
         """
@@ -174,6 +259,8 @@ class Agent:
                     selected_profile = profiles[idx]
                     self.config.apply_model_profile(selected_profile)
                     self.conversations.set_context_window(self.config.context_window)
+                    self.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
+                    self.conversations.save_all(reason="model_switch")
                     self.config.save()
                     self.console.print(
                         f"Active target changed to [bold cyan]{selected_profile}[/bold cyan] "

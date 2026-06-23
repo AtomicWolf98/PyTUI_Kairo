@@ -986,6 +986,8 @@ class KairoApp(App):
             return
         self.config.apply_model_profile(profiles[choice])
         self.agent.conversations.set_context_window(self.config.context_window)
+        self.agent.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
+        self.agent.conversations.save_all(reason="model_switch")
         self.config.save()
         self.main_query("#brand-header", BrandHeader).update_meta(
             self.config.model, self.config.active_model_profile, str(self.workspace_context.root)

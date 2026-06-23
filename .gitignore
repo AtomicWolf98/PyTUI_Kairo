@@ -10,6 +10,7 @@ dist/
 config.local.json
 config.json
 *.log
+.kairo/
 .trae/
 .ruff_cache/
 .DS_Store

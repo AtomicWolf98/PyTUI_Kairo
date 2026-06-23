@@ -164,8 +164,21 @@ class PythonExecutor(BaseTool):
             workspace_context.add_listener(self._on_workspace_moved)
 
     def _on_workspace_moved(self, new_root: Path) -> None:
-        """Update the Python executor's policy root when the workspace moves."""
+        """Reset the persistent Python REPL when the workspace moves."""
         self.policy = WorkspacePathPolicy(new_root, allow_absolute_outside=False)
+        self.reset_repl()
+
+    def reset_repl(self) -> None:
+        """Close and recreate the persistent Python REPL to clear old state."""
+        try:
+            if hasattr(self.repl, "close"):
+                self.repl.close()
+        except Exception:
+            pass
+        policy = None
+        if self.config is not None and hasattr(self.config, "policy"):
+            policy = self.config.policy.get("python")
+        self.repl = PythonREPL(policy=policy)
 
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)

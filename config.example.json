@@ -43,6 +43,13 @@
     "target_percent": 60,
     "preserve_recent_turns": 4
   },
+  "sessions": {
+    "enabled": true,
+    "storage_dir": ".kairo/sessions",
+    "autosave": true,
+    "save_interval_seconds": 1.0,
+    "max_sessions": 200
+  },
   "ui": {
     "mode": "auto",
     "theme": "kairo-dark",

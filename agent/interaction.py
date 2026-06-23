@@ -126,6 +126,7 @@ class InteractionRunner:
 
         self.conversations.apply_summary(summary, retained)
         after = self.conversations.refresh_context(tools)
+        self.conversations.save_active(reason="compress")
         label = "Manual" if manual else "Automatic"
         return True, (
             f"{label} context compression completed: ~{before:,} -> ~{after:,} tokens "
@@ -173,6 +174,7 @@ class InteractionRunner:
                     "configured context window. Lower max_tokens or increase context_window.[/bold red]"
                 )
                 return False
+        self.conversations.save_active(reason="trim")
         return True
 
     def get_plan(self, task: str) -> str:
@@ -285,6 +287,7 @@ class InteractionRunner:
                             user_input += f"\n\n[User Plan Modification]: {feedback}"
 
             self.history.append({"role": "user", "content": user_input})
+            self.conversations.save_active(reason="user_message")
 
             while True:
                 schemas = self.registry.get_schemas()
@@ -362,6 +365,7 @@ class InteractionRunner:
                     ]
                 self.history.append(assistant_message)
                 self.conversations.refresh_context(schemas)
+                self.conversations.save_active(reason="assistant_message")
                 if official_context_tokens is not None:
                     self.token_tracker.set_context_used(official_context_tokens)
                 emit("usage_updated", None)
@@ -443,6 +447,7 @@ class InteractionRunner:
                         "content": result,
                     })
                     self.conversations.refresh_context(schemas)
+                    self.conversations.save_active(reason="tool_result")
                     emit("usage_updated", None)
         except Exception as exc:
             emit("error", str(exc))
@@ -480,6 +485,7 @@ class InteractionRunner:
                     self.console.print("[bold green]Plan approved. Executing...[/bold green]")
 
             self.history.append({"role": "user", "content": user_input})
+            self.conversations.save_active(reason="user_message")
 
             while True:
                 schemas = self.registry.get_schemas()
@@ -603,6 +609,7 @@ class InteractionRunner:
 
                 self.history.append(assistant_msg)
                 self.conversations.refresh_context(schemas)
+                self.conversations.save_active(reason="assistant_message")
                 if official_context_tokens is not None:
                     self.token_tracker.set_context_used(official_context_tokens)
 
@@ -678,6 +685,7 @@ class InteractionRunner:
                         "content": result,
                     })
                     self.conversations.refresh_context(schemas)
+                    self.conversations.save_active(reason="tool_result")
                     self.task_status = "Processing results"
 
         finally:

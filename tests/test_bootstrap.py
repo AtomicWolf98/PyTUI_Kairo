@@ -7,6 +7,7 @@ from agent.config import Config
 class TestBootstrap(unittest.TestCase):
     def test_build_registry_registers_expected_builtin_tools(self):
         config = Config()
+        config.sessions["enabled"] = False
         registry = build_registry(config)
         self.assertEqual(
             set(registry.tools),
@@ -24,6 +25,7 @@ class TestBootstrap(unittest.TestCase):
 
     def test_build_agent_reuses_bootstrap_registry(self):
         config = Config()
+        config.sessions["enabled"] = False
         agent = build_agent(config)
         self.assertIn("run_command", agent.registry.tools)
         self.assertIn("patch_file", agent.registry.tools)

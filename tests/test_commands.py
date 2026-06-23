@@ -7,6 +7,7 @@ from tools.base import ToolRegistry
 class TestAgentCommands(unittest.TestCase):
     def setUp(self):
         self.config = Config()
+        self.config.sessions["enabled"] = False
         self.config.llm = {
             "active_provider": "openai",
             "active_model": "gpt-4o",
@@ -49,20 +50,24 @@ class TestAgentCommands(unittest.TestCase):
         self.agent = Agent(config=self.config, registry=self.registry)
 
     def test_undo_empty_history(self):
-        # Initial history only has system instruction
-        self.assertEqual(len(self.agent.history), 1)
-        self.agent.history = [{"role": "system", "content": "instruction"}]
+        # Initial history has system instruction + runtime state
+        self.assertEqual(len(self.agent.history), 2)
+        self.agent.history = [
+            {"role": "system", "content": "instruction"},
+            {"role": "system", "name": "kairo_runtime_state", "content": "runtime"},
+        ]
         
         with patch.object(self.agent.console, 'print') as mock_print:
             handled = self.agent.handle_command("/undo")
             self.assertTrue(handled)
-            self.assertEqual(len(self.agent.history), 1)
+            self.assertEqual(len(self.agent.history), 2)
             mock_print.assert_called_with("[bold yellow]No conversation turn to undo.[/bold yellow]")
 
     def test_undo_with_conversation(self):
-        # Set up a conversation: system, user, assistant
+        # Set up a conversation: system, runtime state, user, assistant
         self.agent.history = [
             {"role": "system", "content": "instruction"},
+            {"role": "system", "name": "kairo_runtime_state", "content": "runtime"},
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "world"}
         ]
@@ -70,14 +75,16 @@ class TestAgentCommands(unittest.TestCase):
         with patch.object(self.agent.console, 'print') as mock_print:
             handled = self.agent.handle_command("/undo")
             self.assertTrue(handled)
-            # Should roll back to only system instruction
-            self.assertEqual(len(self.agent.history), 1)
+            # Should roll back to system instruction + runtime state
+            self.assertEqual(len(self.agent.history), 2)
             self.assertEqual(self.agent.history[0]["role"], "system")
+            self.assertEqual(self.agent.history[1].get("name"), "kairo_runtime_state")
 
     def test_undo_with_tool_calls(self):
-        # Set up a conversation: system, user, assistant (tool call), tool result, assistant (final response)
+        # Set up a conversation: system, runtime state, user, assistant (tool call), tool result, assistant (final response)
         self.agent.history = [
             {"role": "system", "content": "instruction"},
+            {"role": "system", "name": "kairo_runtime_state", "content": "runtime"},
             {"role": "user", "content": "run task"},
             {"role": "assistant", "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "test_tool", "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": "tc1", "name": "test_tool", "content": "success"},
@@ -88,8 +95,9 @@ class TestAgentCommands(unittest.TestCase):
             handled = self.agent.handle_command("/undo")
             self.assertTrue(handled)
             # Should roll back everything from the last user message onwards
-            self.assertEqual(len(self.agent.history), 1)
+            self.assertEqual(len(self.agent.history), 2)
             self.assertEqual(self.agent.history[0]["role"], "system")
+            self.assertEqual(self.agent.history[1].get("name"), "kairo_runtime_state")
 
     def test_new_and_sessions_switch_independent_conversations(self):
         self.agent.history.append({"role": "user", "content": "first conversation"})
@@ -121,7 +129,8 @@ class TestAgentCommands(unittest.TestCase):
         self.agent.history.append({"role": "user", "content": "clear me"})
 
         self.agent.handle_command("/clear")
-        self.assertEqual(len(self.agent.history), 1)
+        # System prompt + runtime state remain.
+        self.assertEqual(len(self.agent.history), 2)
         self.agent.conversations.switch_session(first_session_id)
         self.assertIn("keep in first", str(self.agent.history))
 

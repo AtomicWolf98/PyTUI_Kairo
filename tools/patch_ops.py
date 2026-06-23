@@ -145,7 +145,7 @@ class SearchFileTool(BaseTool):
                                 matched = True
 
                         if matched:
-                            relative_path = os.path.relpath(file_path, start=os.getcwd())
+                            relative_path = os.path.relpath(file_path, start=self.policy.root)
                             results.append(f"{relative_path}:{line_num}: {line.strip()}")
                             if len(results) >= self.max_results:
                                 return "\n".join(results) + f"\n... (more than {self.max_results} matches found, truncated) ..."
