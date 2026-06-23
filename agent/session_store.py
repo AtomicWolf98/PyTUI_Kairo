@@ -33,8 +33,9 @@ def _parse_timestamp(value: str) -> datetime:
 class SessionStore:
     """Manages loading and saving of conversation sessions to disk."""
 
-    def __init__(self, storage_dir: str, config_path: str):
+    def __init__(self, storage_dir: str, config_path: str, context_window: int = 128000):
         self._config_path = Path(config_path).expanduser().resolve()
+        self._context_window = max(1, int(context_window))
         storage = Path(storage_dir)
         if storage.is_absolute():
             self._storage_dir = storage
@@ -79,7 +80,7 @@ class SessionStore:
             id=uuid.uuid4().hex,
             name=(name or "").strip() or "Conversation 1",
             history=[],
-            token_tracker=TokenTracker(context_window=128000),
+            token_tracker=TokenTracker(context_window=self._context_window),
         )
         return session
 

@@ -16,7 +16,7 @@ class TestSessionStore(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.config_path = Path(self.temp_dir.name) / "config.json"
         self.config_path.write_text("{}", encoding="utf-8")
-        self.store = SessionStore(".kairo/sessions", str(self.config_path))
+        self.store = SessionStore(".kairo/sessions", str(self.config_path), context_window=64000)
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -55,6 +55,10 @@ class TestSessionStore(unittest.TestCase):
         self.assertEqual(index["active_session_id"], session.id)
         self.assertEqual(len(index["sessions"]), 1)
         self.assertEqual(index["sessions"][0]["name"], "Test")
+
+    def test_create_session_uses_configured_context_window(self):
+        session = self.store.create_session("Windowed")
+        self.assertEqual(session.token_tracker.context_window, 64000)
 
     def test_load_all_restores_session(self):
         session = self._make_session("Persistent")
@@ -164,7 +168,7 @@ class TestConversationManagerWithSessionStore(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.config_path = Path(self.temp_dir.name) / "config.json"
         self.config_path.write_text("{}", encoding="utf-8")
-        self.store = SessionStore("sessions", str(self.config_path))
+        self.store = SessionStore("sessions", str(self.config_path), context_window=64000)
 
     def tearDown(self):
         self.temp_dir.cleanup()

@@ -58,12 +58,12 @@ COMMAND_CATALOG: List[Dict[str, str]] = [
     {
         "name": "/new",
         "summary": "Create a conversation",
-        "help": "Create and switch to a new in-memory conversation",
+        "help": "Create and switch to a new persisted conversation",
     },
     {
         "name": "/sessions",
         "summary": "Switch conversations",
-        "help": "Switch between in-memory conversations",
+        "help": "Switch between persisted conversations",
     },
     {
         "name": "/config",

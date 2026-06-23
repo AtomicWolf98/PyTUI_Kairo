@@ -61,6 +61,7 @@ class Agent:
             session_store = SessionStore(
                 config.sessions.get("storage_dir", ".kairo/sessions"),
                 config.config_path,
+                context_window=config.context_window,
             )
 
         self.conversations = ConversationManager(
@@ -134,14 +135,14 @@ class Agent:
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_moved", "root": str(target_path)},
+                data={"kind": "workspace_move_failed", "root": str(target_path)},
             )
         except Exception as exc:
             return CommandResult(
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_moved", "root": str(target_path)},
+                data={"kind": "workspace_move_failed", "root": str(target_path)},
             )
 
         new_root = str(target_path)
@@ -175,7 +176,7 @@ class Agent:
             except Exception as exc:
                 self.console.print(f"[yellow]Custom skills reload failed: {exc}[/yellow]")
 
-        if self.workspace_changed:
+        if hasattr(self, "workspace_changed") and callable(self.workspace_changed):
             self.workspace_changed(new_root)
 
         notice = f"Workspace moved to: {target_path}"
