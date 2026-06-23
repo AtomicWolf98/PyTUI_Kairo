@@ -20,7 +20,12 @@ from agent.ui.widgets import (
     ChoiceModal,
     CommandPalette,
     Composer,
+    ConnectionTestModal,
     ConversationView,
+    ModelEditorModal,
+    ProviderEditorModal,
+    ProviderListModal,
+    SettingsScreen,
     StatusDock,
     TextPromptModal,
     WorkspaceFileSelected,
@@ -403,6 +408,65 @@ class KairoApp(App):
         background: $surface;
         border: solid $cyan;
     }
+
+    ProviderListModal, ProviderEditorModal, ModelEditorModal,
+    ConnectionTestModal, SecretConfirmModal, SettingsScreen {
+        align: center middle;
+        background: #000000 55%;
+    }
+
+    #provider-list-shell, #provider-editor-shell, #model-editor-shell,
+    #connection-test-shell, #secret-confirm-shell, #settings-shell {
+        width: 72;
+        height: auto;
+        max-height: 28;
+        padding: 1 2;
+        background: $surface-2;
+        border: solid #3a414b;
+    }
+
+    #provider-list-title, #provider-editor-title, #model-editor-title,
+    #ct-title, #secret-title, #settings-title {
+        color: $cyan;
+        text-style: bold;
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #provider-list, #settings-list {
+        height: auto;
+        max-height: 20;
+        background: $surface;
+        border: solid #343b44;
+    }
+
+    #provider-list > ListItem, #settings-list > ListItem {
+        height: 1;
+        padding: 0 1;
+    }
+
+    #provider-list > ListItem.--highlight, #settings-list > ListItem.--highlight {
+        background: #29323a;
+    }
+
+    #pe-actions, #me-actions {
+        height: 1;
+        margin-top: 1;
+        color: #7f849c;
+    }
+
+    #pe-hint, #me-hint, #ct-hint, #secret-hint {
+        color: #7f849c;
+        height: 1;
+    }
+
+    #ct-result, #secret-message {
+        height: auto;
+        max-height: 14;
+        background: $surface;
+        padding: 1;
+        border: solid #343b44;
+    }
     """
 
     def __init__(self, config, registry, *, animation: bool = True, reduced_motion: bool = False):
@@ -489,6 +553,27 @@ class KairoApp(App):
             self.set_timer(0.8, lambda: self.set_kai_state("idle"))
         else:
             self.set_kai_state("idle")
+
+        # 0.2.3 First-run guidance: if no usable provider/model, prompt the user
+        # to either start the wizard (via /provider add) or skip and document.
+        from kairo import needs_first_run_setup
+        if needs_first_run_setup(self.config):
+            self.set_timer(1.0, self._maybe_show_first_run_guidance)
+        self._first_run_guidance_shown = False
+
+    def _maybe_show_first_run_guidance(self):
+        if self._first_run_guidance_shown:
+            return
+        self._first_run_guidance_shown = True
+        view = self.main_query("#conversation", ConversationView)
+        import asyncio
+        async def emit():
+            await view.add_notice(Text(
+                "No usable provider/model is configured. Type '/provider add' to launch the setup wizard, "
+                "or '/docs providers' for instructions.",
+                style="#f6c177",
+            ), "notice-message")
+        self.call_after_refresh(emit)
 
     def on_resize(self, event: events.Resize):
         self._apply_responsive_layout(event.size.width)
@@ -890,6 +975,12 @@ class KairoApp(App):
         return result[0]
 
     async def handle_command(self, raw: str):
+        # 0.2.3 runtime-config modal routing -----------------------------------
+        # Pop the corresponding modal BEFORE dispatching to the plain handler.
+        # This avoids the plain path blocking on stdin inside the TUI thread.
+        if await self._maybe_route_runtime_modal(raw):
+            return
+
         dispatcher = CommandDispatcher(self.agent)
         result = dispatcher.dispatch(raw)
         view = self.main_query("#conversation", ConversationView)
@@ -994,6 +1085,442 @@ class KairoApp(App):
         )
         self.post_message(AgentEvent("model_selected", profiles[choice]))
         self.refresh_dock()
+
+    # ---- 0.2.3 runtime-config modal routing ------------------------------------
+
+    async def _maybe_route_runtime_modal(self, raw: str) -> bool:
+        """For runtime config commands, pop the corresponding modal.
+
+        Returns True if *raw* was consumed here (caller should stop),
+        False otherwise.
+        """
+        from agent import runtime_commands as rc
+
+        stripped = raw.strip()
+        parts = stripped.split(maxsplit=2)
+        command = parts[0].lower()
+        sub = parts[1].lower() if len(parts) > 1 else ""
+
+        if stripped == "/settings":
+            self.push_screen(SettingsScreen(), self._settings_choice)
+            return True
+
+        if stripped == "/providers":
+            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
+            return True
+
+        # Runtime config modal paths share the plain-handler completion,
+        # but the user interaction can be carried through dedicated modals.
+        # For 0.2.3 we wire the most impactful ones to modals and fall back
+        # to plain-mode for the rest so feature parity is guaranteed.
+        if command == "/provider" and sub in ("add", "edit", "remove", "test"):
+            return await self._route_provider_subcommand(stripped, sub)
+
+        if command == "/model" and sub in ("add", "edit", "remove", "test"):
+            return await self._route_model_subcommand(stripped, sub)
+
+        if command == "/session" and sub in ("rename", "delete", "export", "reveal"):
+            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
+            return True
+
+        if command == "/docs":
+            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
+            return True
+
+        if command == "/config" and sub in ("validate", "backup", "restore"):
+            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
+            return True
+
+        return False
+
+    async def _route_provider_subcommand(self, raw: str, sub: str) -> bool:
+        if sub == "add":
+            self.push_screen(ProviderEditorModal(title="Add provider"), self._provider_add_form_done)
+            return True
+        if sub == "edit":
+            self.push_screen(
+                ProviderListModal(
+                    providers=list(self.config.llm["providers"]),
+                    active_name=self.config.llm["active_provider"],
+                ),
+                self._provider_edit_choice,
+            )
+            return True
+        if sub == "remove":
+            self.push_screen(
+                ProviderListModal(
+                    providers=list(self.config.llm["providers"]),
+                    active_name=self.config.llm["active_provider"],
+                ),
+                self._provider_remove_choice,
+            )
+            return True
+        if sub == "test":
+            self.push_screen(
+                ProviderListModal(
+                    providers=list(self.config.llm["providers"]),
+                    active_name=self.config.llm["active_provider"],
+                ),
+                self._provider_test_choice,
+            )
+            return True
+        return False
+
+    async def _route_model_subcommand(self, raw: str, sub: str) -> bool:
+        if sub in ("add", "edit"):
+            self.push_screen(
+                ProviderListModal(
+                    providers=list(self.config.llm["providers"]),
+                    active_name=self.config.llm["active_provider"],
+                ),
+                lambda choice: self._model_form_after_provider(sub, choice),
+            )
+            return True
+        if sub in ("remove", "test"):
+            self.push_screen(
+                ProviderListModal(
+                    providers=list(self.config.llm["providers"]),
+                    active_name=self.config.llm["active_provider"],
+                ),
+                lambda choice: self._model_action_after_provider(sub, choice),
+            )
+            return True
+        return False
+
+    # ---- provider callbacks -----------------------------------------------------
+
+    def _provider_add_form_done(self, values):
+        if not values:
+            self._restore_focus()
+            return
+        name = (values.get("name") or "").strip()
+        if not name:
+            self._restore_focus()
+            return
+        api_key = values.get("api_key") or ""
+        api_key_env = values.get("api_key_env") or ""
+        allow_inline = bool(api_key)
+        if allow_inline:
+            # Confirm via SecretConfirmModal before saving inline key.
+            self.push_screen(
+                SecretConfirmModal(
+                    "Inline API keys are written to config.json. Anyone with access to that file will see the key. "
+                    "Env-based keys are recommended. Authorize inline key?",
+                ),
+                lambda approved: self._provider_add_with_key(values, approved, api_key, api_key_env),
+            )
+            return
+        self._provider_add_with_key(values, True, api_key, api_key_env)
+
+    def _provider_add_with_key(self, values, approved: bool, api_key: str, api_key_env: str):
+        if not approved:
+            self.main_query("#conversation", ConversationView)
+            self.post_message(AgentEvent("notice", "Inline API key was not authorized; save cancelled."))
+            self._restore_focus()
+            return
+        from agent.config_editor import ConfigDraft
+        draft = ConfigDraft.from_config(self.config)
+        # Model defaults from llm.defaults so the new provider has one model.
+        defaults = self.config.llm["defaults"]
+        added = draft.add_provider(
+            name=values["name"],
+            base_url=values["base_url"],
+            api_key=api_key,
+            api_key_env=api_key_env,
+            models=[{
+                "name": f"{values['name']}-default",
+                "temperature": float(defaults["temperature"]),
+                "max_tokens": int(defaults["max_tokens"]),
+                "context_window": int(defaults["context_window"]),
+            }],
+        )
+        if not added:
+            self.post_message(AgentEvent("notice", "Failed to add provider to draft."))
+            self._restore_focus()
+            return
+        draft.set_active_model(values["name"], f"{values['name']}-default")
+        report = draft.apply_to(self.config, backup=True, allow_inline_key=bool(api_key))
+        msg = report.to_text() if not report.ok else f"Provider '{values['name']}' added. Active target: {self.config.active_model_profile}"
+        self.post_message(AgentEvent("notice" if report.ok else "error", msg))
+        if report.ok:
+            self.post_message(AgentEvent("model_selected", self.config.active_model_profile))
+            self.config.save(backup=False)
+            self.main_query("#brand-header", BrandHeader).update_meta(
+                self.config.model, self.config.active_model_profile, str(self.workspace_context.root)
+            )
+            self.refresh_dock()
+        self._restore_focus()
+
+    def _provider_edit_choice(self, choice):
+        if not choice:
+            self._restore_focus()
+            return
+        action = choice.get("action")
+        name = choice.get("name") or ""
+        if action == "edit":
+            provider = self.config._get_provider(name) or {}
+            self.push_screen(
+                ProviderEditorModal(
+                    title=f"Edit provider: {name}",
+                    defaults={
+                        "name": name,
+                        "base_url": provider.get("base_url", ""),
+                        "api_key_env": provider.get("api_key_env", ""),
+                        "api_key": provider.get("api_key", ""),
+                    },
+                ),
+                lambda values: self._provider_edit_form_done(name, values),
+            )
+            return
+        if action == "delete":
+            if len(self.config.llm["providers"]) <= 1:
+                self.post_message(AgentEvent("notice", "Cannot remove the last provider."))
+                self._restore_focus()
+                return
+            self.push_screen(
+                ChoiceModal(f"Remove provider '{name}' and all its models?", ["Remove", "Cancel"], 1),
+                lambda idx: self._provider_remove_confirmed(idx, name),
+            )
+
+    def _provider_remove_confirmed(self, idx, name):
+        if idx != 0 or not name:
+            self.post_message(AgentEvent("notice", "Removed cancelled."))
+            self._restore_focus()
+            return
+        from agent.config_editor import ConfigDraft
+        draft = ConfigDraft.from_config(self.config)
+        if not draft.remove_provider(name):
+            self.post_message(AgentEvent("notice", f"Failed to remove '{name}'."))
+            self._restore_focus()
+            return
+        report = draft.apply_to(self.config, backup=True)
+        msg = report.to_text() if not report.ok else f"Provider '{name}' removed."
+        self.post_message(AgentEvent("notice" if report.ok else "error", msg))
+        if report.ok:
+            self.refresh_dock()
+        self._restore_focus()
+
+    def _provider_edit_form_done(self, original_name, values):
+        if not values:
+            self._restore_focus()
+            return
+        from agent.config_editor import ConfigDraft
+        draft = ConfigDraft.from_config(self.config)
+        api_key = values.get("api_key") or ""
+        api_key_env = values.get("api_key_env") or ""
+        draft.update_provider(
+            original_name,
+            base_url=values["base_url"],
+            api_key=api_key,
+            api_key_env=api_key_env,
+            rename=(values["name"] or None),
+        )
+        allow_inline = bool(api_key)
+        if allow_inline:
+            self.push_screen(
+                SecretConfirmModal("Save inline API key to config.json? Env names are recommended."),
+                lambda approved: self._provider_edit_commit(draft, approved),
+            )
+            return
+        self._provider_edit_commit(draft, True)
+
+    def _provider_edit_commit(self, draft, approved):
+        if not approved:
+            self.post_message(AgentEvent("notice", "Inline key not authorized; edit cancelled."))
+            self._restore_focus()
+            return
+        report = draft.apply_to(self.config, backup=True, allow_inline_key=False)
+        msg = report.to_text() if not report.ok else "Provider updated."
+        self.post_message(AgentEvent("notice" if report.ok else "error", msg))
+        if report.ok:
+            self.refresh_dock()
+        self._restore_focus()
+
+    def _provider_test_choice(self, choice):
+        if not choice or choice.get("action") != "edit":
+            self._restore_focus()
+            return
+        name = choice.get("name") or ""
+        provider = self.config._get_provider(name) or {}
+        if not provider:
+            self._restore_focus()
+            return
+        self.run_worker(
+            lambda: self._run_provider_test_worker(provider.get("base_url", ""), provider.get("api_key_env", ""), provider.get("api_key", ""), provider["models"][0]["name"] if provider.get("models") else ""),
+            thread=True, exclusive=True, group="provider-test",
+        )
+
+    def _run_provider_test_worker(self, base_url, env_name, inline_key, default_model):
+        import os as _os
+        from agent.provider_health import test_connection
+
+        api_key = _os.environ.get(env_name) if env_name else inline_key
+        result = test_connection(base_url=base_url, api_key=api_key, model=default_model)
+        self.call_from_thread(
+            self.push_screen, ConnectionTestModal(result.summary(), result.ok), None,
+        )
+
+    # ---- model callbacks --------------------------------------------------------
+
+    def _model_form_after_provider(self, mode: str, choice):
+        if not choice or choice.get("action") != "edit":
+            self._restore_focus()
+            return
+        name = choice.get("name") or ""
+        provider = self.config._get_provider(name) or {}
+        existing_model = provider["models"][0] if provider.get("models") else {}
+        self.push_screen(
+            ModelEditorModal(
+                title=f"{mode.title()} model in {name}",
+                provider_name=name,
+                defaults=existing_model if mode == "edit" else {},
+            ),
+            lambda values: self._model_form_done(mode, name, values),
+        )
+
+    def _model_form_done(self, mode, provider_name, values):
+        if not values:
+            self._restore_focus()
+            return
+        from agent.config_editor import ConfigDraft
+        draft = ConfigDraft.from_config(self.config)
+        defaults = self.config.llm["defaults"]
+        try:
+            context_window = int(values["context_window"] or defaults["context_window"])
+            max_tokens = int(values["max_tokens"] or defaults["max_tokens"])
+            temperature = float(values["temperature"] or defaults["temperature"])
+        except (TypeError, ValueError):
+            self.post_message(AgentEvent("notice", "Model numbers must be numeric."))
+            self._restore_focus()
+            return
+        if mode == "add":
+            added = draft.add_model(
+                provider_name,
+                name=values["name"],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                context_window=context_window,
+            )
+            if not added:
+                self.post_message(AgentEvent("notice", "Failed to add model."))
+                self._restore_focus()
+                return
+        else:
+            draft.update_model(
+                provider_name,
+                values["name"],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                context_window=context_window,
+            )
+        report = draft.apply_to(self.config, backup=True)
+        msg = report.to_text() if not report.ok else f"Model {mode}d in '{provider_name}'."
+        self.post_message(AgentEvent("notice" if report.ok else "error", msg))
+        if report.ok:
+            self.refresh_dock()
+        self._restore_focus()
+
+    def _model_action_after_provider(self, mode: str, choice):
+        if not choice or choice.get("action") != "edit":
+            self._restore_focus()
+            return
+        name = choice.get("name") or ""
+        provider = self.config._get_provider(name) or {}
+        models = provider.get("models", []) if provider else []
+        if not models:
+            self._restore_focus()
+            return
+        labels = [m["name"] for m in models]
+        if mode == "remove":
+            self.push_screen(ChoiceModal(f"Remove model from '{name}'", labels, 0), lambda idx: self._model_remove_confirmed(idx, name, labels))
+        elif mode == "test":
+            self.push_screen(ChoiceModal(f"Test model from '{name}'", labels, 0), lambda idx: self._model_test_confirmed(idx, name, labels, provider))
+
+    def _model_remove_confirmed(self, idx, provider_name, labels):
+        if idx < 0 or idx >= len(labels):
+            self._restore_focus()
+            return
+        target = labels[idx]
+        from agent.config_editor import ConfigDraft
+        draft = ConfigDraft.from_config(self.config)
+        if not draft.remove_model(provider_name, target):
+            self.post_message(AgentEvent("notice", f"Failed to remove '{target}'."))
+            self._restore_focus()
+            return
+        report = draft.apply_to(self.config, backup=True)
+        msg = report.to_text() if not report.ok else f"Model '{target}' removed."
+        self.post_message(AgentEvent("notice" if report.ok else "error", msg))
+        if report.ok:
+            self.refresh_dock()
+        self._restore_focus()
+
+    def _model_test_confirmed(self, idx, provider_name, labels, provider):
+        if idx < 0 or idx >= len(labels):
+            self._restore_focus()
+            return
+        target = labels[idx]
+        env_name = provider.get("api_key_env", "")
+        self.run_worker(
+            lambda: self._run_provider_test_worker(provider.get("base_url", ""), env_name, provider.get("api_key", ""), target),
+            thread=True, exclusive=True, group="provider-test",
+        )
+
+    # ---- settings screen --------------------------------------------------------
+
+    def _settings_choice(self, choice):
+        if not choice or choice == "close":
+            self._restore_focus()
+            return
+        mapping = {
+            "providers": "/providers",
+            "model_add": "/model add",
+            "model_edit": "/model edit",
+            "model_remove": "/model remove",
+            "model_test": "/model test",
+            "config_validate": "/config validate",
+            "config_backup": "/config backup",
+            "config_restore": "/config restore",
+        }
+        target = mapping.get(choice) or ""
+        if not target:
+            self._restore_focus()
+            return
+        async def fire():
+            await self.handle_command(target)
+        self.call_after_refresh(fire)
+
+    # ---- plain-handler runner for non-modal commands ---------------------------
+
+    def _run_plain_to_view(self, raw: str):
+        """Run a plain handler in a worker thread and pipe its result into the conversation view.
+
+        Plain handlers read prompts via builtins.input — we want them to not
+        block on stdin in the TUI thread; for 0.2.3 these particular commands
+        (/providers, /docs, /config validate|backup|restore, /session ...) do
+        not require interactive input or already use blocking choice modals
+        through the existing dispatcher hooks. We feed empty input to prompts.
+        """
+        dispatcher = CommandDispatcher(self.agent)
+        result = dispatcher.dispatch(raw)
+        if not result or not result.handled:
+            return
+        if result.message:
+            kind = "notice" if result.success else "error"
+            self.post_message(AgentEvent(kind, result.message))
+        if result.refresh_ui:
+            self.refresh_dock()
+        if getattr(result, "interactive", False) and result.data.get("kind") == "provider_test_result":
+            test_result = result.data.get("result")
+            if test_result is not None:
+                self.call_from_thread(
+                    self.push_screen, ConnectionTestModal(test_result.summary(), test_result.ok), None,
+                )
+
+    def _restore_focus(self):
+        try:
+            self.main_query("#composer", Composer).focus()
+        except Exception:
+            pass
 
     @work(thread=True, exclusive=True, group="agent")
     def run_compression(self):

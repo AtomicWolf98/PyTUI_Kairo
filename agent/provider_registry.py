@@ -130,3 +130,106 @@ def get_provider(providers: List[Dict[str, Any]], provider_name: str) -> Optiona
 
 def get_model(provider: Dict[str, Any], model_name: str) -> Optional[Dict[str, Any]]:
     return next((model for model in provider.get("models", []) if model["name"] == model_name), None)
+
+
+def merge_model_defaults(model: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """Fill missing temperature/max_tokens/context_window from defaults (does not mutate)."""
+    merged = dict(model)
+    if "temperature" not in merged:
+        merged["temperature"] = float(defaults.get("temperature", 0.2))
+    if "max_tokens" not in merged:
+        merged["max_tokens"] = int(defaults.get("max_tokens", 4000))
+    if "context_window" not in merged:
+        merged["context_window"] = int(defaults.get("context_window", 128000))
+    merged["temperature"] = float(merged["temperature"])
+    merged["max_tokens"] = int(merged["max_tokens"])
+    merged["context_window"] = int(merged["context_window"])
+    return merged
+
+
+def redact_api_key(value: str) -> str:
+    """Return a safe preview of an API key.
+
+    - Empty/short keys return a fixed label.
+    - Otherwise keep first 2 and last 4 characters (e.g. ``sk-...abcd``).
+    """
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return value[:2] + "..." + value[-4:]
+
+
+def make_provider(
+    *,
+    name: str,
+    base_url: str,
+    models: List[Dict[str, Any]],
+    api_key: str = "",
+    api_key_env: str = "",
+    normalize_context_management: Optional[callable] = None,
+) -> Optional[Dict[str, Any]]:
+    """Build a normalized provider dict from explicit field values."""
+    raw = {
+        "name": name,
+        "base_url": base_url,
+        "models": models,
+    }
+    if api_key:
+        raw["api_key"] = api_key
+    if api_key_env:
+        raw["api_key_env"] = api_key_env
+    if normalize_context_management is None:
+        from agent.config import CONTEXT_MANAGEMENT_DEFAULTS  # local import to avoid cycle
+
+        def normalize_context_management(value):
+            settings = dict(CONTEXT_MANAGEMENT_DEFAULTS)
+            if isinstance(value, dict):
+                settings.update({key: value[key] for key in settings if key in value})
+            settings["enabled"] = bool(settings["enabled"])
+            settings["auto_compress"] = bool(settings["auto_compress"])
+            settings["trigger_percent"] = min(100.0, max(1.0, float(settings["trigger_percent"])))
+            settings["target_percent"] = min(
+                settings["trigger_percent"], max(1.0, float(settings["target_percent"]))
+            )
+            settings["preserve_recent_turns"] = max(0, int(settings["preserve_recent_turns"]))
+            return settings
+    return normalize_provider(raw, normalize_context_management)
+
+
+def make_model(
+    *,
+    name: str,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    context_window: Optional[int] = None,
+    context_management: Optional[Dict[str, Any]] = None,
+    normalize_context_management: Optional[callable] = None,
+) -> Dict[str, Any]:
+    """Build a normalized model dict from explicit field values."""
+    raw: Dict[str, Any] = {"name": name}
+    if temperature is not None:
+        raw["temperature"] = temperature
+    if max_tokens is not None:
+        raw["max_tokens"] = max_tokens
+    if context_window is not None:
+        raw["context_window"] = context_window
+    if context_management is not None:
+        raw["context_management"] = context_management
+    if normalize_context_management is None:
+        from agent.config import CONTEXT_MANAGEMENT_DEFAULTS
+
+        def normalize_context_management(value):
+            settings = dict(CONTEXT_MANAGEMENT_DEFAULTS)
+            if isinstance(value, dict):
+                settings.update({key: value[key] for key in settings if key in value})
+            settings["enabled"] = bool(settings["enabled"])
+            settings["auto_compress"] = bool(settings["auto_compress"])
+            settings["trigger_percent"] = min(100.0, max(1.0, float(settings["trigger_percent"])))
+            settings["target_percent"] = min(
+                settings["trigger_percent"], max(1.0, float(settings["target_percent"]))
+            )
+            settings["preserve_recent_turns"] = max(0, int(settings["preserve_recent_turns"]))
+            return settings
+    normalized = normalize_model(raw, normalize_context_management)
+    return normalized or {"name": name}

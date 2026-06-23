@@ -9,13 +9,18 @@ from agent.provider_registry import (
     LLM_DEFAULTS,
     get_model,
     get_provider,
+    make_model,
+    make_provider,
+    merge_model_defaults,
     normalize_model,
     normalize_provider,
     normalize_providers,
+    redact_api_key,
     resolve_profile_choice,
 )
 
 ACTIVE_LLM_FIELDS = ("api_key", "base_url", "model", "temperature", "max_tokens", "context_window")
+BACKUP_GLOB_PREFIX = "config.backup."
 SESSION_DEFAULTS = {
     "enabled": True,
     "storage_dir": ".kairo/sessions",
@@ -346,6 +351,229 @@ class Config:
             return False
         return self.select_active_model(*choice)
 
+    # ---- Runtime editing helpers -------------------------------------------------
+
+    def add_provider(
+        self,
+        *,
+        name: str,
+        base_url: str,
+        api_key: str = "",
+        api_key_env: str = "",
+        models: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """Add a new provider. Returns False if the name already exists."""
+        name = (name or "").strip()
+        if not name or self._get_provider(name):
+            return False
+        normalized = make_provider(
+            name=name,
+            base_url=base_url,
+            models=models or [],
+            api_key=api_key,
+            api_key_env=api_key_env,
+            normalize_context_management=self._normalize_context_management,
+        )
+        if not normalized:
+            return False
+        if not normalized["models"]:
+            return False
+        self.llm["providers"].append(normalized)
+        if not self.llm["active_provider"]:
+            self.llm["active_provider"] = normalized["name"]
+            self.llm["active_model"] = normalized["models"][0]["name"]
+        self._sync_runtime_fields()
+        return True
+
+    def update_provider(
+        self,
+        name: str,
+        *,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_key_env: Optional[str] = None,
+    ) -> bool:
+        """Update base_url / api_key / api_key_env for an existing provider."""
+        provider = self._get_provider(name)
+        if not provider:
+            return False
+        if base_url is not None:
+            provider["base_url"] = base_url.strip()
+        if api_key is not None:
+            provider["api_key"] = api_key
+            provider["_api_key_source"] = "file" if api_key else ("env" if provider.get("api_key_env") else "none")
+        if api_key_env is not None:
+            env_value = api_key_env.strip()
+            provider["api_key_env"] = env_value
+            if not api_key:
+                provider["_api_key_source"] = "env" if env_value else "none"
+        self._sync_runtime_fields()
+        return True
+
+    def remove_provider(self, name: str) -> bool:
+        """Remove a provider and re-select an active profile if needed."""
+        provider = self._get_provider(name)
+        if not provider:
+            return False
+        self.llm["providers"] = [p for p in self.llm["providers"] if p["name"] != name]
+        if self.llm["active_provider"] == name:
+            if self.llm["providers"]:
+                self.llm["active_provider"] = self.llm["providers"][0]["name"]
+                self.llm["active_model"] = self.llm["providers"][0]["models"][0]["name"]
+            else:
+                self.llm["active_provider"] = ""
+                self.llm["active_model"] = ""
+        self._sync_runtime_fields()
+        return True
+
+    def add_model(
+        self,
+        provider_name: str,
+        *,
+        name: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        context_window: Optional[int] = None,
+        context_management: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        provider = self._get_provider(provider_name)
+        if not provider:
+            return False
+        if get_model(provider, name):
+            return False
+        model = make_model(
+            name=name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            context_window=context_window,
+            context_management=context_management,
+            normalize_context_management=self._normalize_context_management,
+        )
+        model = merge_model_defaults(model, self.llm["defaults"])
+        provider["models"].append(model)
+        self._sync_runtime_fields()
+        return True
+
+    def update_model(
+        self,
+        provider_name: str,
+        model_name: str,
+        *,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        context_window: Optional[int] = None,
+        context_management: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        provider = self._get_provider(provider_name)
+        if not provider:
+            return False
+        model = get_model(provider, model_name)
+        if not model:
+            return False
+        if temperature is not None:
+            model["temperature"] = float(temperature)
+        if max_tokens is not None:
+            model["max_tokens"] = int(max_tokens)
+        if context_window is not None:
+            model["context_window"] = int(context_window)
+        if context_management is not None:
+            model["context_management"] = self._normalize_context_management(context_management)
+        self._sync_runtime_fields()
+        return True
+
+    def remove_model(self, provider_name: str, model_name: str) -> bool:
+        provider = self._get_provider(provider_name)
+        if not provider:
+            return False
+        if not get_model(provider, model_name):
+            return False
+        if len(provider["models"]) <= 1:
+            return False
+        provider["models"] = [m for m in provider["models"] if m["name"] != model_name]
+        if self.llm["active_provider"] == provider_name and self.llm["active_model"] == model_name:
+            self.llm["active_model"] = provider["models"][0]["name"]
+        self._sync_runtime_fields()
+        return True
+
+    def set_active_model(self, provider_name: str, model_name: str) -> bool:
+        return self.select_active_model(provider_name, model_name)
+
+    def rename_provider(self, old_name: str, new_name: str) -> bool:
+        new_name = (new_name or "").strip()
+        if not old_name or not new_name:
+            return False
+        provider = self._get_provider(old_name)
+        if not provider or (old_name != new_name and self._get_provider(new_name)):
+            return False
+        provider["name"] = new_name
+        if self.llm["active_provider"] == old_name:
+            self.llm["active_provider"] = new_name
+        self._sync_runtime_fields()
+        return True
+
+    def rename_model(self, provider_name: str, old_name: str, new_name: str) -> bool:
+        new_name = (new_name or "").strip()
+        if not new_name:
+            return False
+        provider = self._get_provider(provider_name)
+        if not provider:
+            return False
+        model = get_model(provider, old_name)
+        if not model or (old_name != new_name and get_model(provider, new_name)):
+            return False
+        model["name"] = new_name
+        if self.llm["active_provider"] == provider_name and self.llm["active_model"] == old_name:
+            self.llm["active_model"] = new_name
+        self._sync_runtime_fields()
+        return True
+
+    # ---- API Key safety ---------------------------------------------------------
+
+    @staticmethod
+    def redact_api_key(value: str) -> str:
+        return redact_api_key(value)
+
+    def describe_active_api_key(self) -> str:
+        """Return a human description of the active API key provenance (no raw key)."""
+        settings = self.get_active_llm_settings()
+        provider = self._get_provider(self.llm["active_provider"])
+        env_name = str(provider.get("api_key_env", "")).strip() if provider else ""
+        source = str(settings.get("api_key_source") or "none")
+        if source == "env":
+            present = bool(env_name and os.environ.get(env_name))
+            state = "present" if present else "missing"
+            return f"API Key: env({env_name}) {state}"
+        if source == "override":
+            return "API Key: runtime override (env OPENAI_API_KEY/OPENAI_BASE_URL)"
+        if source == "file":
+            return f"API Key: inline in config.json [warning] preview={self.redact_api_key(settings['api_key'])}"
+        return "API Key: missing"
+
+    # ---- Backup helper ----------------------------------------------------------
+
+    @staticmethod
+    def list_backups(config_path: os.PathLike | str) -> List[Dict[str, Any]]:
+        """Return backup files for the given config path sorted newest-first."""
+        path = Path(config_path)
+        if not path.exists():
+            return []
+        backups: List[Dict[str, Any]] = []
+        for entry in path.parent.glob(f"{BACKUP_GLOB_PREFIX}*{path.suffix or '.json'}"):
+            if not entry.is_file():
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            backups.append({
+                "name": entry.name,
+                "path": str(entry),
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+            })
+        backups.sort(key=lambda item: item.get("modified", 0), reverse=True)
+        return backups
+
     def load(self):
         """Load configuration from JSON and environment variables."""
         data: Dict[str, Any] = {}
@@ -421,13 +649,23 @@ class Config:
         self.shell_type = os.environ.get("SHELL_TYPE", self.shell_type)
         self._sync_runtime_fields()
 
-    def save(self):
-        """Save configuration using the provider-centric llm structure."""
+    def save(self, *, backup: bool = False):
+        """Save configuration using the provider-centric llm structure.
+
+        ``backup=True`` writes a timestamped copy of the existing on-disk file to
+        ``config.backup.YYYYMMDD-HHMMSS.json`` before the atomic replace. Config
+        backups never persist raw API keys; this method relies on the existing
+        file content so leaked keys in an existing file would be preserved in
+        the backup — callers should ensure env-based key storage in production.
+        """
         if self._load_error is not None:
             raise RuntimeError(
                 f"Config at {self.config_path} could not be loaded ({self._load_error}); "
                 "fix or rebuild it before saving."
             ) from self._load_error
+
+        if backup and self.config_path.exists():
+            self._write_backup(self.config_path)
 
         providers: List[Dict[str, Any]] = []
         for provider in self.llm["providers"]:
@@ -499,3 +737,65 @@ class Config:
             f"context_window={self.context_window}, auto={self.auto_mode}, "
             f"plan={self.plan_mode}, think={self.thinking_mode})"
         )
+
+    # ---- Backup machinery --------------------------------------------------------
+
+    @staticmethod
+    def _write_backup(config_path: Path) -> Optional[Path]:
+        """Copy ``config_path`` to a timestamped backup in the same directory."""
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        suffix = config_path.suffix or ".json"
+        backup_path = config_path.with_name(f"{BACKUP_GLOB_PREFIX}{timestamp}{suffix}")
+        try:
+            with open(config_path, "r", encoding="utf-8") as source:
+                content = source.read()
+            with open(backup_path, "w", encoding="utf-8") as dest:
+                dest.write(content)
+            return backup_path
+        except Exception:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return None
+
+    @classmethod
+    def create_backup(cls, config_path: os.PathLike | str) -> Optional[Path]:
+        """Create an explicit backup of *config_path* and return its location."""
+        path = Path(config_path)
+        if not path.exists():
+            return None
+        return cls._write_backup(path)
+
+    @classmethod
+    def restore_backup(cls, config_path: os.PathLike | str, backup_name: str) -> bool:
+        """Copy backup ``backup_name`` back over ``config_path`` atomically.
+
+        ``backup_name`` may be either a bare filename or an absolute path inside
+        the config directory. The original file is overwritten via temp+replace
+        so a partial write never leaves the config empty.
+        """
+        config_path = Path(config_path)
+        backup_path = Path(backup_name)
+        if not backup_path.is_absolute():
+            backup_path = config_path.parent / backup_path
+        if not backup_path.exists():
+            return False
+        try:
+            with open(backup_path, "r", encoding="utf-8") as source:
+                content = source.read()
+            tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as dest:
+                dest.write(content)
+                dest.flush()
+                os.fsync(dest.fileno())
+            os.replace(tmp_path, config_path)
+            return True
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False

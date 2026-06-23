@@ -1,10 +1,10 @@
 # Kairo
 
-Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, and OpenAI-compatible model profiles.
+Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, and runtime provider/model configuration.
 
-Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理和 OpenAI-compatible 模型配置。
+Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置，并支持在 TUI 内运行时配置 provider 与 model。
 
-Current version / 当前版本：**0.2.2**
+Current version / 当前版本：**0.2.3**
 
 ## Documentation / 文档
 
@@ -17,7 +17,10 @@ Current version / 当前版本：**0.2.2**
 - Animated TUI with Kai mascot and reduced-motion/plain fallbacks.
 - Slash command palette with keyboard selection and completion.
 - Configured model profiles through `llm.providers`; switch with `/model`.
-- Persisted sessions under `sessions.storage_dir`; switch with `/sessions`.
+- **Runtime configuration** (0.2.3): add/edit/remove providers and models with `/providers`, `/provider add|edit|remove|test`, `/model add|edit|remove|test`, `/settings`, and validate/backup/restore with `/config validate|backup|restore`.
+- **Provider health check** (0.2.3): `/provider test` and `/model test` verify reachability, key validity, and model acceptance.
+- **API key safety** (0.2.3): env keys are never persisted back to `config.json`; inline keys require explicit confirmation; `/config` shows only safe previews.
+- Persisted sessions under `sessions.storage_dir`; switch with `/sessions`, rename/delete/export/reveal with `/session ...`.
 - Manual and automatic context compression with `/compress`.
 - Workspace Dock with file tree, touched files, Git/non-Git diff review, and context progress.
 - Runtime workspace hot switching with `/workspace move <path>`.
@@ -27,7 +30,15 @@ Current version / 当前版本：**0.2.2**
 - Kai 终端动效与低动效/plain fallback。
 - 支持键盘选择和补全的 Slash 命令菜单。
 - 通过 `llm.providers` 配置模型 profile，并用 `/model` 切换。
-- 会话持久化到 `sessions.storage_dir`，并用 `/sessions` 切换。
+- **运行时配置**（0.2.3）：使用 `/providers`、`/provider add|edit|remove|test`、`/model add|edit|remove|test`、`/settings` 以及 `/config validate|backup|restore` 增删改 provider/model 和备份恢复配置。
+- **Provider 健康检查**（0.2.3）：`/provider test`、`/model test` 检测连通性、key 有效性和模型名。
+- **API Key 安全**（0.2.3）：env key 不落盘；inline key 保存前需确认；`/config` 只显示安全预览。
+- 会话持久化到 `sessions.storage_dir`，`/sessions` 切换，`/session rename|delete|export|reveal` 整理。
+- 使用 `/compress` 进行手动或自动上下文压缩。
+- Workspace Dock 含文件树、变更文件、Git/非 Git diff 预览、上下文进度。
+- `/workspace move <path>` 当前进程热切换 workspace。
+- 内置文件、搜索、patch、shell、Python、web、自定义 skill 工具。
+- 授权级别：`manual`、`auto`、`yolo`。
 - `/compress` 手动压缩和自动上下文治理。
 - Workspace Dock 显示文件树、会话触达文件、Git/非 Git Diff 和上下文进度。
 - `/workspace move <path>` 运行时热切换 workspace。

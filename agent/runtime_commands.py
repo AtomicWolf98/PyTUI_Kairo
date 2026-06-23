@@ -1,0 +1,693 @@
+"""0.2.3 command handlers for runtime config, health check, session management.
+
+These handlers are invoked from :class:`CommandDispatcher` (both the plain
+console path and the Textual modal layer). Plain-mode flows use
+:mod:`agent.plain_io` for synchronous prompts; the Textual layer will be
+wired in Phase 3 by reading the ``interactive`` flag and ``kind`` field on
+the returned :class:`CommandResult` and swapping the plain prompt chain for
+a modal.
+
+Each handler returns a :class:`CommandResult` so the dispatcher stays a thin
+router and there is no shared mutable state beyond the agent.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from agent.commands import CommandResult
+from agent.config import Config
+from agent.config_editor import ConfigDraft
+from agent.plain_io import (
+    ask,
+    ask_choice,
+    ask_float,
+    ask_int,
+    banner,
+    confirm,
+    error,
+    notice,
+    select,
+)
+from agent.provider_health import ProviderTestResult, test_connection
+
+
+# ---- Shared helpers ------------------------------------------------------------
+
+
+def _list_provider_lines(config: Config) -> List[str]:
+    lines = []
+    for provider in config.llm["providers"]:
+        marker = "* " if provider["name"] == config.llm["active_provider"] else "  "
+        model_names = ", ".join(m["name"] for m in provider["models"])
+        lines.append(f"{marker}{provider['name']}  base_url={provider.get('base_url', '')}  models=[{model_names}]")
+    return lines
+
+
+def _list_models_for_provider(config: Config, provider_name: str) -> List[str]:
+    provider = config._get_provider(provider_name)
+    if not provider:
+        return []
+    return [m["name"] for m in provider["models"]]
+
+
+def _choose_provider(config: Config, prompt: str = "Select provider") -> Optional[str]:
+    names = _list_provider_lines(config)
+    if not names:
+        notice("No providers configured. Use '/provider add' to create one.")
+        return None
+    idx = select(prompt, names)
+    if idx < 0:
+        return None
+    return config.llm["providers"][idx]["name"]
+
+
+def _switch_after_save(agent, draft: ConfigDraft, report_text: str) -> str:
+    """After apply_to, sync conversations context + runtime state."""
+    config = agent.config
+    config._sync_runtime_fields()
+    agent.conversations.set_context_window(config.context_window)
+    agent.conversations.update_runtime_state(model_profile=config.active_model_profile)
+    agent.conversations.save_all(reason="model_config_update")
+    return report_text
+
+
+def _run_test_result_message(result: ProviderTestResult) -> str:
+    return result.summary() + ("" if result.ok else f"\nDetail: {result.provider_message}")
+
+
+# ---- Provider wizard / add -----------------------------------------------------
+
+
+def handle_providers(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Show all providers in draft-view."""
+    banner("Configured Providers")
+    lines = _list_provider_lines(agent.config) or ["(none)"]
+    notice("\n".join(lines))
+    notice("Use '/provider add' to add a new provider, '/provider edit|remove|test' to manage, '/model add' for new models.")
+    return CommandResult(handled=True, success=True, data={"kind": "providers"})
+
+
+def handle_provider_add(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+
+    name = ask("Provider name (unique)")
+    if not name:
+        return CommandResult(handled=True, success=False, message="Provider name is required.")
+    if config._get_provider(name):
+        return CommandResult(handled=True, success=False, message=f"Provider '{name}' already exists.")
+    base_url = ask("Base URL (https://...)", default="https://api.openai.com/v1")
+    api_key_mode = ask_choice("API key mode", ["env", "inline", "empty"], default="env")
+    api_key_env = ""
+    api_key = ""
+    if api_key_mode == "env":
+        api_key_env = ask("API key env name", default=f"KAIRO_{name.upper().replace('-', '_')}_API_KEY")
+    elif api_key_mode == "inline":
+        api_key = ask("API key value (will be saved to config.json)")
+
+    model_name = ask("Model name (required)")
+    if not model_name:
+        return CommandResult(handled=True, success=False, message="At least one model name is required.")
+
+    context_window = ask_int("Context window", default=int(config.llm["defaults"]["context_window"]), minimum=1)
+    max_tokens = ask_int("Max tokens", default=int(config.llm["defaults"]["max_tokens"]), minimum=1)
+    temperature = ask_float("Temperature", default=float(config.llm["defaults"]["temperature"]), minimum=0.0, maximum=2.0)
+
+    draft = ConfigDraft.from_config(config)
+    if not draft.add_provider(
+        name=name,
+        base_url=base_url,
+        api_key=api_key if api_key else "",
+        api_key_env=api_key_env,
+        models=[{
+            "name": model_name,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "context_window": context_window,
+        }],
+    ):
+        return CommandResult(handled=True, success=False, message="Failed to add provider to draft.")
+
+    if api_key_mode == "inline":
+        notice("WARNING: inline API keys are written to config.json.")
+        if not confirm("This will save the API key to disk. Continue?", default=False):
+            return CommandResult(handled=True, success=False, message="Cancelled; no changes were saved.")
+
+    if confirm("Test connection now?", default=True):
+        _test_and_show(agent, base_url=base_url, api_key=api_key or _env_value(api_key_env), model=model_name)
+
+    if not confirm("Save and switch to new model?", default=True):
+        return CommandResult(handled=True, success=True, message="Draft discarded; no changes saved.")
+
+    draft.set_active_model(name, model_name)
+    allow_inline = api_key_mode == "inline"
+    report = draft.apply_to(config, backup=True, allow_inline_key=allow_inline)
+    if not report.ok:
+        error(report.to_text())
+        return CommandResult(handled=True, success=False, message="Saved refused:\n" + report.to_text())
+
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Provider '{name}' added and saved. Active target: {config.active_model_profile}",
+        refresh_ui=True,
+        data={"kind": "provider_saved"},
+    )
+
+
+def handle_provider_edit(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    target = _choose_provider(config)
+    if not target:
+        return CommandResult(handled=True, success=False, message="No provider selected.")
+    provider = config._get_provider(target)
+
+    new_name = ask("Rename to (blank keeps current)", default=target)
+    base_url = ask("Base URL", default=provider.get("base_url", ""))
+    api_key_mode = ask_choice("API key mode", ["env", "inline", "empty"], default="env" if provider.get("api_key_env") else "inline")
+    api_key_env = ""
+    api_key = ""
+    if api_key_mode == "env":
+        api_key_env = ask("API key env name", default=provider.get("api_key_env", ""))
+    elif api_key_mode == "inline":
+        api_key = ask("API key value (blank keeps existing)")
+
+    draft = ConfigDraft.from_config(config)
+    rename = new_name.strip() or None
+    draft.update_provider(
+        target,
+        base_url=base_url,
+        api_key=api_key if api_key or api_key_mode == "inline" else None,
+        api_key_env=api_key_env,
+        rename=rename,
+    )
+
+    if api_key_mode == "inline":
+        if not confirm("This will save the API key to disk. Continue?", default=False):
+            return CommandResult(handled=True, success=False, message="Cancelled; inline key not saved.")
+        allow_inline = True
+    else:
+        allow_inline = False
+
+    report = draft.apply_to(config, backup=True, allow_inline_key=allow_inline)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Provider '{target}' updated and saved.",
+        refresh_ui=True,
+        data={"kind": "provider_saved"},
+    )
+
+
+def handle_provider_remove(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    if len(config.llm["providers"]) <= 1:
+        return CommandResult(handled=True, success=False, message="Cannot remove the last provider.")
+    target = _choose_provider(config, prompt="Remove which provider")
+    if not target:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    if not confirm(f"Remove provider '{target}' and all its models?", default=False):
+        return CommandResult(handled=True, success=False, message="Cancelled; no changes saved.")
+    draft = ConfigDraft.from_config(config)
+    if not draft.remove_provider(target):
+        return CommandResult(handled=True, success=False, message=f"Failed to remove '{target}'.")
+    report = draft.apply_to(config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Provider '{target}' removed and saved.",
+        refresh_ui=True,
+        data={"kind": "provider_saved"},
+    )
+
+
+def handle_provider_test(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    target = _choose_provider(config, prompt="Test which provider")
+    if not target:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    provider = config._get_provider(target)
+    model_name = ask("Model to test (blank uses active)", default=config.llm["active_model"] if config.llm["active_provider"] == target else None)
+    if not model_name and provider["models"]:
+        model_name = provider["models"][0]["name"]
+    if not model_name:
+        return CommandResult(handled=True, success=False, message="No model to test.")
+    api_key = ask("API key (blank uses env/inline from config)", default="")
+    if not api_key:
+        env_name = provider.get("api_key_env", "")
+        api_key = _env_value(env_name) if env_name else provider.get("api_key", "")
+    result = _test_and_show(agent, base_url=provider.get("base_url", ""), api_key=api_key, model=model_name)
+    return CommandResult(
+        handled=True,
+        success=result.ok,
+        message=_run_test_result_message(result),
+        interactive=True,
+        data={"kind": "provider_test_result", "result": result},
+    )
+
+
+# ---- Model add/edit/remove/test -----------------------------------------------
+
+
+def handle_model_add(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    provider_name = _choose_provider(config, prompt="Add model to which provider")
+    if not provider_name:
+        return CommandResult(handled=True, success=False, message="No provider selected.")
+    name = ask("Model name (required)")
+    if not name:
+        return CommandResult(handled=True, success=False, message="Model name is required.")
+    context_window = ask_int("Context window", default=int(config.llm["defaults"]["context_window"]), minimum=1)
+    max_tokens = ask_int("Max tokens", default=int(config.llm["defaults"]["max_tokens"]), minimum=1)
+    temperature = ask_float("Temperature", default=float(config.llm["defaults"]["temperature"]), minimum=0.0, maximum=2.0)
+
+    draft = ConfigDraft.from_config(config)
+    if not draft.add_model(provider_name, name=name, temperature=temperature, max_tokens=max_tokens, context_window=context_window):
+        return CommandResult(handled=True, success=False, message="Failed to add model (duplicate or missing provider).")
+
+    if not confirm("Save?", default=True):
+        return CommandResult(handled=True, success=False, message="Draft discarded; no changes saved.")
+    report = draft.apply_to(config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Model '{name}' added to '{provider_name}' and saved.",
+        refresh_ui=True,
+        data={"kind": "model_saved"},
+    )
+
+
+def handle_model_edit(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    provider_name = _choose_provider(config, prompt="Edit model in which provider")
+    if not provider_name:
+        return CommandResult(handled=True, success=False, message="No provider selected.")
+    models = _list_models_for_provider(config, provider_name)
+    if not models:
+        return CommandResult(handled=True, success=False, message="Provider has no models.")
+    model_idx = select("Edit which model", models)
+    if model_idx < 0:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    model_name = models[model_idx]
+    current = config._get_model(provider_name, model_name)
+
+    new_name = ask("Rename to (blank keeps)", default=model_name)
+    context_window = ask_int(
+        "Context window",
+        default=int(current.get("context_window", config.llm["defaults"]["context_window"])),
+        minimum=1,
+    )
+    max_tokens = ask_int(
+        "Max tokens",
+        default=int(current.get("max_tokens", config.llm["defaults"]["max_tokens"])),
+        minimum=1,
+    )
+    temperature = ask_float(
+        "Temperature",
+        default=float(current.get("temperature", config.llm["defaults"]["temperature"])),
+        minimum=0.0,
+        maximum=2.0,
+    )
+
+    draft = ConfigDraft.from_config(config)
+    draft.update_model(
+        provider_name,
+        model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        context_window=context_window,
+        rename=new_name.strip() or None,
+    )
+    if not confirm("Save?", default=True):
+        return CommandResult(handled=True, success=False, message="Draft discarded; no changes saved.")
+    report = draft.apply_to(config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Model '{model_name}' updated and saved.",
+        refresh_ui=True,
+        data={"kind": "model_saved"},
+    )
+
+
+def handle_model_remove(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    provider_name = _choose_provider(config, prompt="Remove model from which provider")
+    if not provider_name:
+        return CommandResult(handled=True, success=False, message="No provider selected.")
+    models = _list_models_for_provider(config, provider_name)
+    if len(models) <= 1:
+        return CommandResult(handled=True, success=False, message="Provider has only one model; cannot remove.")
+    model_idx = select("Remove which model", models)
+    if model_idx < 0:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    model_name = models[model_idx]
+    if not confirm(f"Remove model '{model_name}' from '{provider_name}'?", default=False):
+        return CommandResult(handled=True, success=False, message="Cancelled; no changes saved.")
+    draft = ConfigDraft.from_config(config)
+    if not draft.remove_model(provider_name, model_name):
+        return CommandResult(handled=True, success=False, message="Failed to remove model.")
+    report = draft.apply_to(config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Model '{model_name}' removed and saved.",
+        refresh_ui=True,
+        data={"kind": "model_saved"},
+    )
+
+
+def handle_model_test(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    provider_name = _choose_provider(config, prompt="Test model in which provider")
+    if not provider_name:
+        return CommandResult(handled=True, success=False, message="No provider selected.")
+    models = _list_models_for_provider(config, provider_name)
+    if not models:
+        return CommandResult(handled=True, success=False, message="Provider has no models.")
+    model_idx = select("Test which model", models)
+    if model_idx < 0:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    model_name = models[model_idx]
+    provider = config._get_provider(provider_name)
+    env_name = provider.get("api_key_env", "")
+    api_key = _env_value(env_name) if env_name else provider.get("api_key", "")
+    result = _test_and_show(agent, base_url=provider.get("base_url", ""), api_key=api_key, model=model_name)
+    return CommandResult(
+        handled=True,
+        success=result.ok,
+        message=_run_test_result_message(result),
+        interactive=True,
+        data={"kind": "provider_test_result", "result": result},
+    )
+
+
+# ---- Settings menu -------------------------------------------------------------
+
+
+_SETTINGS_OPTIONS = [
+    "Manage providers",
+    "Manage models",
+    "Toggle Plan Mode",
+    "Toggle Thinking Mode",
+    "Cycle authorization level",
+    "Exit settings",
+]
+
+
+def handle_settings(agent, raw: str, parts: List[str]) -> CommandResult:
+    banner("Settings")
+    idx = select("Choose an area", _SETTINGS_OPTIONS)
+    if idx == 0:
+        return handle_providers(agent, raw, parts)
+    if idx == 1:
+        return _model_submenu(agent, raw, parts)
+    if idx == 2:
+        return agent.handle_command("/plan")
+    if idx == 3:
+        return agent.handle_command("/think")
+    if idx == 4:
+        current = agent.config.authorization_level
+        nxt = {"manual": "auto", "auto": "yolo", "yolo": "manual"}.get(current, "manual")
+        return agent.handle_command(f"/{nxt}")
+    return CommandResult(handled=True, success=True, message="Settings closed.")
+
+
+def _model_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
+    options = ["Add model", "Edit model", "Remove model", "Test model", "Back"]
+    idx = select("Model actions", options)
+    if idx == 0:
+        return handle_model_add(agent, raw, parts)
+    if idx == 1:
+        return handle_model_edit(agent, raw, parts)
+    if idx == 2:
+        return handle_model_remove(agent, raw, parts)
+    if idx == 3:
+        return handle_model_test(agent, raw, parts)
+    return CommandResult(handled=True, success=True)
+
+
+# ---- Config validate / backup / restore ----------------------------------------
+
+
+def handle_config_validate(agent, raw: str, parts: List[str]) -> CommandResult:
+    draft = ConfigDraft.from_config(agent.config)
+    report = draft.validate()
+    return CommandResult(
+        handled=True,
+        success=report.ok,
+        message=report.to_text(),
+        data={"kind": "config_validate", "report": report},
+    )
+
+
+def handle_config_backup(agent, raw: str, parts: List[str]) -> CommandResult:
+    backup_path = Config.create_backup(agent.config.config_path)
+    if not backup_path:
+        return CommandResult(handled=True, success=False, message="Failed to create backup.")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Backup written: {backup_path}",
+        data={"kind": "config_backup", "path": str(backup_path)},
+    )
+
+
+def handle_config_restore(agent, raw: str, parts: List[str]) -> CommandResult:
+    backups = Config.list_backups(agent.config.config_path)
+    if not backups:
+        return CommandResult(handled=True, success=False, message="No backups available.")
+    options = [f"{b['name']}  ({b['size']} bytes)" for b in backups]
+    idx = select("Choose a backup to restore", options)
+    if idx < 0:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    chosen = backups[idx]["name"]
+    if not confirm(f"Restore {chosen}? This OVERWRITES config.json.", default=False):
+        return CommandResult(handled=True, success=False, message="Cancelled; no changes made.")
+    if not Config.restore_backup(agent.config.config_path, chosen):
+        return CommandResult(handled=True, success=False, message="Restore failed.")
+    agent.config.load()
+    agent.config._sync_runtime_fields()
+    agent.conversations.set_context_window(agent.config.context_window)
+    agent.conversations.update_runtime_state(model_profile=agent.config.active_model_profile)
+    agent.conversations.save_all(reason="config_restore")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Restored {chosen} and reloaded config.",
+        refresh_ui=True,
+        data={"kind": "config_restore"},
+    )
+
+
+# ---- Docs ----------------------------------------------------------------------
+DOCS_MAP: Dict[str, str] = {
+    "": "docs/index.md",
+    "config": "docs/configuration.md",
+    "providers": "docs/configuration.md",
+    "sessions": "docs/zh/user-manual.md",
+}
+
+
+def handle_docs(agent, raw: str, parts: List[str]) -> CommandResult:
+    topic = parts[1].strip() if len(parts) > 1 else ""
+    if not topic:
+        notice("Available topics: config, providers, sessions")
+        notice("Local docs:")
+        notice("  docs/zh/user-manual.md")
+        notice("  docs/en/user-manual.md")
+        notice("  docs/commands.md")
+        notice("  docs/configuration.md")
+        return CommandResult(handled=True, success=True, message="Docs topics listed.", data={"kind": "docs"})
+    if topic not in DOCS_MAP:
+        notice(f"Unknown docs topic: '{topic}'. Available: config, providers, sessions")
+        return CommandResult(handled=True, success=True, data={"kind": "docs"})
+    target = DOCS_MAP[topic]
+    path = _resolve_doc_path(target)
+    if path:
+        notice(f"Topic '{topic}':")
+        notice(str(path))
+    else:
+        notice(f"No local doc for topic '{topic}'.")
+    return CommandResult(handled=True, success=True, data={"kind": "docs", "topic": topic})
+
+
+def _resolve_doc_path(rel: str) -> Optional[Path]:
+    candidate = Path(rel)
+    if candidate.exists():
+        return candidate.resolve()
+    # Try relative to the workspace root.
+    workspace_root = Path.cwd()
+    candidate2 = workspace_root / rel
+    if candidate2.exists():
+        return candidate2.resolve()
+    return None
+
+
+# ---- Helpers ------------------------------------------------------------------
+
+
+def _env_value(env_name: str) -> str:
+    if not env_name:
+        return ""
+    import os as _os
+
+    return _os.environ.get(env_name, "")
+
+
+def _test_and_show(agent, *, base_url: str, api_key: str, model: str) -> ProviderTestResult:
+    notice(f"Testing {model} at {base_url} ...")
+    result = test_connection(base_url=base_url, api_key=api_key, model=model)
+    notice(_run_test_result_message(result))
+    return result
+
+
+def show_validation_issue(agent, report_text: str) -> None:
+    """Plain-mode helper to surface validation output; modals read CommandResult directly."""
+    notice(report_text)
+
+
+# ---- Session management -------------------------------------------------------
+
+
+def handle_session_rename(agent, raw: str, parts: List[str]) -> CommandResult:
+    store = _get_session_store(agent)
+    if store is None:
+        return CommandResult(handled=True, success=False, message="Session persistence is disabled.")
+    session = agent.conversations.active
+    # No default so blank input is rejected (default would fill with current name).
+    new_name = ask("New session name:")
+    if not new_name:
+        return CommandResult(handled=True, success=False, message="Session name cannot be empty.")
+    if not store.rename_session(session.id, new_name):
+        return CommandResult(handled=True, success=False, message="Failed to rename session.")
+    session.name = new_name
+    session.touch()
+    agent.conversations.refresh_context()
+    try:
+        store.save_session(session, is_active=True, reason="session_rename")
+    except Exception as exc:
+        notice(f"Index sync warning: {exc}")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Session renamed to '{new_name}'.",
+        refresh_ui=True,
+        data={"kind": "session_rename", "name": new_name},
+    )
+
+
+def handle_session_delete(agent, raw: str, parts: List[str]) -> CommandResult:
+    store = _get_session_store(agent)
+    if store is None:
+        return CommandResult(handled=True, success=False, message="Session persistence is disabled.")
+    if len(agent.conversations.sessions) <= 1:
+        return CommandResult(handled=True, success=False, message="Cannot delete the last session; create a new session first.")
+    options = _session_options(agent)
+    idx = select("Delete which session", options)
+    if idx < 0:
+        return CommandResult(handled=True, success=False, message="Cancelled.")
+    target = agent.conversations.sessions[idx]
+    if not confirm(f"Delete '{target.name}'?", default=False):
+        return CommandResult(handled=True, success=False, message="Cancelled; no changes made.")
+    if not store.delete_session(target.id):
+        return CommandResult(handled=True, success=False, message="Failed to delete session.")
+    agent.conversations.sessions = [s for s in agent.conversations.sessions if s.id != target.id]
+    if agent.conversations.active_session_id == target.id:
+        agent.conversations.active_session_id = agent.conversations.sessions[0].id
+        agent.conversations.refresh_context()
+    agent.conversations.save_active(reason="session_delete")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Session '{target.name}' deleted.",
+        refresh_ui=True,
+        data={"kind": "session_delete"},
+    )
+
+
+def handle_session_export(agent, raw: str, parts: List[str]) -> CommandResult:
+    store = _get_session_store(agent)
+    if store is None:
+        return CommandResult(handled=True, success=False, message="Session persistence is disabled.")
+    fmt = ask_choice("Export format", ["markdown", "json"], default="markdown")
+    session = agent.conversations.active
+    dest = store.export_session(session.id, fmt=fmt)
+    if not dest:
+        return CommandResult(handled=True, success=False, message="Export failed.")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Exported '{session.name}' ({fmt}) to:\n{dest}",
+        data={"kind": "session_export", "path": str(dest), "format": fmt},
+    )
+
+
+def handle_session_reveal(agent, raw: str, parts: List[str]) -> CommandResult:
+    store = _get_session_store(agent)
+    if store is None:
+        return CommandResult(handled=True, success=False, message="Session persistence is disabled.")
+    path = store.reveal_session_path(agent.conversations.active.id)
+    if not path:
+        return CommandResult(handled=True, success=False, message="Active session has no on-disk file.")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Session '{agent.conversations.active.name}' file:\n{path}",
+        data={"kind": "session_reveal", "path": str(path)},
+    )
+
+
+def _get_session_store(agent):
+    store = getattr(agent.conversations, "session_store", None)
+    if store is None:
+        return None
+    return store
+
+
+def _session_options(agent) -> List[str]:
+    options = []
+    for session in agent.conversations.sessions:
+        marker = "*" if session.id == agent.conversations.active_session_id else " "
+        options.append(f"{marker} {session.name} | {len(session.history)} messages")
+    return options
+
+
+__all__ = [
+    "DOCS_MAP",
+    "handle_config_backup",
+    "handle_config_restore",
+    "handle_config_validate",
+    "handle_docs",
+    "handle_model_add",
+    "handle_model_edit",
+    "handle_model_remove",
+    "handle_model_test",
+    "handle_provider_add",
+    "handle_provider_edit",
+    "handle_provider_remove",
+    "handle_provider_test",
+    "handle_providers",
+    "handle_session_delete",
+    "handle_session_export",
+    "handle_session_rename",
+    "handle_session_reveal",
+    "handle_settings",
+]

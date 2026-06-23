@@ -312,7 +312,7 @@ class BrandHeader(Horizontal):
         yield KaiMascot(id="header-kai", reduced_motion=self.reduced_motion)
         yield Static(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.2[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.3[/#7f849c]\n"
                 f"[#a5adcb]{self.profile or self.model}[/#a5adcb]  [#6e738d]({self.model})[/#6e738d]\n"
                 f"[#7f849c]{self.cwd}[/#7f849c]"
             ),
@@ -323,7 +323,7 @@ class BrandHeader(Horizontal):
         self.model, self.profile, self.cwd = model, profile, cwd
         self.query_one("#brand-meta", Static).update(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.2[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.3[/#7f849c]\n"
                 f"[#a5adcb]{profile or model}[/#a5adcb]  [#6e738d]({model})[/#6e738d]\n"
                 f"[#7f849c]{cwd}[/#7f849c]"
             )
@@ -583,3 +583,213 @@ class TextPromptModal(ModalScreen[str]):
     def on_key(self, event: events.Key):
         if event.key == "escape":
             self.dismiss("")
+
+
+# ---- 0.2.3 Runtime configuration modals --------------------------------------
+
+
+class ProviderListModal(ModalScreen[Optional[Dict]]):
+    """Lists configured providers; Enter opens edit, 'd' triggers delete."""
+
+    class Edit(Message):
+        def __init__(self, name: str):
+            super().__init__()
+            self.name = name
+
+    class Delete(Message):
+        def __init__(self, name: str):
+            super().__init__()
+            self.name = name
+
+    def __init__(self, providers: List[Dict[str, Any]], active_name: str = ""):
+        super().__init__()
+        self.providers = providers
+        self.active_name = active_name
+
+    def compose(self):
+        with Vertical(id="provider-list-shell"):
+            yield Static("PROVIDERS · Enter to edit · 'd' to remove · Esc to close", id="provider-list-title")
+            items = []
+            for provider in self.providers:
+                marker = "* " if provider.get("name") == self.active_name else "  "
+                label = f"{marker}{provider.get('name', '')}  -  {provider.get('base_url', '')}"
+                items.append(ListItem(Label(label)))
+            yield ListView(*items, initial_index=0, id="provider-list")
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        provider = self.providers[event.index]
+        self.dismiss({"action": "edit", "name": provider.get("name", "")})
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "d":
+            list_view = self.query_one("#provider-list", ListView)
+            if list_view.index is None:
+                return
+            provider = self.providers[list_view.index]
+            self.dismiss({"action": "delete", "name": provider.get("name", "")})
+
+
+class ProviderEditorModal(ModalScreen[Optional[Dict]]):
+    """Form to add or edit a provider. Dismisses with a values dict or None."""
+
+    def __init__(self, *, title: str, defaults: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.title_text = title
+        self.defaults = defaults or {}
+
+    def compose(self):
+        with Vertical(id="provider-editor-shell"):
+            yield Static(self.title_text, id="provider-editor-title")
+            yield Label("Name")
+            yield Input(value=str(self.defaults.get("name", "")), id="pe-name")
+            yield Label("Base URL")
+            yield Input(value=str(self.defaults.get("base_url", "")), id="pe-base-url")
+            yield Label("API Key env name (blank to skip)")
+            yield Input(value=str(self.defaults.get("api_key_env", "")), id="pe-env")
+            yield Label("API Key value (blank to keep env only)")
+            yield Input(value=str(self.defaults.get("api_key", "")), password=True, id="pe-key")
+            with Horizontal(id="pe-actions"):
+                yield Static("Enter to save · Esc to cancel", id="pe-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            self._submit()
+
+    def _submit(self):
+        values = {
+            "name": self.query_one("#pe-name", Input).value.strip(),
+            "base_url": self.query_one("#pe-base-url", Input).value.strip(),
+            "api_key_env": self.query_one("#pe-env", Input).value.strip(),
+            "api_key": self.query_one("#pe-key", Input).value,
+        }
+        self.dismiss(values)
+
+
+class ModelEditorModal(ModalScreen[Optional[Dict]]):
+    """Form to add or edit a model."""
+
+    def __init__(self, *, title: str, provider_name: str, defaults: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.title_text = title
+        self.provider_name = provider_name
+        self.defaults = defaults or {}
+
+    def compose(self):
+        with Vertical(id="model-editor-shell"):
+            yield Static(self.title_text, id="model-editor-title")
+            yield Label(f"Provider: {self.provider_name}")
+            yield Label("Name")
+            yield Input(value=str(self.defaults.get("name", "")), id="me-name")
+            yield Label("Context window")
+            yield Input(value=str(self.defaults.get("context_window", "")), id="me-context")
+            yield Label("Max tokens")
+            yield Input(value=str(self.defaults.get("max_tokens", "")), id="me-max")
+            yield Label("Temperature (0.0 - 2.0)")
+            yield Input(value=str(self.defaults.get("temperature", "")), id="me-temp")
+            with Horizontal(id="me-actions"):
+                yield Static("Enter to save · Esc to cancel", id="me-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            self._submit()
+
+    def _submit(self):
+        defaults = self.defaults or {}
+        values = {
+            "name": self.query_one("#me-name", Input).value.strip(),
+            "context_window": self.query_one("#me-context", Input).value.strip(),
+            "max_tokens": self.query_one("#me-max", Input).value.strip(),
+            "temperature": self.query_one("#me-temp", Input).value.strip(),
+        }
+        # Carry forward legacy name if blank (editing case);
+        # add-case still needs a name, validated by the caller.
+        if not values["name"] and defaults.get("name"):
+            values["name"] = defaults["name"]
+        self.dismiss(values)
+
+
+class ConnectionTestModal(ModalScreen[None]):
+    """Displays the result of a provider/model health check."""
+
+    def __init__(self, result_text: str, ok: bool):
+        super().__init__()
+        self.result_text = result_text
+        self.ok = ok
+
+    def compose(self):
+        with Vertical(id="connection-test-shell"):
+            yield Static("CONNECTION TEST" if self.ok else "CONNECTION TEST FAILED", id="ct-title")
+            yield Static(self.result_text, id="ct-result")
+            yield Static("Press Esc or Enter to close", id="ct-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key in ("escape", "enter"):
+            self.dismiss(None)
+
+
+class SecretConfirmModal(ModalScreen[bool]):
+    """Inline-API-key safety confirmation. Dismisses True to authorize save."""
+
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    def compose(self):
+        with Vertical(id="secret-confirm-shell"):
+            yield Static("API KEY SECURITY", id="secret-title")
+            yield Static(self.message, id="secret-message")
+            yield Static("Enter to authorize · Esc to cancel", id="secret-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key == "enter":
+            self.dismiss(True)
+        elif event.key == "escape":
+            self.dismiss(False)
+
+
+class SettingsScreen(ModalScreen[Optional[str]]):
+    """Root settings screen. Dismisses with a chosen topic for the app to act on."""
+
+    def __init__(self):
+        super().__init__()
+
+    def compose(self):
+        with Vertical(id="settings-shell"):
+            yield Static("SETTINGS · choose an area", id="settings-title")
+            yield ListView(
+                ListItem(Label("Manage providers")),
+                ListItem(Label("Add model")),
+                ListItem(Label("Edit model")),
+                ListItem(Label("Remove model")),
+                ListItem(Label("Test model")),
+                ListItem(Label("Validate config")),
+                ListItem(Label("Create config backup")),
+                ListItem(Label("Restore config backup")),
+                ListItem(Label("Close")),
+                id="settings-list",
+            )
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        mapping = [
+            "providers",
+            "model_add",
+            "model_edit",
+            "model_remove",
+            "model_test",
+            "config_validate",
+            "config_backup",
+            "config_restore",
+            "close",
+        ]
+        if 0 <= event.index < len(mapping):
+            self.dismiss(mapping[event.index])
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss("close")

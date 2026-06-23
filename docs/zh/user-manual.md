@@ -1,8 +1,8 @@
 # Kairo 完整用户手册
 
-版本：**0.2.2**
+版本：**0.2.3**
 
-Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化和自定义 skill 调用。
+Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
 
 ## 1. 安装与启动
 
@@ -365,3 +365,74 @@ kairo --reduced-motion
 ```powershell
 kairo --authorization manual
 ```
+
+## 8. 运行时配置（0.2.3）
+
+Kairo 现在支持在已启动的 TUI 内完成 provider 和 model 的增删改，无需退出程序或编辑 `config.json`。
+
+### 8.1 Provider 管理
+
+- `/providers`：列出所有已配置的 provider。
+- `/provider add`：启动新增 provider 向导，会依次询问名称、base URL、API Key 模式（env/inline/empty）、env 名称、model 名称、context window、max tokens、temperature，以及是否立即测试连接。
+- `/provider edit`：选择并编辑现有 provider。
+- `/provider remove`：删除 provider（保留至少一个）。
+- `/provider test`：发送最小探测请求，返回 Success / Auth Error / Model Error / URL Error / Rate Limit / Unknown。
+
+### 8.2 Model 管理
+
+- `/model add`：给 provider 添加新 model。
+- `/model edit`：编辑现有 model 的 context window、max tokens、temperature。
+- `/model remove`：删除 provider 下的 model（保留至少一个）。
+- `/model test`：测试 provider 下的指定 model。
+
+### 8.3 配置备份与恢复
+
+- `/config validate`：校验当前配置并列出错误与警告。
+- `/config backup`：生成带时间戳的 `config.backup.YYYYMMDD-HHMMSS.json`。
+- `/config restore`：从备份列表选择并恢复。
+
+### 8.4 API Key 安全
+
+- **推荐**：使用 `api_key_env` 并在系统环境变量中设置 key。env key **不会**被写回 `config.json`。
+- 如果选择 inline key，Kairo 会在保存前二次确认："This will save the API key to disk. Continue?"
+- `/config` 输出只显示安全预览，例如 `env(KAIRO_DEEPSEEK_API_KEY) present`、`inline in config.json [warning] sk-...abcd`，或直接 `missing`。完整 key 不会被打印。
+
+### 8.5 首次启动向导
+
+当 `config.json` 不存在、`llm.providers` 为空或 active provider/model 无效时：
+
+- plain 模式：启动后自动运行交互式 first-run wizard，按提示选择模板并输入必要信息即可。
+- TUI 模式：启动后会显示提示，按 `/provider add` 即可打开新增向导（Modal）。也可以选择跳过，等需要发送模型请求时再用 `/provider add` 配置。
+
+### 8.6 终端内配置模型的实现方式
+
+Kairo 的运行时配置不是直接让用户手改 JSON，而是通过一条安全的“命令 -> 草稿 -> 校验 -> 备份 -> 保存 -> 热切换”流程完成。
+
+1. **命令入口**：输入 `/provider add`、`/provider edit`、`/model add`、`/model edit` 或 `/settings`。
+2. **界面收集信息**：Textual TUI 中会打开 Modal 表单；Plain 模式中会用逐步问答收集同样字段。
+3. **写入 ConfigDraft**：表单内容先写入内存中的 `ConfigDraft`，不会立刻覆盖 `config.json`。
+4. **校验配置**：保存前检查 provider 名称是否重复、base URL 是否合法、active model 是否存在、`context_window`、`max_tokens` 和 `temperature` 是否合理。
+5. **API Key 处理**：选择 `env` 时只保存 `api_key_env` 名称，不保存环境变量里的真实 key；选择 `inline` 时会要求确认，因为 key 会写入 `config.json`；`/config` 只显示 key 来源和安全预览。
+6. **自动备份**：保存前生成 `config.backup.YYYYMMDD-HHMMSS.json`。
+7. **原子保存与回滚**：Kairo 使用临时文件写入再替换原配置；如果保存失败，会保留原配置。
+8. **立即生效**：保存成功后重新加载 active provider/model，更新 `base_url`、`model`、`temperature`、`max_tokens`、`context_window` 和上下文管理参数。
+9. **会话联动**：当前会话的 runtime state 会记录新的模型 profile；Dock 中的模型名和上下文窗口也会刷新。
+10. **连接测试**：`/provider test` 或 `/model test` 会发起最小 OpenAI-compatible 探测请求。测试不会写入 session history，也不会触发上下文压缩。
+
+因此，终端内配置模型的结果和手动编辑 `config.json` 等价，但多了校验、备份、API Key 安全处理和当前会话热更新。
+
+### 8.7 会话整理
+
+- `/session rename`：重命名当前 session。
+- `/session delete`：删除选中的 session（保留至少一个 active session）。
+- `/session export`：导出当前 session 为 Markdown 或 JSON，保存到 `<storage_dir>/exports/`。
+- `/session reveal`：显示当前 session 文件的绝对路径。
+
+## 9. 0.2.3 更新内容
+
+- 新增 Runtime Config Center（Provider/Model 管理、ConfigDraft、备份/恢复）。
+- 新增 Provider 健康检查（`/provider test`、`/model test`）。
+- API Key 安全提示：env key 不落盘、inline key 二次确认、`/config` 安全预览。
+- 内置 provider 模板与首次启动向导。
+- 新增 session 管理命令：rename、delete、export、reveal。
+- 扩展文档与测试覆盖。

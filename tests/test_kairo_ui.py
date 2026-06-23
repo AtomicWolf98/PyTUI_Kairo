@@ -8,6 +8,7 @@ from unittest.mock import patch
 if importlib.util.find_spec("textual") is None:
     raise unittest.SkipTest("textual is not installed in the current test environment")
 
+from agent.commands import COMMAND_CATALOG
 from agent.config import Config
 from agent.ui.app import KairoApp
 from agent.workspace import WorkspaceSnapshot
@@ -286,7 +287,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertTrue(palette.has_class("visible"))
             self.assertEqual(palette.index, 0)
-            self.assertEqual(len(palette.matches), 16)
+            self.assertEqual(len(palette.matches), len(COMMAND_CATALOG))
 
             for _ in range(8):
                 await pilot.press("down")
@@ -298,12 +299,16 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             await pilot.press("up")
             await pilot.pause()
-            self.assertEqual(palette.index, 15)
+            self.assertEqual(palette.index, len(COMMAND_CATALOG) - 1)
             self.assertGreater(palette.scroll_y, 0)
 
             composer.text = "/c"
             await pilot.pause()
-            self.assertEqual(palette.matches, ["/clear", "/compress", "/config"])
+            self.assertEqual(
+                palette.matches,
+                ["/clear", "/compress", "/config", "/config validate", "/config backup", "/config restore"],
+            )
+            # Navigate down three times to land on "/config" (index 2) and accept it.
             await pilot.press("down", "down", "enter")
             self.assertEqual(composer.text, "/config ")
 

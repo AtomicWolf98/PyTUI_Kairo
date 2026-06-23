@@ -33,9 +33,8 @@ def _parse_timestamp(value: str) -> datetime:
 class SessionStore:
     """Manages loading and saving of conversation sessions to disk."""
 
-    def __init__(self, storage_dir: str, config_path: str, context_window: int = 128000):
+    def __init__(self, storage_dir: str, config_path: str):
         self._config_path = Path(config_path).expanduser().resolve()
-        self._context_window = max(1, int(context_window))
         storage = Path(storage_dir)
         if storage.is_absolute():
             self._storage_dir = storage
@@ -80,7 +79,7 @@ class SessionStore:
             id=uuid.uuid4().hex,
             name=(name or "").strip() or "Conversation 1",
             history=[],
-            token_tracker=TokenTracker(context_window=self._context_window),
+            token_tracker=TokenTracker(context_window=128000),
         )
         return session
 
@@ -348,3 +347,146 @@ class SessionStore:
                 self._warnings.append(f"Failed to update index after deletion: {exc}")
                 return False
         return True
+
+    # ---- Session management extensions (0.2.3) ---------------------------------
+
+    def rename_session(self, session_id: str, new_name: str) -> bool:
+        """Rename a session's on-disk file and its index entry consistently."""
+        clean = (new_name or "").strip()
+        if not clean:
+            return False
+        path = self._session_path(session_id)
+        if not path.exists():
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            data["name"] = clean
+            data["updated_at"] = _format_timestamp(datetime.now(timezone.utc))
+            self._atomic_write(path, data)
+        except Exception as exc:
+            self._warnings.append(f"Failed to rename session file {path}: {exc}")
+            return False
+
+        index = self._load_index()
+        if index is not None:
+            for item in index.get("sessions", []):
+                if isinstance(item, dict) and item.get("id") == session_id:
+                    item["name"] = clean
+                    item["updated_at"] = data["updated_at"]
+                    break
+            try:
+                self._atomic_write(self._index_path, index)
+            except Exception as exc:
+                self._warnings.append(f"Failed to update index after rename: {exc}")
+                return False
+        return True
+
+    def SESSION_EXPORT_VERSION(self) -> int:
+        return SESSION_VERSION
+
+    def export_session(
+        self,
+        session_id: str,
+        *,
+        fmt: str = "markdown",
+        dest: Optional[Path] = None,
+    ) -> Optional[Path]:
+        """Write a Markdown or JSON copy of the session to disk.
+
+        Returns the destination path on success. The original session file is
+        never modified.
+        """
+        path = self._session_path(session_id)
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception as exc:
+            self._warnings.append(f"Failed to read session for export: {exc}")
+            return None
+
+        if dest is None:
+            export_dir = self._storage_dir / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = _safe_filename(data.get("name", session_id))
+            suffix = "md" if fmt.lower().startswith("m") else "json"
+            dest = export_dir / f"{safe_name}.{suffix}"
+
+        if fmt.lower().startswith("m"):
+            content = self._render_session_markdown(data)
+        elif fmt.lower().startswith("j"):
+            content = json.dumps(data, ensure_ascii=False, indent=2)
+        else:
+            return None
+
+        try:
+            tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+            with open(tmp_dest, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_dest, dest)
+        except Exception as exc:
+            self._warnings.append(f"Failed to write export: {exc}")
+            try:
+                tmp_dest.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return None
+        return dest
+
+    def _render_session_markdown(self, data: Dict[str, Any]) -> str:
+        lines: List[str] = []
+        lines.append(f"# {data.get('name', 'Session')}")
+        lines.append("")
+        lines.append(f"- Session id: `{data.get('id', '')}`")
+        lines.append(f"- Updated at: {data.get('updated_at', '')}")
+        lines.append("")
+        for message in data.get("history", []):
+            role = message.get("role", "system")
+            content = (message.get("content", "") or "").strip()
+            if role == "system" and message.get("name") == RUNTIME_STATE_NAME:
+                # Skip internal runtime state; users do not need it in exports.
+                continue
+            if role == "system" and content.startswith("[Conversation Summary]"):
+                lines.append("> _Summary_\n")
+                lines.append(content + "\n")
+                continue
+            header = {"user": "## User", "assistant": "## Assistant", "tool": "## Tool", "system": "## System"}.get(role, "## " + role.title())
+            tool_note = ""
+            if role == "tool":
+                tool_note = f" ({message.get('name', '')})"
+            lines.append(header + tool_note)
+            lines.append("")
+            lines.append(content or "_no content_")
+            lines.append("")
+        return "\n".join(lines)
+
+    def reveal_session_path(self, session_id: str) -> Optional[Path]:
+        path = self._session_path(session_id)
+        return path if path.exists() else None
+
+    def session_metadata(self, session_id: str) -> Optional[tuple]:
+        """Return ``(name, path)`` for the given session, or None if missing."""
+        path = self._session_path(session_id)
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return (data.get("name", session_id), path)
+        except Exception:
+            return None
+
+
+def _safe_filename(name: str) -> str:
+    keep = "-_.()"
+    safe = []
+    for char in (name or "").strip():
+        if char.isalnum() or char in keep:
+            safe.append(char)
+        else:
+            safe.append("_")
+    return "".join(safe) or "session"

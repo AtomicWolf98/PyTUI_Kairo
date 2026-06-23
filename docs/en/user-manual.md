@@ -1,8 +1,8 @@
 # Kairo Complete User Manual
 
-Version: **0.2.2**
+Version: **0.2.3**
 
-Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, and custom skills.
+Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, custom skills, and runtime provider/model configuration.
 
 ## 1. Install And Start
 
@@ -367,3 +367,74 @@ or:
 ```powershell
 kairo --authorization manual
 ```
+
+## 8. Runtime Configuration (0.2.3)
+
+Kairo can now create, edit, and remove providers and models while the TUI is running, without restarting or editing `config.json`.
+
+### 8.1 Provider Management
+
+- `/providers` — list configured providers.
+- `/provider add` — start the add-provider wizard.
+- `/provider edit` — edit an existing provider.
+- `/provider remove` — remove a provider (at least one must remain).
+- `/provider test` — send a minimal probe; results: Success / Auth Error / Model Error / URL Error / Rate Limit / Unknown.
+
+### 8.2 Model Management
+
+- `/model add` — add a new model to a provider.
+- `/model edit` — edit context window, max tokens, and temperature.
+- `/model remove` — remove a model (at least one per provider must remain).
+- `/model test` — test a specific model on its provider.
+
+### 8.3 Config Backup and Restore
+
+- `/config validate` — validate the current configuration.
+- `/config backup` — write a timestamped `config.backup.YYYYMMDD-HHMMSS.json`.
+- `/config restore` — pick a backup and restore it.
+
+### 8.4 API Key Safety
+
+- **Recommended**: store keys in environment variables and reference them with `api_key_env`. Env keys are **never** written back to `config.json`.
+- Inline keys require explicit confirmation before saving.
+- `/config` shows only safe previews, e.g. `env(KAIRO_DEEPSEEK_API_KEY) present`, `inline in config.json [warning] sk-...abcd`, or `missing`.
+
+### 8.5 First-Run Wizard
+
+When `config.json` is missing, `llm.providers` is empty, or the active provider/model is invalid:
+
+- Plain mode runs an interactive first-run wizard after startup.
+- TUI mode shows a notice directing you to `/provider add`; you can skip it and configure later.
+
+### 8.6 How Terminal Model Configuration Works
+
+Runtime model configuration does not ask you to edit JSON by hand. Kairo uses a safer command -> draft -> validate -> backup -> save -> hot-switch flow.
+
+1. **Command entry**: type `/provider add`, `/provider edit`, `/model add`, `/model edit`, or `/settings`.
+2. **Input collection**: in the Textual TUI, Kairo opens a modal form; in plain mode, Kairo asks the same questions step by step.
+3. **ConfigDraft first**: your answers are written into an in-memory `ConfigDraft`, not directly into `config.json`.
+4. **Validation**: before saving, Kairo checks duplicate provider names, URL shape, active provider/model validity, `context_window`, `max_tokens`, and `temperature`.
+5. **API key handling**: with `env` mode, `config.json` stores only the `api_key_env` variable name, never the actual environment variable value; with `inline` mode, Kairo asks for explicit confirmation because the key will be written to `config.json`; `/config` shows only the key source and a safe preview.
+6. **Automatic backup**: before saving, Kairo writes `config.backup.YYYYMMDD-HHMMSS.json`.
+7. **Atomic save and rollback**: Kairo writes through a temporary file and replaces the config. If saving fails, the previous config remains available.
+8. **Immediate activation**: after saving, Kairo reloads the active provider/model and updates `base_url`, `model`, `temperature`, `max_tokens`, `context_window`, and context-management settings.
+9. **Session integration**: the active session runtime state records the new model profile; the Dock refreshes the model name and context limit.
+10. **Connection testing**: `/provider test` and `/model test` send a minimal OpenAI-compatible probe. The probe is not written to session history and does not trigger context compression.
+
+The result is equivalent to editing `config.json` manually, but with validation, backup, API-key safety, and live updates for the current session.
+
+### 8.7 Session Organization
+
+- `/session rename` — rename the current session.
+- `/session delete` — delete a session with confirmation (you cannot delete the last active session).
+- `/session export` — export the current session as Markdown or JSON to `<storage_dir>/exports/`.
+- `/session reveal` — print the absolute path of the current session file.
+
+## 9. What’s New in 0.2.3
+
+- Runtime Configuration Center: add/edit/remove providers and models.
+- Provider health check: `/provider test`, `/model test`.
+- API key safety: env keys never persisted, inline keys require confirmation, `/config` hides full keys.
+- Built-in provider templates and first-run wizard.
+- Session management: rename, delete, export, reveal.
+- Expanded documentation and test coverage.
