@@ -140,14 +140,14 @@ class Agent:
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_moved", "root": str(target_path)},
+                data={"kind": "workspace_move_failed", "root": str(target_path)},
             )
         except Exception as exc:
             return CommandResult(
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_moved", "root": str(target_path)},
+                data={"kind": "workspace_move_failed", "root": str(target_path)},
             )
 
         new_root = str(target_path)
