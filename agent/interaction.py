@@ -287,7 +287,7 @@ class InteractionRunner:
                             user_input += f"\n\n[User Plan Modification]: {feedback}"
 
             self.history.append({"role": "user", "content": user_input})
-            self.conversations.save_active(reason="user_message")
+            self.conversations.mark_dirty(reason="user_message")
 
             while True:
                 schemas = self.registry.get_schemas()
@@ -365,7 +365,7 @@ class InteractionRunner:
                     ]
                 self.history.append(assistant_message)
                 self.conversations.refresh_context(schemas)
-                self.conversations.save_active(reason="assistant_message")
+                self.conversations.mark_dirty(reason="assistant_message")
                 if official_context_tokens is not None:
                     self.token_tracker.set_context_used(official_context_tokens)
                 emit("usage_updated", None)
@@ -447,7 +447,7 @@ class InteractionRunner:
                         "content": result,
                     })
                     self.conversations.refresh_context(schemas)
-                    self.conversations.save_active(reason="tool_result")
+                    self.conversations.mark_dirty(reason="tool_result")
                     emit("usage_updated", None)
         except Exception as exc:
             emit("error", str(exc))
@@ -485,7 +485,7 @@ class InteractionRunner:
                     self.console.print("[bold green]Plan approved. Executing...[/bold green]")
 
             self.history.append({"role": "user", "content": user_input})
-            self.conversations.save_active(reason="user_message")
+            self.conversations.mark_dirty(reason="user_message")
 
             while True:
                 schemas = self.registry.get_schemas()
@@ -609,7 +609,7 @@ class InteractionRunner:
 
                 self.history.append(assistant_msg)
                 self.conversations.refresh_context(schemas)
-                self.conversations.save_active(reason="assistant_message")
+                self.conversations.mark_dirty(reason="assistant_message")
                 if official_context_tokens is not None:
                     self.token_tracker.set_context_used(official_context_tokens)
 
@@ -685,7 +685,7 @@ class InteractionRunner:
                         "content": result,
                     })
                     self.conversations.refresh_context(schemas)
-                    self.conversations.save_active(reason="tool_result")
+                    self.conversations.mark_dirty(reason="tool_result")
                     self.task_status = "Processing results"
 
         finally:

@@ -72,8 +72,13 @@ class SessionStore:
                 pass
             raise
 
-    def create_session(self, name: Optional[str] = None) -> ConversationSession:
-        """Create a brand-new on-disk session with empty history."""
+    def _create_empty_session(self, name: Optional[str] = None) -> ConversationSession:
+        """Low-level helper: create a session with empty history.
+
+        This is a private method intended only for test fixtures.  Business
+        code must use :meth:`ConversationManager.create_session` which
+        provides a valid system-prefixed history.
+        """
         self._ensure_storage()
         session = ConversationSession(
             id=uuid.uuid4().hex,
@@ -327,7 +332,7 @@ class SessionStore:
         return session
 
     def delete_session(self, session_id: str) -> bool:
-        """Remove a session from disk and from the index. Does not delete files automatically."""
+        """Remove a session file from disk and clean the index entry."""
         path = self._session_path(session_id)
         try:
             path.unlink(missing_ok=True)

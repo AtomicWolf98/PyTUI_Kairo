@@ -53,7 +53,7 @@ def run_first_run_wizard(config: Config) -> None:
     if not confirm("Run the first-run setup wizard now? You can also skip and configure later via '/provider add'.", default=True):
         return
 
-    from agent.provider_templates import all_templates, get_template
+    from agent.provider_templates import all_templates
     templates = all_templates()
     template_names = list(templates.keys())
     idx = select("Choose a template", template_names)

@@ -4,8 +4,7 @@ from __future__ import annotations
 import io
 import unittest
 import urllib.error
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from agent.provider_health import (
     STATUS_AUTH_ERROR,
@@ -14,7 +13,6 @@ from agent.provider_health import (
     STATUS_SUCCESS,
     STATUS_URL_ERROR,
     STATUS_UNKNOWN,
-    ProviderTestResult,
 )
 # Access the probe function via the module alias to avoid pytest collecting the
 # imported `test_connection` symbol as if it were a test function itself.

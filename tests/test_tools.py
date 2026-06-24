@@ -1,5 +1,4 @@
 import unittest
-import json
 from tools.base import ToolRegistry, skill, BaseTool
 
 class TestTools(unittest.TestCase):

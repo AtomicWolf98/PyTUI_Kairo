@@ -2,7 +2,6 @@ import unittest
 import os
 import shutil
 import threading
-from pathlib import Path
 from unittest.mock import patch
 from agent.repl import PythonREPL, ShellSession
 
@@ -11,7 +10,7 @@ class TestREPL(unittest.TestCase):
         repl = PythonREPL()
         
         # 1. Set variable
-        out1 = repl.execute("x = 10")
+        repl.execute("x = 10")
         # 2. Check if variable persists and can be evaluated
         out2 = repl.execute("x * 5")
         self.assertIn("50", out2)

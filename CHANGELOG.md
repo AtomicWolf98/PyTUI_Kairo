@@ -1,5 +1,35 @@
 # Changelog / 更新记录
 
+## [0.2.4]
+
+### Fixed / 修复
+
+- **P0 SecretConfirmModal import**: added missing import in `app.py` so `/provider add|edit` inline API key confirmation no longer raises `NameError`.
+- **P0 Textual/plain boundary**: `/session rename|delete|export`, `/config validate|backup|restore`, `/docs` are now routed to dedicated Textual modals or UI notices instead of calling plain `input()`/`print()` inside the TUI.
+- **P0 Worker thread safety**: `_run_plain_to_view` now uses `call_from_thread()` for all UI updates from worker threads.
+- **P1 Workspace move history invariant**: `move_workspace()` no longer appends a trailing system message to history; the notice is delivered via `CommandResult.message` and UI events only.
+- **P1 `/undo` persistence**: undo now calls `replace_active_history(..., save=True)` so the change is persisted immediately to disk.
+- **P1 Session config fields**: `autosave` flag is now wired through to `ConversationManager.mark_dirty()`; dirty tracking persists when autosave is enabled.
+- **P2 `Any` import**: added missing `Any` to `typing` imports in `widgets.py`.
+- **P2 `SessionStore.create_session()`**: now accepts optional `history` and `context_window` parameters; docstring clarifies it is a low-level helper.
+- **P2 History invariant validator**: added `ConversationManager.validate_history_invariants()` to check system-prefix, no system after first user, no orphan tool results.
+- **P2 `delete_session` docstring**: corrected misleading description.
+- **P2 Plain mode stability**: degraded `input_framed_with_dock` to a stable single-line `kairo >` prompt; removed dynamic dropdown, dock widget and Unicode box-drawing characters that caused redraw glitches on Windows terminals.
+- **P3 ruff F-class cleanup**: resolved all 33 `ruff --select F` errors (F401 unused imports, F821 undefined names, F841 unused variables) across 17 source and test files.
+
+- **P0 SecretConfirmModal 导入修复**：在 `app.py` 中补入缺失的导入，`/provider add|edit` 的 inline API key 确认不再抛 `NameError`。
+- **P0 Textual/plain 边界收口**：`/session rename|delete|export`、`/config validate|backup|restore`、`/docs` 现在路由到专用 Textual modal 或 UI notice，不再在 TUI 内调用 plain `input()`/`print()`。
+- **P0 Worker 线程安全**：`_run_plain_to_view` 现在使用 `call_from_thread()` 进行所有 UI 更新。
+- **P1 Workspace move 历史不变量**：`move_workspace()` 不再向 history 尾部追加 system 消息；通知仅通过 `CommandResult.message` 和 UI 事件传达。
+- **P1 `/undo` 持久化**：undo 现在调用 `replace_active_history(..., save=True)`，变更立即写入磁盘。
+- **P1 Session 配置字段**：`autosave` 标志已连接到 `ConversationManager.mark_dirty()`；启用 autosave 时脏数据会自动落盘。
+- **P2 `Any` 导入修复**：在 `widgets.py` 的 `typing` 导入中补入缺失的 `Any`。
+- **P2 `SessionStore.create_session()`**：现接受可选 `history` 和 `context_window` 参数；docstring 明确标注为低层级 helper。
+- **P2 History 不变量校验器**：新增 `ConversationManager.validate_history_invariants()`，检查 system 前置、首个 user 后无 system、无孤立 tool result。
+- **P2 `delete_session` docstring**：修正了误导性描述。
+- **P2 Plain 模式稳定性**：将 `input_framed_with_dock` 降级为稳定的单行 `kairo >` 提示符；移除了动态下拉、dock 组件和 Unicode 框线字符，解决了 Windows 终端的重绘乱码问题。
+- **P3 ruff F 类清理**：跨 17 个源文件和测试文件修复了全部 33 个 `ruff --select F` 错误。
+
 ## [0.2.3]
 
 ### Added / 新增

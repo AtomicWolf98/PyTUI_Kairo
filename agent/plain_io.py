@@ -9,7 +9,7 @@ called without a Console, and they keep all interactive logic out of
 from __future__ import annotations
 
 import sys
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional
 
 
 def _read_line(prompt: str = "") -> str:

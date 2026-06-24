@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from rich.syntax import Syntax
 from rich.text import Text
@@ -312,7 +312,7 @@ class BrandHeader(Horizontal):
         yield KaiMascot(id="header-kai", reduced_motion=self.reduced_motion)
         yield Static(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.3[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.4[/#7f849c]\n"
                 f"[#a5adcb]{self.profile or self.model}[/#a5adcb]  [#6e738d]({self.model})[/#6e738d]\n"
                 f"[#7f849c]{self.cwd}[/#7f849c]"
             ),
@@ -323,7 +323,7 @@ class BrandHeader(Horizontal):
         self.model, self.profile, self.cwd = model, profile, cwd
         self.query_one("#brand-meta", Static).update(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.3[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.4[/#7f849c]\n"
                 f"[#a5adcb]{profile or model}[/#a5adcb]  [#6e738d]({model})[/#6e738d]\n"
                 f"[#7f849c]{cwd}[/#7f849c]"
             )

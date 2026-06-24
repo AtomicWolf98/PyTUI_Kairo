@@ -4,7 +4,7 @@ import json
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Dict, Any, Callable, List, Optional, Type
+from typing import Dict, Any, Callable, List, Optional
 
 from tools.policy import OperationScope, Permission
 

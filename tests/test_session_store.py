@@ -7,7 +7,6 @@ from agent.config import Config
 from agent.context_manager import ConversationManager, RUNTIME_STATE_NAME
 from agent.core import Agent
 from agent.session_store import SessionStore
-from agent.token_tracker import TokenTracker
 from tools.base import ToolRegistry
 
 
@@ -22,7 +21,7 @@ class TestSessionStore(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _make_session(self, name="Test"):
-        session = self.store.create_session(name)
+        session = self.store._create_empty_session(name)
         session.history = [
             {"role": "system", "content": "You are Kairo."},
             {
@@ -170,7 +169,7 @@ class TestConversationManagerWithSessionStore(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_manager_loads_sessions_from_store(self):
-        session = self.store.create_session("Saved")
+        session = self.store._create_empty_session("Saved")
         session.history = [
             {"role": "system", "content": "You are Kairo."},
             {"role": "system", "name": RUNTIME_STATE_NAME, "content": "runtime"},

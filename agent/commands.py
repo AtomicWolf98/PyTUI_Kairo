@@ -427,7 +427,15 @@ class CommandDispatcher:
 
     def _handle_new(self, raw: str, parts: List[str]) -> CommandResult:
         name = raw.strip()[len(parts[0]):].strip() or None
-        session = self.agent.conversations.create_session(name)
+        try:
+            session = self.agent.conversations.create_session(name)
+        except RuntimeError as exc:
+            return CommandResult(
+                handled=True,
+                success=False,
+                message=str(exc),
+                data={"kind": "new"},
+            )
         return CommandResult(
             handled=True,
             success=True,
@@ -516,7 +524,12 @@ class CommandDispatcher:
                 break
         if user_idx != -1:
             undone = self.agent.history[user_idx]["content"]
-            self.agent.history = self.agent.history[:user_idx]
+            # 0.2.4: use replace_active_history with save=True to persist immediately
+            self.agent.conversations.replace_active_history(
+                self.agent.history[:user_idx],
+                reason="undo",
+                save=True,
+            )
             return CommandResult(
                 handled=True,
                 success=True,

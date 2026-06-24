@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from agent.config import Config
 from agent.core import Agent
 from tools.base import ToolRegistry
@@ -72,7 +72,7 @@ class TestAgentCommands(unittest.TestCase):
             {"role": "assistant", "content": "world"}
         ]
         
-        with patch.object(self.agent.console, 'print') as mock_print:
+        with patch.object(self.agent.console, 'print'):
             handled = self.agent.handle_command("/undo")
             self.assertTrue(handled)
             # Should roll back to system instruction + runtime state
@@ -91,7 +91,7 @@ class TestAgentCommands(unittest.TestCase):
             {"role": "assistant", "content": "all done"}
         ]
         
-        with patch.object(self.agent.console, 'print') as mock_print:
+        with patch.object(self.agent.console, 'print'):
             handled = self.agent.handle_command("/undo")
             self.assertTrue(handled)
             # Should roll back everything from the last user message onwards
@@ -111,6 +111,17 @@ class TestAgentCommands(unittest.TestCase):
             self.assertTrue(self.agent.handle_command("/sessions"))
         self.assertEqual(self.agent.conversations.active_session_id, first_session_id)
         self.assertIn("first conversation", str(self.agent.history))
+
+    def test_new_reports_max_sessions_limit_without_crashing(self):
+        self.agent.conversations._max_sessions = 1
+
+        with patch.object(self.agent.console, 'print') as mock_print:
+            handled = self.agent.handle_command("/new Overflow")
+
+        self.assertTrue(handled)
+        self.assertEqual(len(self.agent.conversations.sessions), 1)
+        output = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("max_sessions", output)
 
     def test_sessions_ignores_invalid_selection_index(self):
         original_session_id = self.agent.conversations.active_session_id

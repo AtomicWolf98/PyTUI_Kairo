@@ -21,7 +21,6 @@ if importlib.util.find_spec("textual") is None:
 from agent.config import Config
 from agent.ui.app import KairoApp
 from agent.ui.widgets import (
-    Composer,
     ConnectionTestModal,
     ModelEditorModal,
     ProviderEditorModal,

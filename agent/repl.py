@@ -90,7 +90,7 @@ class PythonREPL:
                 stmt_code = compile(code, "<input>", "exec")
                 exec(stmt_code, self.locals, self.locals)
                 
-        except Exception as e:
+        except Exception:
             # Print traceback or error
             import traceback
             traceback.print_exc(file=sys.stderr)

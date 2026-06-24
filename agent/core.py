@@ -71,6 +71,12 @@ class Agent:
             model_profile=config.active_model_profile,
             authorization_level=config.authorization_level,
         )
+        # 0.2.4: wire session config flags from config
+        self.conversations._autosave = config.sessions.get("autosave", True)
+        self.conversations._max_sessions = int(config.sessions.get("max_sessions", 0) or 0)
+        self.conversations._save_interval_seconds = float(
+            config.sessions.get("save_interval_seconds", 0) or 0
+        )
         self.runner = InteractionRunner(
             config=config,
             registry=registry,
@@ -134,14 +140,14 @@ class Agent:
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_move_failed", "root": str(target_path)},
+                data={"kind": "workspace_moved", "root": str(target_path)},
             )
         except Exception as exc:
             return CommandResult(
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_move_failed", "root": str(target_path)},
+                data={"kind": "workspace_moved", "root": str(target_path)},
             )
 
         new_root = str(target_path)
@@ -175,11 +181,12 @@ class Agent:
             except Exception as exc:
                 self.console.print(f"[yellow]Custom skills reload failed: {exc}[/yellow]")
 
-        if hasattr(self, "workspace_changed") and callable(self.workspace_changed):
+        if self.workspace_changed:
             self.workspace_changed(new_root)
 
         notice = f"Workspace moved to: {target_path}"
-        self.conversations.append_message({"role": "system", "content": notice})
+        # 0.2.4: workspace notice is delivered via CommandResult.message / UI event,
+        # NOT appended as a system message to history (violates system-prefix invariant).
         return CommandResult(
             handled=True,
             success=True,
@@ -218,7 +225,7 @@ class Agent:
         welcome_text.append(f"Thinking Mode: {'ON' if self.config.thinking_mode else 'OFF'}\n", style="yellow" if self.config.thinking_mode else "gray")
         welcome_text.append("Type /help to see available commands.", style="dim")
 
-        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.3"))
+        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.4"))
 
     def handle_command(self, user_input: str) -> bool:
         """

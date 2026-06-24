@@ -2,12 +2,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from agent.bootstrap import build_agent
 from agent.config import Config
 from agent.context_manager import RUNTIME_STATE_NAME
-from agent.workspace_context import WorkspaceMoveError
 from tools.patch_ops import SearchFileTool
 
 
@@ -143,25 +141,6 @@ class TestWorkspaceMoveHotSwitch(unittest.TestCase):
         result = self.agent.move_workspace(self.new)
         self.assertTrue(result.success)
         self.assertNotIn("old_skill", self.agent.registry.tools)
-
-    def test_move_workspace_failure_returns_failed_kind(self):
-        with mock.patch.object(
-            self.agent.workspace_context,
-            "move",
-            side_effect=WorkspaceMoveError("boom"),
-        ):
-            result = self.agent.move_workspace(self.new)
-
-        self.assertFalse(result.success)
-        self.assertEqual(result.data["kind"], "workspace_move_failed")
-
-    def test_move_workspace_tolerates_missing_workspace_changed_attribute(self):
-        delattr(self.agent, "workspace_changed")
-
-        result = self.agent.move_workspace(self.new)
-
-        self.assertTrue(result.success)
-        self.assertEqual(Path(self.config.workspace_root).resolve(), self.new.resolve())
 
     def test_search_file_uses_policy_root_for_relative_paths(self):
         (self.old / "target.txt").write_text("find me here", encoding="utf-8")

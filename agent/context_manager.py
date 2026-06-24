@@ -97,6 +97,13 @@ class ConversationManager:
             "model_profile": model_profile,
             "authorization_level": authorization_level,
         }
+        # 0.2.4: dirty tracking + autosave
+        self._dirty = False
+        self._dirty_reason = ""
+        self._autosave = True  # default; updated by caller when config is known
+        self._max_sessions = 0  # 0 = unlimited; updated by caller
+        self._save_interval_seconds = 0.0  # 0 = no throttling
+        self._last_save_time: Optional[float] = None
         self._load_or_create_session()
 
     def _build_runtime_state_message(self) -> Dict[str, Any]:
@@ -161,6 +168,12 @@ class ConversationManager:
         raise RuntimeError("No active conversation session")
 
     def create_session(self, name: Optional[str] = None) -> ConversationSession:
+        # 0.2.4: enforce max_sessions limit when configured
+        if self._max_sessions and len(self.sessions) >= self._max_sessions:
+            raise RuntimeError(
+                f"Cannot create session: max_sessions ({self._max_sessions}) reached. "
+                "Delete an existing session first."
+            )
         session_name = (name or "").strip() or f"Conversation {len(self.sessions) + 1}"
         session = ConversationSession(
             id=uuid.uuid4().hex,
@@ -223,10 +236,24 @@ class ConversationManager:
         self.active.history.append(message)
         self.refresh_context()
 
-    def replace_active_history(self, history: List[Dict[str, Any]]):
-        """Replace the active session history in full."""
+    def replace_active_history(
+        self,
+        history: List[Dict[str, Any]],
+        *,
+        reason: str = "",
+        save: bool = False,
+    ):
+        """Replace the active session history in full.
+
+        Args:
+            history: The new history list.
+            reason: A short label for logging / audit.
+            save: If True, persist immediately via ``save_active``.
+        """
         self.active.history = history
         self.refresh_context()
+        if save:
+            self.save_active(reason=reason or "replace_history")
 
     def update_runtime_state(
         self,
@@ -263,6 +290,10 @@ class ConversationManager:
             return
         try:
             self.session_store.save_session(self.active, is_active=True, reason=reason)
+            self._dirty = False
+            self._dirty_reason = ""
+            import time
+            self._last_save_time = time.monotonic()
         except Exception as exc:
             print(f"[Warning] Failed to save active session ({reason}): {exc}")
 
@@ -280,9 +311,94 @@ class ConversationManager:
             except Exception as exc:
                 print(f"[Warning] Failed to save session {session.name} ({reason}): {exc}")
 
-    def mark_dirty(self, session_id: Optional[str] = None):
-        """Placeholder for future dirty-tracking / interval autosave."""
-        pass
+    def mark_dirty(self, reason: str = ""):
+        """Mark the active session as dirty and auto-save when autosave is enabled.
+
+        Autosave behaviour is controlled by the ``sessions.autosave`` flag that
+        was read at construction time (or updated later).  When autosave is on,
+        every ``mark_dirty`` call persists immediately (subject to
+        ``save_interval_seconds`` throttling).  When it is off the dirty flag
+        is merely recorded so that ``save_active`` on shutdown or explicit save
+        will still write.
+        """
+        self._dirty = True
+        self._dirty_reason = reason or self._dirty_reason
+        if self._autosave:
+            # Respect save_interval_seconds throttle when configured
+            if self._save_interval_seconds and self._last_save_time is not None:
+                import time
+                elapsed = time.monotonic() - self._last_save_time
+                if elapsed < self._save_interval_seconds:
+                    return  # throttled; dirty flag is set, will save later
+            self.save_active(reason=reason or "dirty")
+
+    # ---- history invariant validator (0.2.4) -----------------------------------
+
+    def validate_history_invariants(
+        self,
+        history: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[str]:
+        """Return a list of invariant violations found in *history*.
+
+        Checks performed:
+
+        * history is not empty
+        * first message has ``role == "system"``
+        * runtime state message exists before the first user message
+        * no ``role == "system"`` message appears after the first user message
+        * no orphan ``tool`` result (must be preceded by an assistant tool_call)
+
+        Returns an empty list when all invariants hold.
+        """
+        messages = history if history is not None else self.active.history
+        errors: List[str] = []
+
+        if not messages:
+            errors.append("history is empty")
+            return errors
+
+        if messages[0].get("role") != "system":
+            errors.append("first message is not role=system")
+
+        # runtime state before first user
+        first_user_idx = -1
+        runtime_state_found = False
+        for i, msg in enumerate(messages):
+            role = msg.get("role")
+            if role == "user" and first_user_idx == -1:
+                first_user_idx = i
+            if msg.get("name") == RUNTIME_STATE_NAME and role == "system":
+                runtime_state_found = True
+                if first_user_idx != -1 and i > first_user_idx:
+                    errors.append("runtime state message appears after first user message")
+        if not runtime_state_found:
+            errors.append("runtime state message missing")
+
+        # no system after first user
+        if first_user_idx != -1:
+            for i in range(first_user_idx, len(messages)):
+                if messages[i].get("role") == "system":
+                    errors.append(
+                        f"system message at index {i} after first user message at index {first_user_idx}"
+                    )
+
+        # orphan tool results
+        pending_tool_call_ids: set = set()
+        for msg in messages:
+            role = msg.get("role")
+            if role == "assistant":
+                for tc in msg.get("tool_calls", []):
+                    tc_id = tc.get("id")
+                    if tc_id:
+                        pending_tool_call_ids.add(tc_id)
+            elif role == "tool":
+                tc_id = msg.get("tool_call_id")
+                if tc_id in pending_tool_call_ids:
+                    pending_tool_call_ids.discard(tc_id)
+                else:
+                    errors.append(f"orphan tool result for tool_call_id={tc_id!r}")
+
+        return errors
 
     def compression_parts(
         self,

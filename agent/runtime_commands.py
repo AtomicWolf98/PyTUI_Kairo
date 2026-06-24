@@ -12,9 +12,8 @@ router and there is no shared mutable state beyond the agent.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from agent.commands import CommandResult
 from agent.config import Config
@@ -142,7 +141,12 @@ def handle_provider_add(agent, raw: str, parts: List[str]) -> CommandResult:
 
     draft.set_active_model(name, model_name)
     allow_inline = api_key_mode == "inline"
-    report = draft.apply_to(config, backup=True, allow_inline_key=allow_inline)
+    report = draft.apply_to(
+        config,
+        backup=True,
+        allow_inline_key=allow_inline,
+        allowed_inline_providers=[name] if allow_inline else None,
+    )
     if not report.ok:
         error(report.to_text())
         return CommandResult(handled=True, success=False, message="Saved refused:\n" + report.to_text())
@@ -191,7 +195,13 @@ def handle_provider_edit(agent, raw: str, parts: List[str]) -> CommandResult:
     else:
         allow_inline = False
 
-    report = draft.apply_to(config, backup=True, allow_inline_key=allow_inline)
+    inline_provider_name = (new_name.strip() or target) if allow_inline else ""
+    report = draft.apply_to(
+        config,
+        backup=True,
+        allow_inline_key=allow_inline,
+        allowed_inline_providers=[inline_provider_name] if allow_inline else None,
+    )
     if not report.ok:
         return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
     _switch_after_save(agent, draft, report.to_text())

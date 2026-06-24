@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from agent.config import Config
-from agent.config_editor import ConfigDraft, ValidationReport
+from agent.config_editor import ConfigDraft
 
 
 def _write_config(path: Path, data: Dict[str, Any]) -> None:
@@ -221,6 +221,32 @@ class TestConfigDraft(unittest.TestCase):
             saved = json.load(handle)
         provider = next(p for p in saved["llm"]["providers"] if p["name"] == "alpha")
         self.assertEqual(provider.get("api_key"), "sk-secret-keep")
+
+    def test_apply_to_limits_inline_keys_to_authorized_providers(self):
+        draft = ConfigDraft.from_config(self.config)
+        draft.update_provider("alpha", api_key="sk-alpha-keep", api_key_env="")
+        draft.add_provider(
+            name="beta",
+            base_url="https://beta.example.com/v1",
+            api_key="sk-beta-strip",
+            models=[{"name": "beta-1"}],
+        )
+
+        report = draft.apply_to(
+            self.config,
+            backup=True,
+            allow_inline_key=True,
+            allowed_inline_providers=["alpha"],
+        )
+
+        self.assertTrue(report.ok)
+        with open(self.tmp.path, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        alpha = next(p for p in saved["llm"]["providers"] if p["name"] == "alpha")
+        beta = next(p for p in saved["llm"]["providers"] if p["name"] == "beta")
+        self.assertEqual(alpha.get("api_key"), "sk-alpha-keep")
+        self.assertNotIn("api_key", beta)
+        self.assertNotIn("sk-beta-strip", json.dumps(saved))
 
     def test_apply_to_rolls_back_on_save_failure(self):
         original_llm = json.loads(json.dumps(self.config.llm))

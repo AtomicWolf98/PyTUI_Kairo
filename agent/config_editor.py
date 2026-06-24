@@ -11,10 +11,9 @@ modals both build a draft, mutate it, and call :meth:`ConfigDraft.apply_to`.
 from __future__ import annotations
 
 import copy
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from agent.config import Config
 from agent.provider_registry import (
@@ -23,7 +22,6 @@ from agent.provider_registry import (
     make_model,
     make_provider,
     merge_model_defaults,
-    normalize_provider,
 )
 
 
@@ -337,7 +335,14 @@ class ConfigDraft:
 
     # ---- commit -------------------------------------------------------------------
 
-    def apply_to(self, config: Config, *, backup: bool = True, allow_inline_key: bool = False) -> ValidationReport:
+    def apply_to(
+        self,
+        config: Config,
+        *,
+        backup: bool = True,
+        allow_inline_key: bool = False,
+        allowed_inline_providers: Optional[Iterable[str]] = None,
+    ) -> ValidationReport:
         """Commit the draft to *config* and persist.
 
         - Runs validation first; refused if there are errors.
@@ -345,6 +350,8 @@ class ConfigDraft:
         - ``allow_inline_key`` gates inline api_key persistence; if False,
           inline keys are stripped from the draft before commit so environment
           variables remain the source of truth. This is the safe default.
+        - ``allowed_inline_providers`` narrows inline-key persistence to the
+          providers the current UI flow explicitly authorized.
         - On save failure, the existing config file is restored from the backup
           and the in-memory ``Config`` state is reloaded from disk.
         """
@@ -352,8 +359,15 @@ class ConfigDraft:
         if not report.ok:
             return report
 
-        if not allow_inline_key:
+        allowed_inline_names = (
+            {str(name).strip() for name in allowed_inline_providers if str(name).strip()}
+            if allowed_inline_providers is not None
+            else None
+        )
+        if not allow_inline_key or allowed_inline_names is not None:
             for provider in self.llm["providers"]:
+                if allow_inline_key and allowed_inline_names is not None and provider.get("name") in allowed_inline_names:
+                    continue
                 # Strip inline keys entirely; only env references survive.
                 provider.pop("api_key", None)
                 provider["_api_key_source"] = "env" if provider.get("api_key_env") else "none"

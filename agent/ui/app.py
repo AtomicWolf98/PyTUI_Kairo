@@ -25,6 +25,7 @@ from agent.ui.widgets import (
     ModelEditorModal,
     ProviderEditorModal,
     ProviderListModal,
+    SecretConfirmModal,
     SettingsScreen,
     StatusDock,
     TextPromptModal,
@@ -566,7 +567,6 @@ class KairoApp(App):
             return
         self._first_run_guidance_shown = True
         view = self.main_query("#conversation", ConversationView)
-        import asyncio
         async def emit():
             await view.add_notice(Text(
                 "No usable provider/model is configured. Type '/provider add' to launch the setup wizard, "
@@ -1094,8 +1094,6 @@ class KairoApp(App):
         Returns True if *raw* was consumed here (caller should stop),
         False otherwise.
         """
-        from agent import runtime_commands as rc
-
         stripped = raw.strip()
         parts = stripped.split(maxsplit=2)
         command = parts[0].lower()
@@ -1103,10 +1101,6 @@ class KairoApp(App):
 
         if stripped == "/settings":
             self.push_screen(SettingsScreen(), self._settings_choice)
-            return True
-
-        if stripped == "/providers":
-            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
             return True
 
         # Runtime config modal paths share the plain-handler completion,
@@ -1120,15 +1114,17 @@ class KairoApp(App):
             return await self._route_model_subcommand(stripped, sub)
 
         if command == "/session" and sub in ("rename", "delete", "export", "reveal"):
-            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
-            return True
+            return await self._route_session_subcommand(sub)
 
         if command == "/docs":
-            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
+            self._handle_docs_notice(sub)
             return True
 
         if command == "/config" and sub in ("validate", "backup", "restore"):
-            self.run_worker(lambda: self._run_plain_to_view(raw), thread=True, exclusive=True, group="cmd-plain")
+            return await self._route_config_subcommand(sub)
+
+        if command == "/providers":
+            self._handle_providers_notice()
             return True
 
         return False
@@ -1239,7 +1235,13 @@ class KairoApp(App):
             self._restore_focus()
             return
         draft.set_active_model(values["name"], f"{values['name']}-default")
-        report = draft.apply_to(self.config, backup=True, allow_inline_key=bool(api_key))
+        allowed_inline = [values["name"]] if api_key else None
+        report = draft.apply_to(
+            self.config,
+            backup=True,
+            allow_inline_key=bool(api_key),
+            allowed_inline_providers=allowed_inline,
+        )
         msg = report.to_text() if not report.ok else f"Provider '{values['name']}' added. Active target: {self.config.active_model_profile}"
         self.post_message(AgentEvent("notice" if report.ok else "error", msg))
         if report.ok:
@@ -1319,17 +1321,23 @@ class KairoApp(App):
         if allow_inline:
             self.push_screen(
                 SecretConfirmModal("Save inline API key to config.json? Env names are recommended."),
-                lambda approved: self._provider_edit_commit(draft, approved),
+                lambda approved: self._provider_edit_commit(draft, approved, values.get("name") or original_name),
             )
             return
-        self._provider_edit_commit(draft, True)
+        self._provider_edit_commit(draft, True, "")
 
-    def _provider_edit_commit(self, draft, approved):
+    def _provider_edit_commit(self, draft, approved, inline_provider_name: str = ""):
         if not approved:
             self.post_message(AgentEvent("notice", "Inline key not authorized; edit cancelled."))
             self._restore_focus()
             return
-        report = draft.apply_to(self.config, backup=True, allow_inline_key=False)
+        allowed_inline = [inline_provider_name] if inline_provider_name else None
+        report = draft.apply_to(
+            self.config,
+            backup=True,
+            allow_inline_key=bool(allowed_inline),
+            allowed_inline_providers=allowed_inline,
+        )
         msg = report.to_text() if not report.ok else "Provider updated."
         self.post_message(AgentEvent("notice" if report.ok else "error", msg))
         if report.ok:
@@ -1465,6 +1473,227 @@ class KairoApp(App):
             thread=True, exclusive=True, group="provider-test",
         )
 
+    # ---- session modal routing (0.2.4) ------------------------------------------
+
+    async def _route_session_subcommand(self, sub: str) -> bool:
+        if sub == "rename":
+            store = getattr(self.agent.conversations, "session_store", None)
+            if store is None:
+                self.post_message(AgentEvent("error", "Session persistence is disabled."))
+                return True
+            self.push_screen(
+                TextPromptModal("Rename session"),
+                lambda name: self._session_rename_done(name, store),
+            )
+            return True
+        if sub == "delete":
+            store = getattr(self.agent.conversations, "session_store", None)
+            if store is None:
+                self.post_message(AgentEvent("error", "Session persistence is disabled."))
+                return True
+            if len(self.agent.conversations.sessions) <= 1:
+                self.post_message(AgentEvent("error", "Cannot delete the last session."))
+                return True
+            options = [s.name for s in self.agent.conversations.sessions]
+            self.push_screen(
+                ChoiceModal("Delete which session", options, 0),
+                lambda idx: self._session_delete_chosen(idx, store),
+            )
+            return True
+        if sub == "export":
+            store = getattr(self.agent.conversations, "session_store", None)
+            if store is None:
+                self.post_message(AgentEvent("error", "Session persistence is disabled."))
+                return True
+            self.push_screen(
+                ChoiceModal("Export format", ["markdown", "json"], 0),
+                lambda idx: self._session_export_done(idx, store),
+            )
+            return True
+        if sub == "reveal":
+            store = getattr(self.agent.conversations, "session_store", None)
+            if store is None:
+                self.post_message(AgentEvent("error", "Session persistence is disabled."))
+                return True
+            path = store.reveal_session_path(self.agent.conversations.active.id)
+            if path:
+                self.post_message(AgentEvent("notice", f"Session '{self.agent.active_session_name}' file:\n{path}"))
+            else:
+                self.post_message(AgentEvent("error", "Active session has no on-disk file."))
+            return True
+        return False
+
+    def _session_rename_done(self, name: str, store):
+        if not name or not name.strip():
+            self.post_message(AgentEvent("error", "Session name cannot be empty."))
+            self._restore_focus()
+            return
+        session = self.agent.conversations.active
+        if not store.rename_session(session.id, name.strip()):
+            self.post_message(AgentEvent("error", "Failed to rename session."))
+            self._restore_focus()
+            return
+        session.name = name.strip()
+        session.touch()
+        self.agent.conversations.refresh_context()
+        try:
+            store.save_session(session, is_active=True, reason="session_rename")
+        except Exception as exc:
+            self.post_message(AgentEvent("error", f"Index sync warning: {exc}"))
+        self.post_message(AgentEvent("notice", f"Session renamed to '{name.strip()}'."))
+        self.refresh_dock()
+        self._restore_focus()
+
+    def _session_delete_chosen(self, idx: int, store):
+        if idx is None or idx < 0:
+            self._restore_focus()
+            return
+        sessions = self.agent.conversations.sessions
+        if idx >= len(sessions):
+            self._restore_focus()
+            return
+        target = sessions[idx]
+        self.push_screen(
+            ChoiceModal(f"Delete '{target.name}'?", ["Delete", "Cancel"], 1),
+            lambda confirm_idx: self._session_delete_confirmed(confirm_idx, target, store),
+        )
+
+    def _session_delete_confirmed(self, confirm_idx, target, store):
+        if confirm_idx != 0:
+            self.post_message(AgentEvent("notice", "Cancelled; no changes made."))
+            self._restore_focus()
+            return
+        if not store.delete_session(target.id):
+            self.post_message(AgentEvent("error", "Failed to delete session."))
+            self._restore_focus()
+            return
+        self.agent.conversations.sessions = [
+            s for s in self.agent.conversations.sessions if s.id != target.id
+        ]
+        if self.agent.conversations.active_session_id == target.id:
+            self.agent.conversations.active_session_id = self.agent.conversations.sessions[0].id
+            self.agent.conversations.refresh_context()
+        self.agent.conversations.save_active(reason="session_delete")
+        self.post_message(AgentEvent("notice", f"Session '{target.name}' deleted."))
+        # Re-render conversation view for the now-active session.
+        self.post_message(AgentEvent("conversation_selected", self.agent.active_session_name))
+        self.refresh_dock()
+        self._restore_focus()
+
+    def _session_export_done(self, idx: int, store):
+        if idx is None or idx < 0:
+            self._restore_focus()
+            return
+        fmt = "markdown" if idx == 0 else "json"
+        session = self.agent.conversations.active
+        dest = store.export_session(session.id, fmt=fmt)
+        if not dest:
+            self.post_message(AgentEvent("error", "Export failed."))
+        else:
+            self.post_message(AgentEvent("notice", f"Exported '{session.name}' ({fmt}) to:\n{dest}"))
+        self._restore_focus()
+
+    # ---- config modal routing (0.2.4) -------------------------------------------
+
+    async def _route_config_subcommand(self, sub: str) -> bool:
+        from agent.config import Config as _Config
+        if sub == "validate":
+            from agent.config_editor import ConfigDraft
+            report = ConfigDraft.from_config(self.config).validate()
+            kind = "notice" if report.ok else "error"
+            self.post_message(AgentEvent(kind, report.to_text()))
+            return True
+        if sub == "backup":
+            backup_path = _Config.create_backup(self.config.config_path)
+            if backup_path:
+                self.post_message(AgentEvent("notice", f"Backup written: {backup_path}"))
+            else:
+                self.post_message(AgentEvent("error", "Failed to create backup."))
+            return True
+        if sub == "restore":
+            backups = _Config.list_backups(self.config.config_path)
+            if not backups:
+                self.post_message(AgentEvent("error", "No backups available."))
+                return True
+            options = [f"{b['name']}  ({b['size']} bytes)" for b in backups]
+            self.push_screen(
+                ChoiceModal("Restore config backup", options, 0),
+                lambda idx: self._config_restore_chosen(idx, backups),
+            )
+            return True
+        return False
+
+    def _config_restore_chosen(self, idx, backups):
+        if idx is None or idx < 0 or idx >= len(backups):
+            self._restore_focus()
+            return
+        chosen = backups[idx]["name"]
+        self.push_screen(
+            ChoiceModal(f"Restore {chosen}? This OVERWRITES config.json.", ["Restore", "Cancel"], 1),
+            lambda confirm_idx: self._config_restore_confirmed(confirm_idx, chosen),
+        )
+
+    def _config_restore_confirmed(self, confirm_idx, chosen):
+        if confirm_idx != 0:
+            self.post_message(AgentEvent("notice", "Cancelled; no changes made."))
+            self._restore_focus()
+            return
+        from agent.config import Config as _Config
+        if not _Config.restore_backup(self.config.config_path, chosen):
+            self.post_message(AgentEvent("error", "Restore failed."))
+            self._restore_focus()
+            return
+        self.config.load()
+        self.config._sync_runtime_fields()
+        self.agent.conversations.set_context_window(self.config.context_window)
+        self.agent.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
+        self.agent.conversations.save_all(reason="config_restore")
+        self.post_message(AgentEvent("notice", f"Restored {chosen} and reloaded config."))
+        self.post_message(AgentEvent("model_selected", self.config.active_model_profile))
+        self.refresh_dock()
+        try:
+            self.main_query("#brand-header", BrandHeader).update_meta(
+                self.config.model, self.config.active_model_profile, str(self.workspace_context.root)
+            )
+        except Exception:
+            pass
+        self._restore_focus()
+
+    # ---- docs / providers notice (0.2.4) ----------------------------------------
+
+    def _handle_docs_notice(self, topic: str = ""):
+        from agent.runtime_commands import DOCS_MAP, _resolve_doc_path
+        if not topic:
+            msg = (
+                "Available topics: config, providers, sessions\n"
+                "Local docs:\n"
+                "  docs/zh/user-manual.md\n"
+                "  docs/en/user-manual.md\n"
+                "  docs/commands.md\n"
+                "  docs/configuration.md"
+            )
+            self.post_message(AgentEvent("notice", msg))
+            return
+        if topic not in DOCS_MAP:
+            self.post_message(AgentEvent("error", f"Unknown docs topic: '{topic}'. Available: config, providers, sessions"))
+            return
+        target = DOCS_MAP[topic]
+        path = _resolve_doc_path(target)
+        if path:
+            self.post_message(AgentEvent("notice", f"Topic '{topic}':\n{path}"))
+        else:
+            self.post_message(AgentEvent("notice", f"No local doc for topic '{topic}'."))
+
+    def _handle_providers_notice(self):
+        lines = []
+        for provider in self.config.llm["providers"]:
+            marker = "* " if provider["name"] == self.config.llm["active_provider"] else "  "
+            model_names = ", ".join(m["name"] for m in provider["models"])
+            lines.append(f"{marker}{provider['name']}  base_url={provider.get('base_url', '')}  models=[{model_names}]")
+        msg = "Configured Providers\n" + "\n".join(lines or ["(none)"])
+        msg += "\n\nUse '/provider add' to add, '/provider edit|remove|test' to manage."
+        self.post_message(AgentEvent("notice", msg))
+
     # ---- settings screen --------------------------------------------------------
 
     def _settings_choice(self, choice):
@@ -1494,11 +1723,8 @@ class KairoApp(App):
     def _run_plain_to_view(self, raw: str):
         """Run a plain handler in a worker thread and pipe its result into the conversation view.
 
-        Plain handlers read prompts via builtins.input — we want them to not
-        block on stdin in the TUI thread; for 0.2.3 these particular commands
-        (/providers, /docs, /config validate|backup|restore, /session ...) do
-        not require interactive input or already use blocking choice modals
-        through the existing dispatcher hooks. We feed empty input to prompts.
+        Only used for non-interactive commands that return data without calling
+        input()/print(). All UI updates go through the thread-safe event bridge.
         """
         dispatcher = CommandDispatcher(self.agent)
         result = dispatcher.dispatch(raw)
@@ -1506,9 +1732,9 @@ class KairoApp(App):
             return
         if result.message:
             kind = "notice" if result.success else "error"
-            self.post_message(AgentEvent(kind, result.message))
+            self.call_from_thread(self.post_message, AgentEvent(kind, result.message))
         if result.refresh_ui:
-            self.refresh_dock()
+            self.call_from_thread(self.refresh_dock)
         if getattr(result, "interactive", False) and result.data.get("kind") == "provider_test_result":
             test_result = result.data.get("result")
             if test_result is not None:
