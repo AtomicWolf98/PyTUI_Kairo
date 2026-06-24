@@ -170,9 +170,84 @@ COMMAND_CATALOG: List[Dict[str, str]] = [
         "help": "Print the file path of the current session",
     },
     {
-        "name": "/docs",
-        "summary": "List local docs",
-        "help": "List local documentation paths",
+        "name": "/keys",
+        "summary": "List API key statuses",
+        "help": "List all profile key statuses (masked)",
+    },
+    {
+        "name": "/key set",
+        "summary": "Set profile API key",
+        "help": "Set inline API key for a profile",
+    },
+    {
+        "name": "/key clear",
+        "summary": "Clear profile API key",
+        "help": "Clear inline API key for a profile",
+    },
+    {
+        "name": "/key reveal",
+        "summary": "Reveal profile API key",
+        "help": "Reveal full API key for a profile after confirmation",
+    },
+    {
+        "name": "/key migrate",
+        "summary": "Migrate legacy keys",
+        "help": "Migrate legacy provider keys into profile keys",
+    },
+    {
+        "name": "/roles",
+        "summary": "List model roles",
+        "help": "List current model role mappings",
+    },
+    {
+        "name": "/role set",
+        "summary": "Set model role",
+        "help": "Set which profile a model role uses",
+    },
+    {
+        "name": "/role clear",
+        "summary": "Clear model role",
+        "help": "Clear a model role mapping",
+    },
+    {
+        "name": "/doctor",
+        "summary": "Health dashboard",
+        "help": "Check config, keys, workspace, sessions and provider health",
+    },
+    {
+        "name": "/workspace save",
+        "summary": "Save workspace bookmark",
+        "help": "Save the current workspace root as a bookmark",
+    },
+    {
+        "name": "/workspaces",
+        "summary": "List workspace bookmarks",
+        "help": "List saved workspace bookmarks",
+    },
+    {
+        "name": "/workspace remove",
+        "summary": "Remove workspace bookmark",
+        "help": "Remove a workspace bookmark by name",
+    },
+    {
+        "name": "/session search",
+        "summary": "Search sessions",
+        "help": "Search session names and history content",
+    },
+    {
+        "name": "/session open",
+        "summary": "Open session",
+        "help": "Open a session by id or search result index",
+    },
+    {
+        "name": "/config export",
+        "summary": "Export config",
+        "help": "Export config to .kairo/config_exports (redacted by default)",
+    },
+    {
+        "name": "/config import",
+        "summary": "Import config",
+        "help": "Import config from a JSON file",
     },
     {
         "name": "/docs config",
@@ -250,6 +325,12 @@ class CommandDispatcher:
             "/compress": self._handle_compress,
             "/undo": self._handle_undo,
             "/workspace": self._handle_workspace,
+            "/workspaces": self._handle_workspaces,
+            "/keys": self._handle_keys,
+            "/key": self._dispatch_key,
+            "/roles": self._handle_roles,
+            "/role": self._dispatch_role,
+            "/doctor": self._handle_doctor,
         }
         self._register_runtime_handlers()
 
@@ -266,9 +347,6 @@ class CommandDispatcher:
             "/settings": bind(rc.handle_settings),
             "/session": self._dispatch_session,
             "/docs": bind(rc.handle_docs),
-            "/config validate": bind(rc.handle_config_validate),
-            "/config backup": bind(rc.handle_config_backup),
-            "/config restore": bind(rc.handle_config_restore),
         })
         # /model add|edit|remove|test collide with the existing /model handler;
         # resolved in dispatch() based on whether an argument is present.
@@ -289,6 +367,25 @@ class CommandDispatcher:
             "delete": rc.handle_session_delete,
             "export": rc.handle_session_export,
             "reveal": rc.handle_session_reveal,
+            "search": rc.handle_session_search,
+            "open": rc.handle_session_open,
+        }
+        self._config_runtime = {
+            "validate": rc.handle_config_validate,
+            "backup": rc.handle_config_backup,
+            "restore": rc.handle_config_restore,
+            "export": rc.handle_config_export,
+            "import": rc.handle_config_import,
+        }
+        self._key_runtime = {
+            "set": rc.handle_key_set,
+            "clear": rc.handle_key_clear,
+            "reveal": rc.handle_key_reveal,
+            "migrate": rc.handle_key_migrate,
+        }
+        self._role_runtime = {
+            "set": rc.handle_role_set,
+            "clear": rc.handle_role_clear,
         }
 
     def _dispatch_provider(self, raw: str, parts: List[str]) -> CommandResult:
@@ -304,7 +401,25 @@ class CommandDispatcher:
         sub = (parts[1] if len(parts) > 1 else "").strip().lower()
         if sub in self._session_runtime:
             return self._session_runtime[sub](self.agent, raw, parts)
-        return CommandResult(handled=False, success=False, message="Use /session rename|delete|export|reveal.")
+        return CommandResult(handled=False, success=False, message="Use /session rename|delete|export|reveal|search|open.")
+
+    def _dispatch_key(self, raw: str, parts: List[str]) -> CommandResult:
+        sub = (parts[1] if len(parts) > 1 else "").strip().lower()
+        if sub in self._key_runtime:
+            return self._key_runtime[sub](self.agent, raw, parts)
+        return CommandResult(handled=False, success=False, message="Use /key set|clear|reveal|migrate.")
+
+    def _dispatch_role(self, raw: str, parts: List[str]) -> CommandResult:
+        sub = (parts[1] if len(parts) > 1 else "").strip().lower()
+        if sub in self._role_runtime:
+            return self._role_runtime[sub](self.agent, raw, parts)
+        return CommandResult(handled=False, success=False, message="Use /role set|clear.")
+
+    def _dispatch_config(self, raw: str, parts: List[str]) -> CommandResult:
+        sub = (parts[1] if len(parts) > 1 else "").strip().lower()
+        if sub in self._config_runtime:
+            return self._config_runtime[sub](self.agent, raw, parts)
+        return self._handle_config(raw, parts)
 
     def dispatch(self, raw: str) -> CommandResult:
         """Parse and execute a slash command, returning a structured result."""
@@ -324,11 +439,18 @@ class CommandDispatcher:
         if command == "/session" and sub in self._session_runtime:
             handler = self._session_runtime[sub]
             return handler(self.agent, raw_stripped, [command, sub, argument])
-        if command == "/config" and sub in ("validate", "backup", "restore"):
-            multi = f"/config {sub}"
-            handler = self._handlers.get(multi)
-            if handler:
-                return handler(raw_stripped, [command, sub, argument])
+        if command == "/key" and sub in self._key_runtime:
+            handler = self._key_runtime[sub]
+            return handler(self.agent, raw_stripped, [command, sub, argument])
+        if command == "/role" and sub in self._role_runtime:
+            handler = self._role_runtime[sub]
+            return handler(self.agent, raw_stripped, [command, sub, argument])
+        if command == "/config" and sub in self._config_runtime:
+            handler = self._config_runtime[sub]
+            return handler(self.agent, raw_stripped, [command, sub, argument])
+        if command == "/workspace" and sub in ("save", "remove", "move"):
+            handler = self._handlers.get("/workspace")
+            return handler(raw_stripped, [command, sub, argument])
         if command == "/docs":
             # /docs can take a topic arg; collapse into single-arg form for handler.
             topic_arg = sub + (" " + argument if argument else "")
@@ -460,12 +582,24 @@ class CommandDispatcher:
 
     def _handle_config(self, _raw: str, _parts: List[str]) -> CommandResult:
         cfg = self.agent.config
+        from agent.profile_resolver import get_active_profile, list_profiles, mask_key
+        active = get_active_profile(cfg)
         key_hint = cfg.describe_active_api_key()
+        profiles_text = "\n".join(
+            f"  - {p.id} ({p.model})  key={mask_key(p.api_key)}"
+            for p in list_profiles(cfg)
+        )
+        roles_text = "\n".join(
+            f"  - {role}: {target}"
+            for role, target in cfg.model_roles.items()
+        ) or "  (none configured)"
+        bookmarks_text = "\n".join(
+            f"  - {b['name']}: {b['path']}"
+            for b in cfg.workspace_bookmarks
+        ) or "  (none configured)"
         text = (
+            f"Active Profile: {active.id if active else 'none'}\n"
             f"Model: {cfg.model}\n"
-            f"Active Provider: {cfg.active_provider}\n"
-            f"Active Model: {cfg.active_model}\n"
-            f"Active Target: {cfg.active_model_profile}\n"
             f"Base URL: {cfg.base_url}\n"
             f"Temperature: {cfg.temperature}\n"
             f"Max Tokens: {cfg.max_tokens}\n"
@@ -473,13 +607,15 @@ class CommandDispatcher:
             f"Context Management: {cfg.context_management}\n"
             f"{key_hint}\n"
             f"Active Conversation: {self.agent.active_session_name}\n"
-            f"Configured Targets: {', '.join(cfg.get_model_profile_names())}\n"
-            f"Auto Mode: {'ON' if cfg.auto_mode else 'OFF'}\n"
-            f"Plan Mode: {'ON' if cfg.plan_mode else 'OFF'}\n"
-            f"Thinking Mode: {'ON' if cfg.thinking_mode else 'OFF'}\n"
+            f"\nProfiles:\n{profiles_text}\n"
+            f"\nModel Roles:\n{roles_text}\n"
+            f"\nWorkspace Bookmarks:\n{bookmarks_text}\n"
+            f"\nAuto Mode: {'ON' if cfg.auto_mode else 'OFF'}"
+            f"  Plan Mode: {'ON' if cfg.plan_mode else 'OFF'}"
+            f"  Thinking Mode: {'ON' if cfg.thinking_mode else 'OFF'}\n"
             f"Skills Directory: {cfg.skills_dir}\n"
             f"Workspace: {self.agent.workspace_context.root}\n"
-            f"\nEdit provider/model via '/providers', '/provider add', '/model add', or '/settings'."
+            f"\nManage profiles/keys/roles via '/keys', '/key', '/roles', '/role', or '/settings'."
         )
         return CommandResult(
             handled=True,
@@ -489,7 +625,26 @@ class CommandDispatcher:
         )
 
     def _handle_model(self, _raw: str, _parts: List[str]) -> CommandResult:
-        profiles = self.agent.config.get_model_profile_names()
+        cfg = self.agent.config
+        if cfg.llm.get("profiles"):
+            profiles = cfg.get_profile_ids()
+            if not profiles:
+                return CommandResult(
+                    handled=True,
+                    success=False,
+                    message="No profiles configured.",
+                )
+            default_idx = 0
+            active_id = cfg.llm.get("active_profile") or cfg.active_model_profile
+            if active_id in profiles:
+                default_idx = profiles.index(active_id)
+            return CommandResult(
+                handled=True,
+                success=True,
+                interactive=True,
+                data={"kind": "model", "profiles": profiles, "default_index": default_idx, "mode": "profile"},
+            )
+        profiles = cfg.get_model_profile_names()
         if not profiles:
             return CommandResult(
                 handled=True,
@@ -497,13 +652,13 @@ class CommandDispatcher:
                 message="No model profiles configured.",
             )
         default_idx = 0
-        if self.agent.config.active_model_profile in profiles:
-            default_idx = profiles.index(self.agent.config.active_model_profile)
+        if cfg.active_model_profile in profiles:
+            default_idx = profiles.index(cfg.active_model_profile)
         return CommandResult(
             handled=True,
             success=True,
             interactive=True,
-            data={"kind": "model", "profiles": profiles, "default_index": default_idx},
+            data={"kind": "model", "profiles": profiles, "default_index": default_idx, "mode": "legacy"},
         )
 
     def _handle_compress(self, _raw: str, _parts: List[str]) -> CommandResult:
@@ -545,17 +700,48 @@ class CommandDispatcher:
         )
 
     def _handle_workspace(self, raw: str, parts: List[str]) -> CommandResult:
-        argument = parts[1] if len(parts) > 1 else ""
-        if argument.lower().startswith("move "):
-            target = argument[4:].strip()
-            return self.agent.move_workspace(target)
+        sub = parts[1] if len(parts) > 1 else ""
+        argument = parts[2] if len(parts) > 2 else ""
+        lowered = sub.lower()
+        if lowered == "move":
+            target = argument.strip()
+            if not target:
+                return CommandResult(handled=True, success=False, message="Workspace target is required.")
+            from agent.runtime_commands import _resolve_workspace_target
+            resolved = _resolve_workspace_target(self.agent.config, target)
+            if resolved is None:
+                return CommandResult(handled=True, success=False, message="Workspace target is required.")
+            return self.agent.move_workspace(resolved)
+        if lowered == "save":
+            from agent import runtime_commands as rc
+            return rc.handle_workspace_save(self.agent, raw, parts)
+        if lowered == "remove":
+            from agent import runtime_commands as rc
+            return rc.handle_workspace_remove(self.agent, raw, parts)
 
         return CommandResult(
             handled=True,
             success=True,
             message=(
                 f"Current workspace: {self.agent.workspace_context.root}\n"
-                "Use '/workspace move <path>' to switch to another directory."
+                "Use '/workspace move <path>' to switch, '/workspace save <name>' to bookmark, "
+                "'/workspaces' to list bookmarks, '/workspace remove <name>' to delete."
             ),
             data={"kind": "workspace_show", "root": str(self.agent.workspace_context.root)},
         )
+
+    def _handle_workspaces(self, raw: str, parts: List[str]) -> CommandResult:
+        from agent import runtime_commands as rc
+        return rc.handle_workspaces(self.agent, raw, parts)
+
+    def _handle_keys(self, raw: str, parts: List[str]) -> CommandResult:
+        from agent import runtime_commands as rc
+        return rc.handle_keys(self.agent, raw, parts)
+
+    def _handle_roles(self, raw: str, parts: List[str]) -> CommandResult:
+        from agent import runtime_commands as rc
+        return rc.handle_roles(self.agent, raw, parts)
+
+    def _handle_doctor(self, raw: str, parts: List[str]) -> CommandResult:
+        from agent import runtime_commands as rc
+        return rc.handle_doctor(self.agent, raw, parts)

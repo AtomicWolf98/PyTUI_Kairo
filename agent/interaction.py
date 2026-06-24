@@ -91,6 +91,7 @@ class InteractionRunner:
             tools=None,
             max_tokens_override=summary_limit,
             temperature_override=0.1,
+            profile_role="compress",
         ):
             if type_ == "content":
                 summary += data
@@ -208,7 +209,7 @@ class InteractionRunner:
         plan_content = ""
         has_official_usage = False
         with Live(Text("Generating...", style="italic dim"), console=self.console, refresh_per_second=10) as live:
-            for type_, data in self.llm.stream_response(plan_messages):
+            for type_, data in self.llm.stream_response(plan_messages, profile_role="plan"):
                 if type_ == "content":
                     plan_content += data
                     live.update(Markdown(plan_content))
@@ -257,7 +258,7 @@ class InteractionRunner:
                 emit("state", "thinking")
                 emit("message_started", {"kind": "plan"})
                 plan_content = ""
-                for type_, data in self.llm.stream_response(plan_messages):
+                for type_, data in self.llm.stream_response(plan_messages, profile_role="plan"):
                     if type_ == "content":
                         plan_content += data
                         emit("content_delta", data)
@@ -306,7 +307,7 @@ class InteractionRunner:
 
                     emit("state", "connecting")
                     emit("message_started", {"kind": "assistant"})
-                    for type_, data in self.llm.stream_response(self.history, tools=schemas):
+                    for type_, data in self.llm.stream_response(self.history, tools=schemas, profile_role="chat"):
                         if type_ == "context_error":
                             context_error = str(data)
                             break
@@ -510,7 +511,7 @@ class InteractionRunner:
                     official_context_tokens = None
 
                     with Live(group, console=self.console, auto_refresh=True, refresh_per_second=10) as live:
-                        for type_, data in self.llm.stream_response(self.history, tools=schemas):
+                        for type_, data in self.llm.stream_response(self.history, tools=schemas, profile_role="chat"):
                             if first_token:
                                 first_token = False
                                 group.renderables.clear()

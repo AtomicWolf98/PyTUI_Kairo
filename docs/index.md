@@ -1,6 +1,6 @@
 # Kairo Documentation / Kairo 文档
 
-Current version / 当前版本：**0.2.2**
+Current version / 当前版本：**0.2.5**
 
 ## Chinese / 中文
 

@@ -11,33 +11,41 @@ The complete configuration guide is maintained in the bilingual manuals:
 
 ### `llm`
 
-Defines OpenAI-compatible providers and model profiles. You can now add, edit, and remove providers/models from inside Kairo without editing `config.json`:
+Defines OpenAI-compatible profiles. Since 0.2.5 Kairo uses `llm.profiles[]` as the primary format; legacy `llm.providers[]` configs are still loaded and converted automatically. You can manage profiles, keys, roles, bookmarks, and config import/export from inside Kairo without editing `config.json`:
 
 - `/providers` · `/provider add` · `/provider edit` · `/provider remove` · `/provider test`
 - `/model add` · `/model edit` · `/model remove` · `/model test`
-- `/settings` (TUI menu) · `/config validate` · `/config backup` · `/config restore`
+- `/keys` · `/key set` · `/key clear` · `/key reveal` · `/key migrate`
+- `/roles` · `/role set` · `/role clear`
+- `/workspaces` · `/workspace save` · `/workspace remove`
+- `/config validate` · `/config backup` · `/config restore` · `/config export` · `/config import`
+- `/settings` (TUI menu)
 
-Use `/model` to switch among configured profiles.
+Use `/model` to switch among configured profiles. Use `/role set chat <profile>` to route different tasks to different profiles.
 
-定义 OpenAI-compatible provider 和模型 profile。现在也可以在 Kairo 界面内直接增删改 provider 和 model，无需手动编辑 `config.json`：
+定义 OpenAI-compatible 模型 profile。0.2.5 起 Kairo 以 `llm.profiles[]` 为主格式；旧版 `llm.providers[]` 仍会被自动转换。可以在 Kairo 内管理 profile、key、role、书签和配置导入导出，无需手动编辑 `config.json`：
 
 - `/providers`、`/provider add|edit|remove|test`
 - `/model add|edit|remove|test`
-- `/settings`（TUI 菜单）、`/config validate|backup|restore`
+- `/keys`、`/key set|clear|reveal|migrate`
+- `/roles`、`/role set|clear`
+- `/workspaces`、`/workspace save|remove`
+- `/config validate|backup|restore|export|import`
+- `/settings`（TUI 菜单）
 
-使用 `/model` 在已配置 profile 中切换。
+使用 `/model` 切换 profile。使用 `/role set chat <profile>` 把不同任务路由到不同 profile。
 
 ### API Key Safety
 
-- Prefer `api_key_env` so keys stay in environment variables.
-- Environment-variable keys are **never** persisted to `config.json`.
-- Inline `api_key` requires explicit confirmation before saving.
-- `/config` displays only safe previews of the active key source.
+- **Local deployment default**: inline `api_key` in `config.json` is allowed, but the file contains secrets and must not be committed.
+- Prefer `api_key_env` so keys stay in environment variables when multiple users or CI share the project.
+- `/key reveal` and `/config export --with-keys` require explicit confirmation.
+- `/config`, logs, session history, and `/doctor` show only masked previews; full keys are never printed.
 
-- 推荐 `api_key_env`，把 API Key 放在环境变量中。
-- 环境变量中的 Key 永远不会被写回 `config.json`。
-- inline `api_key` 保存前需要明确确认。
-- `/config` 仅显示当前密钥来源的安全预览。
+- **本地部署默认**：允许在 `config.json` 中保存 inline `api_key`，但该文件包含密钥，不可提交到仓库。
+- 若多人或 CI 共用项目，仍推荐 `api_key_env`，让 key 保存在环境变量中。
+- `/key reveal` 和 `/config export --with-keys` 需要二次确认。
+- `/config`、日志、会话历史、`/doctor` 只显示掩码预览，不会输出完整 key。
 
 ### `sessions`
 
@@ -69,9 +77,9 @@ Controls TUI mode, animations, Dock width, workspace scan interval, and diff lim
 
 ### `workspace_root`
 
-The active workspace root. It can also be changed at runtime with `/workspace move <path>`.
+The active workspace root. It can also be changed at runtime with `/workspace move <path>` or `/workspace move <bookmark-name>`.
 
-当前 workspace 根目录，也可以运行时用 `/workspace move <path>` 切换。
+当前 workspace 根目录，也可以运行时用 `/workspace move <path>` 或 `/workspace move <bookmark-name>` 切换。
 
 ### `policy`
 

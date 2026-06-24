@@ -1,5 +1,55 @@
 # Changelog / 更新记录
 
+## [0.2.5-beta]
+
+### Added / 新增
+
+- Config-first model profiles (`llm.profiles[]`): each profile is an independent runtime unit with its own `base_url`, `api_key`, `model`, temperature, max tokens and context window.
+- Profile resolver (`agent/profile_resolver.py`): unifies `llm.profiles[]` and legacy `llm.providers[]` into a single `ResolvedProfile` runtime view.
+- Local config API key management: `/keys`, `/key set <profile>`, `/key clear <profile>`, `/key reveal <profile>`, `/key migrate`.
+  - Inline API keys are persisted in `config.json` by default (0.2.5 plaintext key policy).
+  - All UI output masks keys unless the user explicitly confirms reveal/export with keys.
+- Model roles (`model_roles`): `/roles`, `/role set <role> <profile>`, `/role clear <role>`; supported roles are `chat`, `plan`, `compress`, `fast`.
+- Workspace bookmarks: `/workspace save <name>`, `/workspaces`, `/workspace move <name-or-path>`, `/workspace remove <name>`.
+- Session search: `/session search <keyword>` and `/session open <id-or-index>` search session names and history content read-only.
+- Config import/export: `/config export`, `/config export --with-keys`, `/config import <path>`; export defaults to `.kairo/config_exports/config.export.YYYYMMDD-HHMMSS.json` with redacted keys.
+- Doctor health dashboard: `/doctor` checks config parse, duplicate profile ids, active profile, key presence, base URL scheme, workspace/session writability, git availability and provider reachability without leaking keys.
+- TUI modals for profile editor, key editor (password input), role editor, confirmation, search results and doctor dashboard.
+- `ConfigDraft` extended with profile/key/role/bookmark management and redacted config export.
+
+- 配置优先的模型 profile（`llm.profiles[]`）：每个 profile 是独立的运行单元，包含独立的 `base_url`、`api_key`、`model`、temperature、max tokens 与 context window。
+- Profile 解析层（`agent/profile_resolver.py`）：将 `llm.profiles[]` 与旧版 `llm.providers[]` 统一解析为 `ResolvedProfile` 运行时视图。
+- 本地配置 API Key 管理：`/keys`、`/key set <profile>`、`/key clear <profile>`、`/key reveal <profile>`、`/key migrate`。
+  - 默认将 inline API Key 明文写入 `config.json`（0.2.5 明文 key 策略）。
+  - 所有 UI 输出默认 mask key；仅在用户二次确认后才 reveal 或导出完整 key。
+- 模型角色（`model_roles`）：`/roles`、`/role set <role> <profile>`、`/role clear <role>`；支持 `chat`、`plan`、`compress`、`fast`。
+- Workspace 书签：`/workspace save <name>`、`/workspaces`、`/workspace move <name-or-path>`、`/workspace remove <name>`。
+- 会话搜索：`/session search <keyword>` 与 `/session open <id-or-index>` 只读搜索会话名称与历史内容。
+- 配置导入/导出：`/config export`、`/config export --with-keys`、`/config import <path>`；默认导出到 `.kairo/config_exports/config.export.YYYYMMDD-HHMMSS.json` 并脱敏。
+- Doctor 健康面板：`/doctor` 检查配置解析、profile id 重复、active profile、key 缺失、URL 协议、workspace/session 可写性、git 可用性与 provider 可达性，且不泄漏 key。
+- TUI modal：profile 编辑器、key 编辑器（密码输入）、role 编辑器、确认框、搜索结果与 doctor 面板。
+- `ConfigDraft` 扩展：支持 profile/key/role/bookmark 管理与脱敏配置导出。
+
+### Changed / 变更
+
+- `pyproject.toml` version bumped to `0.2.5`.
+- `config.example.json` now uses the new `llm.profiles[]` structure with empty `api_key` strings and optional `api_key_env` examples.
+- `/config` output is now profile-first and includes model roles and workspace bookmarks.
+- `/model` switches `llm.active_profile` when profiles are configured.
+- `LLMClient.stream_response()` supports `profile_role` and `profile_id` to route chat/plan/compress requests through different profiles.
+
+- `pyproject.toml` 版本号升级至 `0.2.5`。
+- `config.example.json` 已更新为新的 `llm.profiles[]` 结构，`api_key` 为空字符串，`api_key_env` 仅作兼容示例。
+- `/config` 输出改为 profile 优先，并展示 model roles 与 workspace bookmarks。
+- `/model` 在 profile 模式下切换 `llm.active_profile`。
+- `LLMClient.stream_response()` 支持 `profile_role` 与 `profile_id`，可将 chat/plan/compress 请求路由到不同 profile。
+
+### Tests / 测试
+
+- `tests/test_0_2_5_features.py`: profile resolver, config profiles, ConfigDraft profile/key/role/bookmark operations, runtime command handlers, dispatcher routing, key masking, doctor non-leakage, config export redaction.
+
+- `tests/test_0_2_5_features.py`：profile 解析器、config profiles、ConfigDraft 的 profile/key/role/bookmark 操作、运行时命令处理器、dispatcher 路由、key 掩码、doctor 防泄漏、配置导出脱敏。
+
 ## [0.2.4]
 
 ### Fixed / 修复

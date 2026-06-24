@@ -115,6 +115,8 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         max_tokens_override: Optional[int] = None,
         temperature_override: Optional[float] = None,
+        profile_role: str = "chat",
+        profile_id: Optional[str] = None,
     ) -> Generator[Tuple[str, Any], None, None]:
         """
         Sends chat completion request to the OpenAI-compatible endpoint.
@@ -127,25 +129,30 @@ class LLMClient:
             - ("error", text): Non-recoverable error details
             - ("context_error", text): Context-length error that the caller may retry after compression
         """
-        settings = self.config.get_active_llm_settings()
+        from agent.profile_resolver import resolve_profile
 
-        url = str(settings["base_url"]).rstrip("/")
+        profile = resolve_profile(self.config, profile_id=profile_id, role=profile_role)
+        if profile is None:
+            yield ("error", "No configured LLM profile available.")
+            return
+
+        url = str(profile.base_url).rstrip("/")
         if not url.endswith("/chat/completions"):
             url = f"{url}/chat/completions"
 
         payload = {
-            "model": settings["runtime_model"],
+            "model": profile.model,
             "messages": messages,
-            "temperature": settings["temperature"] if temperature_override is None else temperature_override,
-            "max_tokens": settings["max_tokens"] if max_tokens_override is None else max_tokens_override,
+            "temperature": profile.temperature if temperature_override is None else temperature_override,
+            "max_tokens": profile.max_tokens if max_tokens_override is None else max_tokens_override,
             "stream": True,
         }
         if tools:
             payload["tools"] = tools
 
         headers = {"Content-Type": "application/json"}
-        if settings["api_key"]:
-            headers["Authorization"] = f"Bearer {settings['api_key']}"
+        if profile.api_key:
+            headers["Authorization"] = f"Bearer {profile.api_key}"
 
         try:
             response = self._post_with_retries(url, payload, headers)

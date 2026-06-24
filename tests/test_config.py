@@ -111,7 +111,13 @@ class TestConfig(unittest.TestCase):
     def test_env_overrides(self):
         os.environ["OPENAI_API_KEY"] = "env_key"
         os.environ["OPENAI_BASE_URL"] = "https://env.api.com"
-        
+        # Make the active profile use the global env via api_key_env so the
+        # 0.2.5 profile-first key priority still resolves to env_key.
+        self.default_data["model_profiles"][1]["api_key"] = ""
+        self.default_data["model_profiles"][1]["api_key_env"] = "OPENAI_API_KEY"
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            json.dump(self.default_data, f)
+
         config = Config(config_path=str(self.config_path))
         self.assertEqual(config.api_key, "env_key")
         self.assertEqual(config.base_url, "https://env.api.com")

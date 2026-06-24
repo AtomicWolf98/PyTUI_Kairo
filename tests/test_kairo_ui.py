@@ -306,7 +306,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(
                 palette.matches,
-                ["/clear", "/compress", "/config", "/config validate", "/config backup", "/config restore"],
+                ["/clear", "/compress", "/config", "/config validate", "/config backup", "/config restore", "/config export", "/config import"],
             )
             # Navigate down three times to land on "/config" (index 2) and accept it.
             await pilot.press("down", "down", "enter")

@@ -312,7 +312,7 @@ class BrandHeader(Horizontal):
         yield KaiMascot(id="header-kai", reduced_motion=self.reduced_motion)
         yield Static(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.4[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.5[/#7f849c]\n"
                 f"[#a5adcb]{self.profile or self.model}[/#a5adcb]  [#6e738d]({self.model})[/#6e738d]\n"
                 f"[#7f849c]{self.cwd}[/#7f849c]"
             ),
@@ -323,7 +323,7 @@ class BrandHeader(Horizontal):
         self.model, self.profile, self.cwd = model, profile, cwd
         self.query_one("#brand-meta", Static).update(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.4[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.5[/#7f849c]\n"
                 f"[#a5adcb]{profile or model}[/#a5adcb]  [#6e738d]({model})[/#6e738d]\n"
                 f"[#7f849c]{cwd}[/#7f849c]"
             )
@@ -493,7 +493,9 @@ class StatusDock(Vertical):
         yield WorkspacePanel(id="dock-workspace")
         with Vertical(id="dock-status-footer"):
             yield Static("IDLE", id="dock-state")
+            yield Static("", id="dock-profile")
             yield Static("", id="dock-model")
+            yield Static("", id="dock-key")
             yield Static("", id="dock-session")
             yield ProgressBar(total=100, show_eta=False, id="context-bar")
             yield Static("", id="dock-context")
@@ -503,7 +505,7 @@ class StatusDock(Vertical):
     def update_status(self, *, state: str, model: str, profile: str, session: str,
                       context_used: int, context_limit: int, context_trigger: float,
                       input_tokens: int, output_tokens: int, modes: str, task: str,
-                      active_file: str = "", active_tool: str = ""):
+                      active_file: str = "", active_tool: str = "", key_status: str = ""):
         state_text = state.replace("_", " ").upper()
         active = "  ·  ".join(value for value in (active_tool, active_file) if value)
         status_parts = [state_text]
@@ -512,7 +514,9 @@ class StatusDock(Vertical):
         if active:
             status_parts.append(active)
         self.query_one("#dock-state", Static).update("  ·  ".join(status_parts))
-        self.query_one("#dock-model", Static).update(f"Model  {profile or model}")
+        self.query_one("#dock-profile", Static).update(f"Profile  {profile or model}")
+        self.query_one("#dock-model", Static).update(f"Model    {model}")
+        self.query_one("#dock-key", Static).update(f"Key      {key_status or 'missing'}")
         self.query_one("#dock-session", Static).update(f"Session  {session}")
         percent = 0.0 if not context_limit else min(100.0, context_used / context_limit * 100)
         bar = self.query_one("#context-bar", ProgressBar)
@@ -585,7 +589,220 @@ class TextPromptModal(ModalScreen[str]):
             self.dismiss("")
 
 
-# ---- 0.2.3 Runtime configuration modals --------------------------------------
+# ---- 0.2.5 Runtime configuration modals --------------------------------------
+
+
+class ProfileListModal(ModalScreen[Optional[Dict]]):
+    """Lists configured profiles; Enter opens edit, 'd' triggers delete, 'c' copies."""
+
+    def __init__(self, profiles: List[Dict[str, Any]], active_id: str = ""):
+        super().__init__()
+        self.profiles = profiles
+        self.active_id = active_id
+
+    def compose(self):
+        with Vertical(id="profile-list-shell"):
+            yield Static("PROFILES · Enter to edit · 'd' to remove · 'c' to copy · Esc to close", id="profile-list-title")
+            items = []
+            for profile in self.profiles:
+                marker = "* " if profile.get("id") == self.active_id else "  "
+                label = f"{marker}{profile.get('id', '')}  -  {profile.get('model', '')}"
+                items.append(ListItem(Label(label)))
+            yield ListView(*items, initial_index=0, id="profile-list")
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        profile = self.profiles[event.index]
+        self.dismiss({"action": "edit", "id": profile.get("id", "")})
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "d":
+            list_view = self.query_one("#profile-list", ListView)
+            if list_view.index is None:
+                return
+            profile = self.profiles[list_view.index]
+            self.dismiss({"action": "delete", "id": profile.get("id", "")})
+        elif event.key == "c":
+            list_view = self.query_one("#profile-list", ListView)
+            if list_view.index is None:
+                return
+            profile = self.profiles[list_view.index]
+            self.dismiss({"action": "copy", "id": profile.get("id", "")})
+
+
+class ProfileEditorModal(ModalScreen[Optional[Dict]]):
+    """Form to add or edit a profile."""
+
+    def __init__(self, *, title: str, defaults: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.title_text = title
+        self.defaults = defaults or {}
+
+    def compose(self):
+        with Vertical(id="profile-editor-shell"):
+            yield Static(self.title_text, id="profile-editor-title")
+            yield Label("ID")
+            yield Input(value=str(self.defaults.get("id", "")), id="prof-id")
+            yield Label("Label (optional)")
+            yield Input(value=str(self.defaults.get("label", "")), id="prof-label")
+            yield Label("Provider (optional)")
+            yield Input(value=str(self.defaults.get("provider", "")), id="prof-provider")
+            yield Label("Base URL")
+            yield Input(value=str(self.defaults.get("base_url", "")), id="prof-base-url")
+            yield Label("API Key env name (optional)")
+            yield Input(value=str(self.defaults.get("api_key_env", "")), id="prof-env")
+            yield Label("API Key value (optional, will be saved to config.json)")
+            yield Input(value=str(self.defaults.get("api_key", "")), password=True, id="prof-key")
+            yield Label("Model")
+            yield Input(value=str(self.defaults.get("model", "")), id="prof-model")
+            yield Label("Context window")
+            yield Input(value=str(self.defaults.get("context_window", "")), id="prof-context")
+            yield Label("Max tokens")
+            yield Input(value=str(self.defaults.get("max_tokens", "")), id="prof-max")
+            yield Label("Temperature (0.0 - 2.0)")
+            yield Input(value=str(self.defaults.get("temperature", "")), id="prof-temp")
+            with Horizontal(id="prof-actions"):
+                yield Static("Enter to save · Esc to cancel", id="prof-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            self._submit()
+
+    def _submit(self):
+        values = {
+            "id": self.query_one("#prof-id", Input).value.strip(),
+            "label": self.query_one("#prof-label", Input).value.strip(),
+            "provider": self.query_one("#prof-provider", Input).value.strip(),
+            "base_url": self.query_one("#prof-base-url", Input).value.strip(),
+            "api_key_env": self.query_one("#prof-env", Input).value.strip(),
+            "api_key": self.query_one("#prof-key", Input).value,
+            "model": self.query_one("#prof-model", Input).value.strip(),
+            "context_window": self.query_one("#prof-context", Input).value.strip(),
+            "max_tokens": self.query_one("#prof-max", Input).value.strip(),
+            "temperature": self.query_one("#prof-temp", Input).value.strip(),
+        }
+        self.dismiss(values)
+
+
+class KeyEditorModal(ModalScreen[Optional[Dict]]):
+    """Password input modal for setting a profile API key."""
+
+    def __init__(self, profile_id: str):
+        super().__init__()
+        self.profile_id = profile_id
+
+    def compose(self):
+        with Vertical(id="key-editor-shell"):
+            yield Static(f"SET API KEY · {self.profile_id}", id="key-editor-title")
+            yield Input(placeholder="Paste API key and press Enter", password=True, id="key-input")
+            yield Static("Esc to cancel", id="key-hint")
+
+    def on_input_submitted(self, event: Input.Submitted):
+        self.dismiss({"profile_id": self.profile_id, "key": event.value.strip()})
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+
+
+class RoleEditorModal(ModalScreen[Optional[Dict]]):
+    """Modal to set or clear a model role."""
+
+    def __init__(self, roles: List[str], profiles: List[str], current: Optional[str] = None):
+        super().__init__()
+        self.roles = roles
+        self.profiles = profiles
+        self.current = current
+
+    def compose(self):
+        with Vertical(id="role-editor-shell"):
+            yield Static("SET MODEL ROLE", id="role-editor-title")
+            yield Label("Role")
+            yield Input(value=self.current or "", id="role-name")
+            yield Label("Profile")
+            items = [ListItem(Label(p)) for p in self.profiles]
+            yield ListView(*items, initial_index=0, id="role-profile-list")
+            with Horizontal(id="role-actions"):
+                yield Static("Enter to set · 'c' to clear · Esc to cancel", id="role-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            list_view = self.query_one("#role-profile-list", ListView)
+            idx = list_view.index or 0
+            profile = self.profiles[idx] if 0 <= idx < len(self.profiles) else ""
+            self.dismiss({"action": "set", "role": self.query_one("#role-name", Input).value.strip(), "profile": profile})
+        elif event.key == "c":
+            self.dismiss({"action": "clear", "role": self.query_one("#role-name", Input).value.strip()})
+
+
+class ConfirmModal(ModalScreen[bool]):
+    """Generic confirmation modal. Default option is Cancel."""
+
+    def __init__(self, message: str, *, default: bool = False):
+        super().__init__()
+        self.message = message
+        self.default = default
+
+    def compose(self):
+        with Vertical(id="confirm-shell"):
+            yield Static("CONFIRM", id="confirm-title")
+            yield Static(self.message, id="confirm-message")
+            yield Static("Enter to confirm · Esc to cancel", id="confirm-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key == "enter":
+            self.dismiss(True)
+        elif event.key == "escape":
+            self.dismiss(False)
+
+
+class SearchResultModal(ModalScreen[Optional[int]]):
+    """Modal list of search results."""
+
+    def __init__(self, title: str, options: List[str], default_index: int = 0):
+        super().__init__()
+        self.title_text = title
+        self.options = options
+        self.default_index = default_index
+
+    def compose(self):
+        items = [ListItem(Label(option)) for option in self.options]
+        with Vertical(id="search-result-shell"):
+            yield Static(self.title_text, id="search-result-title")
+            yield ListView(*items, initial_index=self.default_index, id="search-result-list")
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        self.dismiss(event.index)
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(-1)
+
+
+class DoctorModal(ModalScreen[None]):
+    """Displays the doctor health dashboard."""
+
+    def __init__(self, checks: List[Dict[str, Any]]):
+        super().__init__()
+        self.checks = checks
+
+    def compose(self):
+        lines = [f"{'OK ' if c['ok'] else 'FAIL'} {c['name']}: {c['detail']}" for c in self.checks]
+        ok_count = sum(1 for c in self.checks if c["ok"])
+        text = f"Doctor ({ok_count}/{len(self.checks)} checks passed):\n" + "\n".join(lines)
+        with Vertical(id="doctor-shell"):
+            yield Static("HEALTH DASHBOARD", id="doctor-title")
+            yield Static(text, id="doctor-content")
+            yield Static("Press Esc or Enter to close", id="doctor-hint")
+
+    def on_key(self, event: events.Key):
+        if event.key in ("escape", "enter"):
+            self.dismiss(None)
 
 
 class ProviderListModal(ModalScreen[Optional[Dict]]):
@@ -764,6 +981,15 @@ class SettingsScreen(ModalScreen[Optional[str]]):
             yield Static("SETTINGS · choose an area", id="settings-title")
             yield ListView(
                 ListItem(Label("Manage providers")),
+                ListItem(Label("Manage profiles")),
+                ListItem(Label("Add profile")),
+                ListItem(Label("Edit profile")),
+                ListItem(Label("Remove profile")),
+                ListItem(Label("List API keys")),
+                ListItem(Label("Set API key")),
+                ListItem(Label("Clear API key")),
+                ListItem(Label("List model roles")),
+                ListItem(Label("Set model role")),
                 ListItem(Label("Add model")),
                 ListItem(Label("Edit model")),
                 ListItem(Label("Remove model")),
@@ -771,6 +997,9 @@ class SettingsScreen(ModalScreen[Optional[str]]):
                 ListItem(Label("Validate config")),
                 ListItem(Label("Create config backup")),
                 ListItem(Label("Restore config backup")),
+                ListItem(Label("Export config")),
+                ListItem(Label("Import config")),
+                ListItem(Label("Run doctor")),
                 ListItem(Label("Close")),
                 id="settings-list",
             )
@@ -778,6 +1007,15 @@ class SettingsScreen(ModalScreen[Optional[str]]):
     def on_list_view_selected(self, event: ListView.Selected):
         mapping = [
             "providers",
+            "profiles",
+            "profile_add",
+            "profile_edit",
+            "profile_remove",
+            "keys",
+            "key_set",
+            "key_clear",
+            "roles",
+            "role_set",
             "model_add",
             "model_edit",
             "model_remove",
@@ -785,6 +1023,9 @@ class SettingsScreen(ModalScreen[Optional[str]]):
             "config_validate",
             "config_backup",
             "config_restore",
+            "config_export",
+            "config_import",
+            "doctor",
             "close",
         ]
         if 0 <= event.index < len(mapping):

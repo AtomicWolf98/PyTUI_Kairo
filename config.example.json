@@ -1,41 +1,64 @@
 {
   "llm": {
-    "active_provider": "minimax",
-    "active_model": "MiniMax-M3",
+    "active_profile": "minimax/MiniMax-M3",
     "defaults": {
       "temperature": 0.2,
       "max_tokens": 4000,
       "context_window": 128000
     },
-    "providers": [
+    "profiles": [
       {
-        "name": "minimax",
+        "id": "minimax/MiniMax-M3",
+        "label": "MiniMax M3",
+        "provider": "minimax",
         "base_url": "https://api.minimaxi.com/v1",
+        "api_key": "",
         "api_key_env": "KAIRO_MINIMAX_API_KEY",
-        "models": [
-          {
-            "name": "MiniMax-M3",
-            "temperature": 0.2,
-            "max_tokens": 40000,
-            "context_window": 128000
-          }
-        ]
+        "model": "MiniMax-M3",
+        "temperature": 0.2,
+        "max_tokens": 40000,
+        "context_window": 128000,
+        "context_management": {
+          "enabled": true,
+          "auto_compress": true,
+          "trigger_percent": 85,
+          "target_percent": 60,
+          "preserve_recent_turns": 4
+        }
       },
       {
-        "name": "deepseek",
+        "id": "deepseek/deepseek-chat",
+        "label": "DeepSeek Chat",
+        "provider": "deepseek",
         "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
         "api_key_env": "KAIRO_DEEPSEEK_API_KEY",
-        "models": [
-          {
-            "name": "deepseek-chat",
-            "temperature": 0.2,
-            "max_tokens": 8000,
-            "context_window": 128000
-          }
-        ]
+        "model": "deepseek-chat",
+        "temperature": 0.2,
+        "max_tokens": 8000,
+        "context_window": 128000,
+        "context_management": {
+          "enabled": true,
+          "auto_compress": true,
+          "trigger_percent": 85,
+          "target_percent": 60,
+          "preserve_recent_turns": 4
+        }
       }
     ]
   },
+  "model_roles": {
+    "chat": "minimax/MiniMax-M3",
+    "plan": "deepseek/deepseek-chat",
+    "compress": "minimax/MiniMax-M3",
+    "fast": "minimax/MiniMax-M3"
+  },
+  "workspace_bookmarks": [
+    {
+      "name": "kairo",
+      "path": "."
+    }
+  ],
   "context_management": {
     "enabled": true,
     "auto_compress": true,

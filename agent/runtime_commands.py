@@ -12,8 +12,11 @@ router and there is no shared mutable state beyond the agent.
 """
 from __future__ import annotations
 
+import json
+import os
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from agent.commands import CommandResult
 from agent.config import Config
@@ -29,10 +32,20 @@ from agent.plain_io import (
     notice,
     select,
 )
+from agent.profile_resolver import describe_key_source, list_profiles, mask_key
 from agent.provider_health import ProviderTestResult, test_connection
 
 
 # ---- Shared helpers ------------------------------------------------------------
+
+
+def _list_profile_key_lines(config) -> List[str]:
+    lines = []
+    for profile in list_profiles(config):
+        marker = "* " if profile.id == (config.llm.get("active_profile") or config.active_model_profile) else "  "
+        source = describe_key_source(profile.api_key, profile.api_key_source)
+        lines.append(f"{marker}{profile.id}  key={mask_key(profile.api_key)}  source={source}")
+    return lines
 
 
 def _list_provider_lines(config: Config) -> List[str]:
@@ -42,6 +55,18 @@ def _list_provider_lines(config: Config) -> List[str]:
         model_names = ", ".join(m["name"] for m in provider["models"])
         lines.append(f"{marker}{provider['name']}  base_url={provider.get('base_url', '')}  models=[{model_names}]")
     return lines
+
+
+def _resolve_workspace_target(config, name_or_path: str) -> Optional[str]:
+    """Resolve a workspace move target: bookmark name first, then path."""
+    name_or_path = (name_or_path or "").strip()
+    if not name_or_path:
+        return None
+    lowered = name_or_path.lower()
+    for bookmark in config.workspace_bookmarks:
+        if bookmark["name"].lower() == lowered:
+            return bookmark["path"]
+    return name_or_path
 
 
 def _list_models_for_provider(config: Config, provider_name: str) -> List[str]:
@@ -680,12 +705,525 @@ def _session_options(agent) -> List[str]:
     return options
 
 
+def _session_options(agent) -> List[str]:
+    options = []
+    for session in agent.conversations.sessions:
+        marker = "*" if session.id == agent.conversations.active_session_id else " "
+        options.append(f"{marker} {session.name} | {len(session.history)} messages")
+    return options
+
+
+# ---- Key management -----------------------------------------------------------
+
+
+def handle_keys(agent, raw: str, parts: List[str]) -> CommandResult:
+    lines = _list_profile_key_lines(agent.config) or ["(none)"]
+    banner("API Key Status")
+    notice("\n".join(lines))
+    notice("Use '/key set <profile>', '/key clear <profile>', '/key reveal <profile>', '/key migrate'.")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message="\n".join(lines),
+        data={"kind": "keys", "lines": lines},
+    )
+
+
+def _choose_profile(agent, prompt: str = "Select profile") -> Optional[str]:
+    ids = agent.config.get_profile_ids()
+    if not ids:
+        notice("No profiles configured.")
+        return None
+    idx = select(prompt, ids)
+    if idx < 0:
+        return None
+    return ids[idx]
+
+
+def handle_key_set(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    profile_id = parts[2].strip() if len(parts) > 2 else ""
+    if not profile_id:
+        profile_id = _choose_profile(agent, prompt="Set key for which profile")
+    if not profile_id:
+        return CommandResult(handled=True, success=False, message="No profile selected.")
+    if profile_id not in config.get_profile_ids():
+        return CommandResult(handled=True, success=False, message=f"Profile '{profile_id}' not found.")
+
+    key = ask(f"API key for '{profile_id}' (will be saved to config.json)")
+    if not key:
+        return CommandResult(handled=True, success=False, message="No key entered.")
+
+    notice("WARNING: inline API keys are written to config.json.")
+    if not confirm("This will save the API key to disk. Continue?", default=False):
+        return CommandResult(handled=True, success=False, message="Cancelled; no changes saved.")
+
+    draft = ConfigDraft.from_config(config)
+    if not draft.set_key(profile_id, key):
+        return CommandResult(handled=True, success=False, message=f"Failed to set key for '{profile_id}'.")
+    report = draft.apply_to(config, backup=True, allow_inline_key=True)
+    if not report.ok:
+        error(report.to_text())
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"API key set for '{profile_id}' and saved.",
+        refresh_ui=True,
+        data={"kind": "key_set", "profile_id": profile_id},
+    )
+
+
+def handle_key_clear(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    profile_id = parts[2].strip() if len(parts) > 2 else ""
+    if not profile_id:
+        profile_id = _choose_profile(agent, prompt="Clear key for which profile")
+    if not profile_id:
+        return CommandResult(handled=True, success=False, message="No profile selected.")
+    if profile_id not in config.get_profile_ids():
+        return CommandResult(handled=True, success=False, message=f"Profile '{profile_id}' not found.")
+
+    draft = ConfigDraft.from_config(config)
+    if not draft.clear_key(profile_id):
+        return CommandResult(handled=True, success=False, message=f"Failed to clear key for '{profile_id}'.")
+    report = draft.apply_to(config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"API key cleared for '{profile_id}'.",
+        refresh_ui=True,
+        data={"kind": "key_cleared", "profile_id": profile_id},
+    )
+
+
+def handle_key_reveal(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    profile_id = parts[2].strip() if len(parts) > 2 else ""
+    if not profile_id:
+        profile_id = _choose_profile(agent, prompt="Reveal key for which profile")
+    if not profile_id:
+        return CommandResult(handled=True, success=False, message="No profile selected.")
+
+    from agent.profile_resolver import resolve_profile
+    profile = resolve_profile(config, profile_id=profile_id)
+    if profile is None:
+        return CommandResult(handled=True, success=False, message=f"Profile '{profile_id}' not found.")
+    if not profile.api_key:
+        return CommandResult(handled=True, success=False, message=f"Profile '{profile_id}' has no key to reveal.")
+
+    notice("WARNING: revealing an API key exposes it to the screen and may be recorded.")
+    if not confirm("Reveal full key?", default=False):
+        return CommandResult(handled=True, success=False, message="Reveal cancelled.")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Profile '{profile_id}' API key:\n{profile.api_key}",
+        data={"kind": "key_reveal", "profile_id": profile_id, "key": profile.api_key},
+    )
+
+
+def handle_key_migrate(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    if not config.llm.get("providers"):
+        return CommandResult(handled=True, success=False, message="No legacy providers to migrate keys from.")
+    draft = ConfigDraft.from_config(config)
+    plan = draft.migrate_keys()
+    if not plan:
+        return CommandResult(handled=True, success=True, message="No legacy keys to migrate.")
+    notice("Migration plan:")
+    for pid in plan:
+        notice(f"  - copy key into profile '{pid}'")
+    if not confirm("Migrate legacy provider keys into profile keys?", default=False):
+        return CommandResult(handled=True, success=False, message="Migration cancelled.")
+    report = draft.apply_to(config, backup=True, allow_inline_key=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Migrated keys for {len(plan)} profile(s) and saved.",
+        refresh_ui=True,
+        data={"kind": "key_migrate", "migrated": plan},
+    )
+
+
+# ---- Role management ----------------------------------------------------------
+
+
+VALID_ROLES = {"chat", "plan", "compress", "fast"}
+
+
+def handle_roles(agent, raw: str, parts: List[str]) -> CommandResult:
+    draft = ConfigDraft.from_config(agent.config)
+    roles = draft.list_roles()
+    lines = [f"  - {role}: {target}" for role, target in roles.items()]
+    if not lines:
+        lines = ["  (none configured)"]
+    notice("Model Roles")
+    notice("\n".join(lines))
+    notice("Use '/role set <role> <profile>' and '/role clear <role>'.")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message="\n".join(lines),
+        data={"kind": "roles", "roles": roles},
+    )
+
+
+def handle_role_set(agent, raw: str, parts: List[str]) -> CommandResult:
+    config = agent.config
+    if len(parts) < 3:
+        return CommandResult(handled=True, success=False, message="Usage: /role set <role> <profile>")
+    args = parts[2].strip().split(maxsplit=1)
+    if len(args) < 2:
+        return CommandResult(handled=True, success=False, message="Usage: /role set <role> <profile>")
+    role, profile_id = args[0].strip(), args[1].strip()
+    if role not in VALID_ROLES:
+        return CommandResult(handled=True, success=False, message=f"Unknown role '{role}'. Valid roles: {', '.join(sorted(VALID_ROLES))}.")
+    if profile_id not in config.get_profile_ids():
+        return CommandResult(handled=True, success=False, message=f"Profile '{profile_id}' not found.")
+
+    draft = ConfigDraft.from_config(config)
+    if not draft.set_role(role, profile_id):
+        return CommandResult(handled=True, success=False, message=f"Failed to set role '{role}'.")
+    report = draft.apply_to(config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Role '{role}' set to '{profile_id}'.",
+        refresh_ui=True,
+        data={"kind": "role_set", "role": role, "profile_id": profile_id},
+    )
+
+
+def handle_role_clear(agent, raw: str, parts: List[str]) -> CommandResult:
+    if len(parts) < 3:
+        return CommandResult(handled=True, success=False, message="Usage: /role clear <role>")
+    role = parts[2].strip()
+    if role not in VALID_ROLES:
+        return CommandResult(handled=True, success=False, message=f"Unknown role '{role}'. Valid roles: {', '.join(sorted(VALID_ROLES))}.")
+
+    draft = ConfigDraft.from_config(agent.config)
+    if not draft.clear_role(role):
+        return CommandResult(handled=True, success=False, message=f"Role '{role}' is not set.")
+    report = draft.apply_to(agent.config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Role '{role}' cleared.",
+        refresh_ui=True,
+        data={"kind": "role_cleared", "role": role},
+    )
+
+
+# ---- Workspace bookmarks ------------------------------------------------------
+
+
+def handle_workspace_save(agent, raw: str, parts: List[str]) -> CommandResult:
+    name = parts[2].strip() if len(parts) > 2 else ""
+    if not name:
+        name = ask("Bookmark name")
+    if not name:
+        return CommandResult(handled=True, success=False, message="Bookmark name is required.")
+    path = str(agent.workspace_context.root)
+    draft = ConfigDraft.from_config(agent.config)
+    if not draft.add_workspace_bookmark(name, path):
+        return CommandResult(handled=True, success=False, message="Failed to add bookmark.")
+    report = draft.apply_to(agent.config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Workspace bookmark '{name}' saved.",
+        refresh_ui=True,
+        data={"kind": "workspace_saved", "name": name, "path": path},
+    )
+
+
+def handle_workspaces(agent, raw: str, parts: List[str]) -> CommandResult:
+    bookmarks = agent.config.workspace_bookmarks
+    if not bookmarks:
+        return CommandResult(
+            handled=True,
+            success=True,
+            message="No workspace bookmarks. Use '/workspace save <name>' to create one.",
+            data={"kind": "workspaces", "bookmarks": []},
+        )
+    options = [f"{b['name']}: {b['path']}" for b in bookmarks]
+    return CommandResult(
+        handled=True,
+        success=True,
+        interactive=True,
+        data={"kind": "workspaces", "options": options, "bookmarks": bookmarks},
+    )
+
+
+def handle_workspace_remove(agent, raw: str, parts: List[str]) -> CommandResult:
+    name = parts[2].strip() if len(parts) > 2 else ""
+    if not name:
+        name = ask("Bookmark name to remove")
+    if not name:
+        return CommandResult(handled=True, success=False, message="Bookmark name is required.")
+    draft = ConfigDraft.from_config(agent.config)
+    if not draft.remove_workspace_bookmark(name):
+        return CommandResult(handled=True, success=False, message=f"Bookmark '{name}' not found.")
+    report = draft.apply_to(agent.config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Workspace bookmark '{name}' removed.",
+        refresh_ui=True,
+        data={"kind": "workspace_removed", "name": name},
+    )
+
+
+# ---- Session search -----------------------------------------------------------
+
+
+def _search_sessions(agent, keyword: str) -> List[Dict[str, Any]]:
+    store = _get_session_store(agent)
+    if store is None:
+        return []
+    keyword_lower = keyword.lower()
+    results: List[Dict[str, Any]] = []
+    for session in agent.conversations.sessions:
+        hits = []
+        name_match = keyword_lower in session.name.lower()
+        for message in session.history:
+            content = str(message.get("content", "") or "").lower()
+            if keyword_lower in content:
+                snippet = session.name if name_match else "history"
+                hits.append(snippet)
+                break
+        if name_match or hits:
+            path = store.reveal_session_path(session.id)
+            results.append({
+                "id": session.id,
+                "name": session.name,
+                "index": len(results),
+                "path": str(path) if path else "",
+            })
+    return results
+
+
+def handle_session_search(agent, raw: str, parts: List[str]) -> CommandResult:
+    if len(parts) < 3:
+        return CommandResult(handled=True, success=False, message="Usage: /session search <keyword>")
+    keyword = parts[2].strip()
+    if not keyword:
+        return CommandResult(handled=True, success=False, message="Search keyword is required.")
+    results = _search_sessions(agent, keyword)
+    if not results:
+        return CommandResult(handled=True, success=True, message=f"No sessions matched '{keyword}'.")
+    lines = [f"[{r['index']}] {r['name']}  ({r['path']})" for r in results]
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Search results for '{keyword}':\n" + "\n".join(lines),
+        interactive=True,
+        data={"kind": "session_search", "results": results, "keyword": keyword},
+    )
+
+
+def handle_session_open(agent, raw: str, parts: List[str]) -> CommandResult:
+    if len(parts) < 3:
+        return CommandResult(handled=True, success=False, message="Usage: /session open <id-or-index>")
+    target = parts[2].strip()
+    session = None
+    for s in agent.conversations.sessions:
+        if s.id == target:
+            session = s
+            break
+    if session is None:
+        try:
+            idx = int(target)
+            # Try last search results stored on agent if available.
+            search_results = getattr(agent, "_last_session_search_results", [])
+            if search_results and 0 <= idx < len(search_results):
+                target_id = search_results[idx]["id"]
+                for s in agent.conversations.sessions:
+                    if s.id == target_id:
+                        session = s
+                        break
+        except ValueError:
+            pass
+    if session is None:
+        return CommandResult(handled=True, success=False, message=f"Session '{target}' not found.")
+    agent.conversations.switch_session(session.id)
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Switched to session: {session.name}",
+        refresh_ui=True,
+        data={"kind": "session_open", "session": session},
+    )
+
+
+# ---- Config import / export ---------------------------------------------------
+
+
+def handle_config_export(agent, raw: str, parts: List[str]) -> CommandResult:
+    with_keys = len(parts) > 2 and "--with-keys" in parts[2]
+    draft = ConfigDraft.from_config(agent.config)
+    if with_keys:
+        notice("WARNING: exported file will contain full API keys.")
+        if not confirm("Export config with plaintext keys?", default=False):
+            return CommandResult(handled=True, success=False, message="Export cancelled.")
+    data = draft.export_config(with_keys=with_keys)
+    export_dir = Path(agent.config.config_path).parent / ".kairo" / "config_exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = export_dir / f"config.export.{timestamp}.json"
+    try:
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, dest)
+    except Exception as exc:
+        return CommandResult(handled=True, success=False, message=f"Export failed: {exc}")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Config exported to:\n{dest}",
+        data={"kind": "config_export", "path": str(dest), "with_keys": with_keys},
+    )
+
+
+def handle_config_import(agent, raw: str, parts: List[str]) -> CommandResult:
+    if len(parts) < 3:
+        return CommandResult(handled=True, success=False, message="Usage: /config import <path>")
+    path = parts[2].strip()
+    source_path = Path(path).expanduser()
+    if not source_path.exists():
+        return CommandResult(handled=True, success=False, message=f"Import file not found: {path}")
+
+    draft = ConfigDraft.from_config(agent.config)
+    report = draft.import_config(str(source_path))
+    if not report.ok:
+        return CommandResult(
+            handled=True,
+            success=False,
+            message="Import validation failed; current config was not overwritten.\n" + report.to_text(),
+        )
+    if not confirm(f"Import will overwrite config.json with '{path}'. Continue?", default=False):
+        return CommandResult(handled=True, success=False, message="Import cancelled.")
+    report = draft.apply_to(agent.config, backup=True)
+    if not report.ok:
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Config imported from '{path}' and saved.",
+        refresh_ui=True,
+        data={"kind": "config_import", "path": path},
+    )
+
+
+# ---- Doctor -------------------------------------------------------------------
+
+
+def handle_doctor(agent, raw: str, parts: List[str]) -> CommandResult:
+    from pathlib import Path
+    from agent.profile_resolver import list_profiles
+
+    config = agent.config
+    checks: List[Dict[str, Any]] = []
+
+    # Config parse.
+    checks.append({"name": "config parse", "ok": config._load_error is None, "detail": "config loaded" if config._load_error is None else str(config._load_error)})
+
+    # Duplicate profile ids.
+    profile_ids = [p.get("id", "") for p in config.llm.get("profiles", [])]
+    duplicates = {pid for pid in profile_ids if profile_ids.count(pid) > 1}
+    checks.append({"name": "duplicate profile ids", "ok": not duplicates, "detail": "none" if not duplicates else f"duplicates: {', '.join(duplicates)}"})
+
+    # Active profile exists.
+    active_id = config.llm.get("active_profile") or config.active_model_profile
+    ids = set(profile_ids) or set(config.get_profile_ids())
+    checks.append({"name": "active profile", "ok": active_id in ids or not ids, "detail": f"active={active_id}" if active_id else "no active profile"})
+
+    # Key missing.
+    profiles = list_profiles(config)
+    missing_keys = [p.id for p in profiles if not p.api_key]
+    checks.append({"name": "api key", "ok": not missing_keys, "detail": f"missing for: {', '.join(missing_keys)}" if missing_keys else "all profiles have keys"})
+
+    # Base URL scheme.
+    bad_urls = [p.id for p in profiles if not (p.base_url.startswith("http://") or p.base_url.startswith("https://"))]
+    checks.append({"name": "base url scheme", "ok": not bad_urls, "detail": f"bad: {', '.join(bad_urls)}" if bad_urls else "all http/https"})
+
+    # Workspace root.
+    try:
+        ws = Path(config.workspace_root).expanduser()
+        ws_ok = ws.exists() and os.access(ws, os.W_OK)
+        checks.append({"name": "workspace root", "ok": ws_ok, "detail": str(ws)})
+    except Exception as exc:
+        checks.append({"name": "workspace root", "ok": False, "detail": str(exc)})
+
+    # Session dir.
+    try:
+        store = _get_session_store(agent)
+        sd_ok = bool(store and os.access(store.storage_dir, os.W_OK))
+        checks.append({"name": "session dir", "ok": sd_ok, "detail": str(store.storage_dir) if store else "no store"})
+    except Exception as exc:
+        checks.append({"name": "session dir", "ok": False, "detail": str(exc)})
+
+    # Git.
+    import shutil
+    git_ok = shutil.which("git") is not None
+    checks.append({"name": "git available", "ok": git_ok, "detail": "git found" if git_ok else "git not found"})
+
+    # Provider health probe (first profile only, non-blocking).
+    if profiles:
+        p = profiles[0]
+        try:
+            result = test_connection(base_url=p.base_url, api_key=p.api_key, model=p.model)
+            checks.append({"name": "provider probe", "ok": result.ok, "detail": result.summary()})
+        except Exception as exc:
+            checks.append({"name": "provider probe", "ok": False, "detail": f"probe failed: {exc}"})
+    else:
+        checks.append({"name": "provider probe", "ok": False, "detail": "no profiles"})
+
+    ok_count = sum(1 for c in checks if c["ok"])
+    lines = [f"{'OK ' if c['ok'] else 'FAIL'} {c['name']}: {c['detail']}" for c in checks]
+    message = f"Doctor ({ok_count}/{len(checks)} checks passed):\n" + "\n".join(lines)
+    return CommandResult(
+        handled=True,
+        success=ok_count == len(checks),
+        message=message,
+        data={"kind": "doctor", "checks": checks},
+    )
+
+
 __all__ = [
     "DOCS_MAP",
     "handle_config_backup",
+    "handle_config_export",
+    "handle_config_import",
     "handle_config_restore",
     "handle_config_validate",
     "handle_docs",
+    "handle_doctor",
+    "handle_key_clear",
+    "handle_key_migrate",
+    "handle_key_reveal",
+    "handle_key_set",
+    "handle_keys",
     "handle_model_add",
     "handle_model_edit",
     "handle_model_remove",
@@ -695,9 +1233,17 @@ __all__ = [
     "handle_provider_remove",
     "handle_provider_test",
     "handle_providers",
+    "handle_role_clear",
+    "handle_role_set",
+    "handle_roles",
     "handle_session_delete",
     "handle_session_export",
+    "handle_session_open",
     "handle_session_rename",
     "handle_session_reveal",
+    "handle_session_search",
     "handle_settings",
+    "handle_workspace_remove",
+    "handle_workspace_save",
+    "handle_workspaces",
 ]

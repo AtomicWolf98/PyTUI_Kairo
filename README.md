@@ -1,10 +1,10 @@
 # Kairo
 
-Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, and runtime provider/model configuration.
+Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, runtime provider/model configuration, and local config-first key management.
 
-Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置，并支持在 TUI 内运行时配置 provider 与 model。
+Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时 provider/model 配置，以及本地配置优先的 key 管理。
 
-Current version / 当前版本：**0.2.3**
+Current version / 当前版本：**0.2.5-beta**
 
 ## Documentation / 文档
 
@@ -16,33 +16,42 @@ Current version / 当前版本：**0.2.3**
 
 - Animated TUI with Kai mascot and reduced-motion/plain fallbacks.
 - Slash command palette with keyboard selection and completion.
-- Configured model profiles through `llm.providers`; switch with `/model`.
+- Animated TUI with Kai mascot and reduced-motion/plain fallbacks.
+- Slash command palette with keyboard selection and completion.
+- Configured model profiles through `llm.profiles[]` (new in 0.2.5) or legacy `llm.providers`; switch with `/model`.
+- **Local config-first key management** (0.2.5): `/keys`, `/key set|clear|reveal|migrate` manage inline keys in `config.json` with mask-by-default safety.
+- **Model roles** (0.2.5): `/roles`, `/role set|clear` route `chat`, `plan`, `compress`, `fast` tasks to different profiles.
+- **Workspace bookmarks** (0.2.5): `/workspace save`, `/workspaces`, `/workspace move <name-or-path>`, `/workspace remove`.
+- **Session search** (0.2.5): `/session search <keyword>` and `/session open <id-or-index>` find sessions read-only.
+- **Config import/export** (0.2.5): `/config export`, `/config export --with-keys`, `/config import <path>` with redaction by default.
+- **Doctor health dashboard** (0.2.5): `/doctor` checks config, keys, workspace, sessions, git and provider reachability.
 - **Runtime configuration** (0.2.3): add/edit/remove providers and models with `/providers`, `/provider add|edit|remove|test`, `/model add|edit|remove|test`, `/settings`, and validate/backup/restore with `/config validate|backup|restore`.
 - **Provider health check** (0.2.3): `/provider test` and `/model test` verify reachability, key validity, and model acceptance.
-- **API key safety** (0.2.3): env keys are never persisted back to `config.json`; inline keys require explicit confirmation; `/config` shows only safe previews.
-- Persisted sessions under `sessions.storage_dir`; switch with `/sessions`, rename/delete/export/reveal with `/session ...`.
+- **API key safety** (0.2.5): inline keys are allowed in `config.json` for local deployment but are masked in UI, logs, session history, doctor and default exports; env keys remain supported; reveal/export-with-keys requires confirmation.
+- Persisted sessions under `sessions.storage_dir`; switch with `/sessions`, rename/delete/export/reveal/search/open with `/session ...`.
 - Manual and automatic context compression with `/compress`.
 - Workspace Dock with file tree, touched files, Git/non-Git diff review, and context progress.
-- Runtime workspace hot switching with `/workspace move <path>`.
+- Runtime workspace hot switching with `/workspace move <path>` or a saved bookmark name.
 - Built-in file, search, patch, shell, Python, web, and custom skill tools.
 - Authorization levels: `manual`, `auto`, and `yolo`.
 
 - Kai 终端动效与低动效/plain fallback。
 - 支持键盘选择和补全的 Slash 命令菜单。
-- 通过 `llm.providers` 配置模型 profile，并用 `/model` 切换。
+- 通过新版 `llm.profiles[]`（0.2.5）或旧版 `llm.providers` 配置模型 profile，并用 `/model` 切换。
+- **本地配置优先的 key 管理**（0.2.5）：`/keys`、`/key set|clear|reveal|migrate` 管理 `config.json` 中的 inline key，默认掩码显示。
+- **模型角色**（0.2.5）：`/roles`、`/role set|clear` 将 `chat`、`plan`、`compress`、`fast` 任务路由到不同 profile。
+- **Workspace 书签**（0.2.5）：`/workspace save`、`/workspaces`、`/workspace move <name-or-path>`、`/workspace remove`。
+- **会话搜索**（0.2.5）：`/session search <keyword>` 与 `/session open <id-or-index>` 只读搜索会话。
+- **配置导入/导出**（0.2.5）：`/config export`、`/config export --with-keys`、`/config import <path>`，默认脱敏。
+- **Doctor 健康面板**（0.2.5）：`/doctor` 检查配置、key、workspace、session、git 与 provider 连通性。
 - **运行时配置**（0.2.3）：使用 `/providers`、`/provider add|edit|remove|test`、`/model add|edit|remove|test`、`/settings` 以及 `/config validate|backup|restore` 增删改 provider/model 和备份恢复配置。
 - **Provider 健康检查**（0.2.3）：`/provider test`、`/model test` 检测连通性、key 有效性和模型名。
-- **API Key 安全**（0.2.3）：env key 不落盘；inline key 保存前需确认；`/config` 只显示安全预览。
-- 会话持久化到 `sessions.storage_dir`，`/sessions` 切换，`/session rename|delete|export|reveal` 整理。
+- **API Key 安全**（0.2.5）：为本地部署允许 `config.json` 保存 inline key，但 UI、日志、会话历史、doctor 与默认导出均掩码显示；仍支持 env key；reveal/导出完整 key 需二次确认。
+- 会话持久化到 `sessions.storage_dir`，`/sessions` 切换，`/session rename|delete|export|reveal|search|open` 整理。
 - 使用 `/compress` 进行手动或自动上下文压缩。
 - Workspace Dock 含文件树、变更文件、Git/非 Git diff 预览、上下文进度。
-- `/workspace move <path>` 当前进程热切换 workspace。
+- `/workspace move <path>` 或书签名称当前进程热切换 workspace。
 - 内置文件、搜索、patch、shell、Python、web、自定义 skill 工具。
-- 授权级别：`manual`、`auto`、`yolo`。
-- `/compress` 手动压缩和自动上下文治理。
-- Workspace Dock 显示文件树、会话触达文件、Git/非 Git Diff 和上下文进度。
-- `/workspace move <path>` 运行时热切换 workspace。
-- 内置文件、搜索、patch、Shell、Python、Web 和自定义 skill 工具。
 - 授权级别：`manual`、`auto`、`yolo`。
 
 ## Quick Start / 快速开始

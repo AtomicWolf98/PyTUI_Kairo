@@ -140,14 +140,14 @@ class Agent:
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_move_failed", "root": str(target_path)},
+                data={"kind": "workspace_moved", "root": str(target_path)},
             )
         except Exception as exc:
             return CommandResult(
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_move_failed", "root": str(target_path)},
+                data={"kind": "workspace_moved", "root": str(target_path)},
             )
 
         new_root = str(target_path)
@@ -225,7 +225,7 @@ class Agent:
         welcome_text.append(f"Thinking Mode: {'ON' if self.config.thinking_mode else 'OFF'}\n", style="yellow" if self.config.thinking_mode else "gray")
         welcome_text.append("Type /help to see available commands.", style="dim")
 
-        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.4"))
+        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.5"))
 
     def handle_command(self, user_input: str) -> bool:
         """
@@ -264,7 +264,10 @@ class Agent:
                 idx = tui_widgets.select_menu("Select provider / model:", profiles, default_index=default_index)
                 if isinstance(idx, int) and 0 <= idx < len(profiles):
                     selected_profile = profiles[idx]
-                    self.config.apply_model_profile(selected_profile)
+                    if result.data.get("mode") == "profile":
+                        self.config.apply_profile(selected_profile)
+                    else:
+                        self.config.apply_model_profile(selected_profile)
                     self.conversations.set_context_window(self.config.context_window)
                     self.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
                     self.conversations.save_all(reason="model_switch")
