@@ -1,24 +1,20 @@
 # Kairo Documentation / Kairo 文档
 
-Current version / 当前版本：**0.2.5**
+Current version / 当前版本：**0.2.5-beta**
 
-## Chinese / 中文
+This release folder contains user-facing documentation only. Development notes,
+architecture drafts and handoff guides stay in the main development workspace.
 
-- [中文完整用户手册](zh/user-manual.md)
-- [中文文档入口](zh/index.md)
+本发行目录只包含面向用户的文档。开发说明、架构草案和交接指南保留在主开发目录中。
 
-## English
+## Start Here / 推荐入口
 
-- [English Complete User Manual](en/user-manual.md)
-- [English Docs Index](en/index.md)
+- [English User Manual](en/user-manual.md)
+- [中文用户手册](zh/user-manual.md)
+- [Command Reference / 命令索引](commands.md)
+- [Configuration / 配置说明](configuration.md)
+- [Troubleshooting / 故障排查](troubleshooting.md)
 
-## Development Docs / 开发文档
+## Release Notes / 版本说明
 
-These files are kept in the main development project only and should not be included in the release-only folder:
-
-- [Architecture](architecture.md)
-- [Developer Guide](developer-guide.md)
-- [Project Status](project-status.md)
-- `dev_doc/`
-
-Release packages should contain user-facing docs only.
+- [CHANGELOG](../CHANGELOG.md)

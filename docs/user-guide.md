@@ -1,12 +1,18 @@
 # User Guide / 用户指南
 
-This compatibility page points to the maintained bilingual manuals.
+This compatibility page redirects old links to the maintained bilingual manuals.
 
-本页作为旧链接兼容入口；最新完整内容请阅读双语手册。
+本页用于兼容旧链接；最新内容请阅读双语用户手册。
 
-- 中文：[docs/zh/user-manual.md](zh/user-manual.md)
-- English: [docs/en/user-manual.md](en/user-manual.md)
+- [English User Manual](en/user-manual.md)
+- [中文用户手册](zh/user-manual.md)
+- [Command Reference / 命令索引](commands.md)
+- [Configuration / 配置说明](configuration.md)
+- [Troubleshooting / 故障排查](troubleshooting.md)
 
-The manuals cover installation, startup flags, all slash commands, model profiles, persisted sessions, context management, workspace hot switching, built-in tools, custom skills, version history, and troubleshooting.
+The manuals cover installation, startup flags, slash commands, config-first
+model profiles, API key management, model roles, persisted sessions, context
+management, workspace hot switching, workspace bookmarks, tools, custom skills,
+version history and troubleshooting.
 
-手册包含安装、启动参数、全部 Slash 命令、模型 profile、会话持久化、上下文管理、workspace 热切换、内置工具、自定义 skills、版本历史和排障说明。
+手册覆盖安装、启动参数、Slash 命令、配置优先的模型 profile、API Key 管理、模型角色、会话持久化、上下文管理、Workspace 热切换、Workspace 书签、工具、自定义 skills、版本历史和故障排查。
