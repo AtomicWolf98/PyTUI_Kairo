@@ -323,7 +323,7 @@ def hello_skill(name: str = "Kairo"):
 - `/keys`、`/key set|clear|reveal|migrate` 命令。
 - `/roles`、`/role set|clear` 命令。
 - `workspace_bookmarks` 与 `/workspace save|remove`、`/workspaces` 命令。
-- `/session search` 与 `/session open` 只读会话查询。
+- `/session search` 只读查询会话，`/session open` 按搜索索引或 session id 切换会话。
 - `/config export` 与 `/config import`，默认对 key 脱敏。
 - `/doctor` 健康检查面板。
 - 0.2.5 新功能的测试覆盖。

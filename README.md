@@ -41,7 +41,7 @@ Current version / 当前版本：**0.2.5-beta**
 - **本地配置优先的 key 管理**（0.2.5）：`/keys`、`/key set|clear|reveal|migrate` 管理 `config.json` 中的 inline key，默认掩码显示。
 - **模型角色**（0.2.5）：`/roles`、`/role set|clear` 将 `chat`、`plan`、`compress`、`fast` 任务路由到不同 profile。
 - **Workspace 书签**（0.2.5）：`/workspace save`、`/workspaces`、`/workspace move <name-or-path>`、`/workspace remove`。
-- **会话搜索**（0.2.5）：`/session search <keyword>` 与 `/session open <id-or-index>` 只读搜索会话。
+- **会话搜索**（0.2.5）：`/session search <keyword>` 只读搜索会话，`/session open <id-or-index>` 切换到匹配会话。
 - **配置导入/导出**（0.2.5）：`/config export`、`/config export --with-keys`、`/config import <path>`，默认脱敏。
 - **Doctor 健康面板**（0.2.5）：`/doctor` 检查配置、key、workspace、session、git 与 provider 连通性。
 - **运行时配置**（0.2.3）：使用 `/providers`、`/provider add|edit|remove|test`、`/model add|edit|remove|test`、`/settings` 以及 `/config validate|backup|restore` 增删改 provider/model 和备份恢复配置。

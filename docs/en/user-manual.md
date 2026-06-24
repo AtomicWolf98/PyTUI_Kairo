@@ -323,7 +323,7 @@ Added:
 - `/keys`, `/key set|clear|reveal|migrate` commands.
 - `/roles`, `/role set|clear` commands.
 - `workspace_bookmarks` and `/workspace save|remove`, `/workspaces` commands.
-- `/session search` and `/session open` read-only session lookup.
+- `/session search` read-only lookup and `/session open` switching by search index or session id.
 - `/config export` and `/config import` with key redaction.
 - `/doctor` health dashboard.
 - Expanded test coverage for 0.2.5 features.
