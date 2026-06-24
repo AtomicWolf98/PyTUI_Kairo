@@ -800,6 +800,14 @@ class DoctorModal(ModalScreen[None]):
             yield Static(text, id="doctor-content")
             yield Static("Press Esc or Enter to close", id="doctor-hint")
 
+    def add_checks(self, checks: List[Dict[str, Any]]) -> None:
+        """Append additional checks (e.g. async probe results) and refresh text."""
+        self.checks.extend(checks)
+        lines = [f"{'OK ' if c['ok'] else 'FAIL'} {c['name']}: {c['detail']}" for c in self.checks]
+        ok_count = sum(1 for c in self.checks if c["ok"])
+        text = f"Doctor ({ok_count}/{len(self.checks)} checks passed):\n" + "\n".join(lines)
+        self.query_one("#doctor-content", Static).update(text)
+
     def on_key(self, event: events.Key):
         if event.key in ("escape", "enter"):
             self.dismiss(None)

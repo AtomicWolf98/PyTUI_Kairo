@@ -819,11 +819,11 @@ class Config:
                 os.fsync(handle.fileno())
             os.replace(tmp_path, self.config_path)
         except Exception as exc:
-            print(f"[Error] Failed to save config to {self.config_path}: {exc}")
             try:
                 tmp_path.unlink(missing_ok=True)
             except Exception:
                 pass
+            raise RuntimeError(f"Failed to save config to {self.config_path}: {exc}") from exc
 
     def __repr__(self) -> str:
         return (

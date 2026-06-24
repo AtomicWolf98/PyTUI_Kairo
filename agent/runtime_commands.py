@@ -1077,16 +1077,25 @@ def handle_session_open(agent, raw: str, parts: List[str]) -> CommandResult:
 
 def handle_config_export(agent, raw: str, parts: List[str]) -> CommandResult:
     with_keys = len(parts) > 2 and "--with-keys" in parts[2]
+    dest_path: Optional[Path] = None
+    if len(parts) > 2:
+        candidate = parts[2].replace("--with-keys", "").strip()
+        if candidate:
+            dest_path = Path(candidate).expanduser()
     draft = ConfigDraft.from_config(agent.config)
     if with_keys:
         notice("WARNING: exported file will contain full API keys.")
         if not confirm("Export config with plaintext keys?", default=False):
             return CommandResult(handled=True, success=False, message="Export cancelled.")
     data = draft.export_config(with_keys=with_keys)
-    export_dir = Path(agent.config.config_path).parent / ".kairo" / "config_exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest = export_dir / f"config.export.{timestamp}.json"
+    if dest_path:
+        dest = dest_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        export_dir = Path(agent.config.config_path).parent / ".kairo" / "config_exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = export_dir / f"config.export.{timestamp}.json"
     try:
         tmp = dest.with_suffix(dest.suffix + ".tmp")
         with open(tmp, "w", encoding="utf-8") as handle:
@@ -1189,7 +1198,9 @@ def handle_doctor(agent, raw: str, parts: List[str]) -> CommandResult:
     checks.append({"name": "git available", "ok": git_ok, "detail": "git found" if git_ok else "git not found"})
 
     # Provider health probe (first profile only, non-blocking).
-    if profiles:
+    # The TUI runs this in a worker to avoid freezing the UI thread.
+    skip_probe = bool(agent.config.ui.get("_doctor_skip_probe", False))
+    if not skip_probe and profiles:
         p = profiles[0]
         try:
             result = test_connection(base_url=p.base_url, api_key=p.api_key, model=p.model)
@@ -1197,7 +1208,7 @@ def handle_doctor(agent, raw: str, parts: List[str]) -> CommandResult:
         except Exception as exc:
             checks.append({"name": "provider probe", "ok": False, "detail": f"probe failed: {exc}"})
     else:
-        checks.append({"name": "provider probe", "ok": False, "detail": "no profiles"})
+        checks.append({"name": "provider probe", "ok": False, "detail": "skipped" if skip_probe else "no profiles"})
 
     ok_count = sum(1 for c in checks if c["ok"])
     lines = [f"{'OK ' if c['ok'] else 'FAIL'} {c['name']}: {c['detail']}" for c in checks]
@@ -1206,7 +1217,36 @@ def handle_doctor(agent, raw: str, parts: List[str]) -> CommandResult:
         handled=True,
         success=ok_count == len(checks),
         message=message,
-        data={"kind": "doctor", "checks": checks},
+        data={"kind": "doctor", "checks": checks, "local_only": skip_probe},
+    )
+
+
+def run_doctor_probe(agent) -> CommandResult:
+    """Run the provider health probe portion of /doctor separately.
+
+    Used by the TUI so network IO does not block the UI thread.
+    """
+    from agent.profile_resolver import list_profiles
+    config = agent.config
+    profiles = list_profiles(config)
+    if not profiles:
+        return CommandResult(
+            handled=True,
+            success=False,
+            message="No profiles configured for probe.",
+            data={"kind": "doctor_probe", "checks": []},
+        )
+    p = profiles[0]
+    try:
+        result = test_connection(base_url=p.base_url, api_key=p.api_key, model=p.model)
+        check = {"name": "provider probe", "ok": result.ok, "detail": result.summary()}
+    except Exception as exc:
+        check = {"name": "provider probe", "ok": False, "detail": f"probe failed: {exc}"}
+    return CommandResult(
+        handled=True,
+        success=check["ok"],
+        message=f"{'OK ' if check['ok'] else 'FAIL'} {check['name']}: {check['detail']}",
+        data={"kind": "doctor_probe", "checks": [check]},
     )
 
 

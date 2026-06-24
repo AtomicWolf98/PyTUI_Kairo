@@ -48,6 +48,19 @@ def mask_key(key: str) -> str:
     return key[:2] + "..." + key[-4:]
 
 
+def is_masked_key(value: str) -> bool:
+    """Return True if *value* is a masked key preview and not a real key."""
+    value = str(value or "")
+    if not value or value in ("missing", "********"):
+        return True
+    # mask_key format: prefix + "..." + suffix
+    if "..." not in value:
+        return False
+    prefix, suffix = value.split("...", 1)
+    # length of mask_key output equals len(prefix) + 3 + len(suffix)
+    return len(prefix) == 2 and len(suffix) == 4
+
+
 def describe_key_source(key: str, source: str) -> str:
     """Human description of where a profile's API key came from."""
     source = source or "none"

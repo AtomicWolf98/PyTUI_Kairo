@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from agent.config import Config
-from agent.profile_resolver import mask_key
+from agent.profile_resolver import is_masked_key
 from agent.provider_registry import (
     get_model,
     get_provider,
@@ -882,11 +882,11 @@ class ConfigDraft:
             if data["llm"].get("profiles"):
                 for profile in data["llm"]["profiles"]:
                     if profile.get("api_key"):
-                        profile["api_key"] = mask_key(profile["api_key"])
+                        profile["api_key"] = ""
             else:
                 for provider in data["llm"].get("providers", []):
                     if provider.get("api_key"):
-                        provider["api_key"] = mask_key(provider["api_key"])
+                        provider["api_key"] = ""
         return data
 
     def import_config(self, path: str) -> ValidationReport:
@@ -908,6 +908,24 @@ class ConfigDraft:
 
         if not isinstance(data, dict):
             report.add_error("Import file must contain a JSON object.")
+            return report
+
+        # Refuse to import masked keys as real keys.
+        for profile in data.get("llm", {}).get("profiles", []):
+            key = str(profile.get("api_key", ""))
+            if key and is_masked_key(key):
+                report.add_error(
+                    f"Profile '{profile.get('id', '')}' contains a redacted key preview "
+                    f"({key}) from an export; cannot import. Use --with-keys export or clear the key."
+                )
+        for provider in data.get("llm", {}).get("providers", []):
+            key = str(provider.get("api_key", ""))
+            if key and is_masked_key(key):
+                report.add_error(
+                    f"Provider '{provider.get('name', '')}' contains a redacted key preview "
+                    f"({key}) from an export; cannot import. Use --with-keys export or clear the key."
+                )
+        if not report.ok:
             return report
 
         # Apply known fields into the draft.

@@ -1193,7 +1193,7 @@ class KairoApp(App):
             return True
 
         if command == "/config" and sub in ("validate", "backup", "restore", "export", "import"):
-            return await self._route_config_subcommand(sub)
+            return await self._route_config_subcommand(stripped, sub)
 
         if command == "/key" and sub in ("set", "clear", "reveal", "migrate"):
             return await self._route_key_subcommand(stripped, sub)
@@ -1765,8 +1765,9 @@ class KairoApp(App):
 
     # ---- config modal routing (0.2.4) -------------------------------------------
 
-    async def _route_config_subcommand(self, sub: str) -> bool:
+    async def _route_config_subcommand(self, raw: str, sub: str) -> bool:
         from agent.config import Config as _Config
+        stripped = raw.strip()
         if sub == "validate":
             from agent.config_editor import ConfigDraft
             report = ConfigDraft.from_config(self.config).validate()
@@ -1792,17 +1793,26 @@ class KairoApp(App):
             )
             return True
         if sub == "export":
-            self.push_screen(
-                ConfirmModal("Export config WITH plaintext keys?", default=False),
-                self._config_export_confirmed,
-            )
+            # Bare /config export exports redacted immediately.
+            # /config export --with-keys asks for confirmation.
+            with_keys = stripped.endswith("--with-keys")
+            if with_keys:
+                self.push_screen(
+                    ConfirmModal("Export config WITH plaintext keys?", default=False),
+                    self._config_export_with_keys_confirmed,
+                )
+            else:
+                self._config_export_with_keys_confirmed(False)
             return True
         if sub == "import":
             self.push_screen(TextPromptModal("Config import path"), self._config_import_done)
             return True
         return False
 
-    def _config_export_confirmed(self, with_keys: bool):
+    def _config_export_with_keys_confirmed(self, with_keys: bool):
+        if with_keys is None:
+            # Modal was dismissed without choice (rare); treat as redacted export.
+            with_keys = False
         from agent.config_editor import ConfigDraft
         from datetime import datetime
         import json, os
@@ -1819,9 +1829,11 @@ class KairoApp(App):
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, dest)
-            self.post_message(AgentEvent("notice", f"Config exported to:\n{dest}"))
+            msg = "Config exported" if not with_keys else "Config exported WITH plaintext keys"
+            self.post_message(AgentEvent("notice", f"{msg} to:\n{dest}"))
         except Exception as exc:
             self.post_message(AgentEvent("error", f"Export failed: {exc}"))
+        self._restore_focus()
         self._restore_focus()
 
     def _config_import_done(self, path: str):
@@ -2528,9 +2540,29 @@ class KairoApp(App):
         self._restore_focus()
 
     def _handle_doctor_notice(self):
-        from agent.runtime_commands import handle_doctor
+        from agent.runtime_commands import handle_doctor, run_doctor_probe
+        # Run local checks on UI thread (fast), then probe in worker.
         result = handle_doctor(self.agent, "", [])
-        self.push_screen(DoctorModal(result.data.get("checks", [])), None)
+        checks = list(result.data.get("checks", []))
+        self.push_screen(DoctorModal(checks), None)
+        if result.data.get("local_only"):
+            self.run_worker(
+                lambda: self._run_doctor_probe_worker(run_doctor_probe),
+                thread=True, exclusive=True, group="doctor-probe",
+            )
+
+    def _run_doctor_probe_worker(self, probe_fn):
+        result = probe_fn(self.agent)
+        self.call_from_thread(self._doctor_probe_done, result)
+
+    def _doctor_probe_done(self, result):
+        checks = result.data.get("checks", [])
+        if checks:
+            existing = self.screen.query(DoctorModal)
+            for modal in existing:
+                modal.add_checks(checks)
+                return
+            self.push_screen(DoctorModal(checks), None)
 
     # ---- settings screen --------------------------------------------------------
 

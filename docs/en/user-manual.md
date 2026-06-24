@@ -479,7 +479,7 @@ Kairo can create, edit, and remove model profiles while the TUI is running, with
 - `/key set <profile-id> [value]` — set an inline key; prompts securely if no value is given.
 - `/key clear <profile-id>` — remove the inline key from the profile.
 - `/key reveal` — show the active profile's key after confirmation.
-- `/key migrate [env-name]` — move the active profile's inline key to an environment variable and update `api_key_env`.
+- `/key migrate` — migrate inline API keys from legacy `llm.providers[]` into the matching profile keys in `llm.profiles[]` (one-time upgrade from 0.2.4 configs).
 - `/roles` — show current role bindings.
 - `/role set <role> <profile-id>` — bind chat/plan/compress/fast to a profile.
 - `/role clear <role>` — remove a binding.
@@ -525,7 +525,7 @@ The result is equivalent to editing `config.json` manually, but with validation,
 - `/session export` — export the current session as Markdown or JSON to `<storage_dir>/exports/`.
 - `/session reveal` — print the absolute path of the current session file.
 - `/session search <keyword>` — search saved sessions by title or content (read-only).
-- `/session open <id-or-index>` — open a saved session read-only without switching to it.
+- `/session open <id-or-index>` — switch to a saved session found by search index or session id.
 
 ## 9. What’s New in 0.2.5
 
@@ -533,7 +533,7 @@ The result is equivalent to editing `config.json` manually, but with validation,
 - Local config-first key management: `/keys`, `/key set|clear|reveal|migrate` with mask-by-default safety.
 - Model roles: `chat`, `plan`, `compress`, `fast` routing via `/role set` and `llm.model_roles`.
 - Workspace bookmarks: `/workspace save`, `/workspaces`, `/workspace move <name>`, `/workspace remove`.
-- Session search and read-only open: `/session search`, `/session open`.
+- Session search and switch: `/session search`, `/session open`.
 - Config import/export with redaction by default and `--with-keys` confirmation.
 - `/doctor` health dashboard.
 - Updated configuration docs, user manuals, and expanded tests.

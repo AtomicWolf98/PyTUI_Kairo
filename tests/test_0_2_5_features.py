@@ -288,7 +288,7 @@ class TestConfigDraftProfiles(unittest.TestCase):
     def test_export_redacts_keys(self):
         draft = ConfigDraft.from_config(self.config)
         data = draft.export_config(with_keys=False)
-        self.assertEqual(data["llm"]["profiles"][0]["api_key"], mask_key("secret1"))
+        self.assertEqual(data["llm"]["profiles"][0]["api_key"], "")
 
     def test_export_with_keys(self):
         draft = ConfigDraft.from_config(self.config)
@@ -383,7 +383,19 @@ class TestRuntimeCommands025(unittest.TestCase):
         self.assertTrue(export_path.exists())
         with open(export_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        self.assertEqual(data["llm"]["profiles"][0]["api_key"], mask_key("secret1"))
+        self.assertEqual(data["llm"]["profiles"][0]["api_key"], "")
+
+    def test_config_export_refuses_import_redacted(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            export_path = Path(f.name)
+            json.dump({"llm": {"profiles": [{"id": "p/m", "base_url": "https://p.example.com/v1", "api_key": mask_key("secret1"), "model": "m"}]}}, f)
+        try:
+            draft = ConfigDraft.from_config(self.agent.config)
+            report = draft.import_config(str(export_path))
+            self.assertFalse(report.ok)
+        finally:
+            export_path.unlink(missing_ok=True)
 
     @patch("agent.runtime_commands.test_connection")
     def test_doctor_does_not_leak_keys(self, mock_test):
