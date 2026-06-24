@@ -2542,14 +2542,13 @@ class KairoApp(App):
     def _handle_doctor_notice(self):
         from agent.runtime_commands import handle_doctor, run_doctor_probe
         # Run local checks on UI thread (fast), then probe in worker.
-        result = handle_doctor(self.agent, "", [])
+        result = handle_doctor(self.agent, "", [], local_only=True)
         checks = list(result.data.get("checks", []))
         self.push_screen(DoctorModal(checks), None)
-        if result.data.get("local_only"):
-            self.run_worker(
-                lambda: self._run_doctor_probe_worker(run_doctor_probe),
-                thread=True, exclusive=True, group="doctor-probe",
-            )
+        self.run_worker(
+            lambda: self._run_doctor_probe_worker(run_doctor_probe),
+            thread=True, exclusive=True, group="doctor-probe",
+        )
 
     def _run_doctor_probe_worker(self, probe_fn):
         result = probe_fn(self.agent)

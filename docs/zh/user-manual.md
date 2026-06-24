@@ -127,7 +127,7 @@ Kairo 有两种界面：
 | `/new [名称]` | 创建并切换到新持久化会话 | `/new Refactor auth` |
 | `/sessions` | 切换已保存会话 | `/sessions` |
 | `/session search` | 只读搜索已保存会话 | `/session search auth` |
-| `/session open` | 只读打开某个会话 | `/session open 3` |
+| `/session open` | 按搜索索引或 id 切换到指定会话 | `/session open 3` |
 | `/clear` | 清空当前会话，不删除会话文件 | `/clear` |
 | `/undo` | 撤销当前会话最近一轮用户输入及后续回复 | `/undo` |
 | `/compress` | 手动压缩较早上下文，保留近期轮次 | `/compress` |

@@ -22,7 +22,7 @@ Current version / 当前版本：**0.2.5-beta**
 - **Local config-first key management** (0.2.5): `/keys`, `/key set|clear|reveal|migrate` manage inline keys in `config.json` with mask-by-default safety.
 - **Model roles** (0.2.5): `/roles`, `/role set|clear` route `chat`, `plan`, `compress`, `fast` tasks to different profiles.
 - **Workspace bookmarks** (0.2.5): `/workspace save`, `/workspaces`, `/workspace move <name-or-path>`, `/workspace remove`.
-- **Session search** (0.2.5): `/session search <keyword>` and `/session open <id-or-index>` find sessions read-only.
+- **Session search** (0.2.5): `/session search <keyword>` finds sessions read-only; `/session open <id-or-index>` switches to the found session.
 - **Config import/export** (0.2.5): `/config export`, `/config export --with-keys`, `/config import <path>` with redaction by default.
 - **Doctor health dashboard** (0.2.5): `/doctor` checks config, keys, workspace, sessions, git and provider reachability.
 - **Runtime configuration** (0.2.3): add/edit/remove providers and models with `/providers`, `/provider add|edit|remove|test`, `/model add|edit|remove|test`, `/settings`, and validate/backup/restore with `/config validate|backup|restore`.

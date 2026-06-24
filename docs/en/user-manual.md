@@ -127,7 +127,7 @@ Type `/` to open the command palette. Keep typing to filter by prefix. Use `Up/D
 | `/new [name]` | Create and switch to a new persisted session | `/new Refactor auth` |
 | `/sessions` | Switch saved sessions | `/sessions` |
 | `/session search` | Search saved sessions read-only | `/session search auth` |
-| `/session open` | Open a saved session read-only | `/session open 3` |
+| `/session open` | Switch to a saved session found by search index or id | `/session open 3` |
 | `/clear` | Clear the current session without deleting its file | `/clear` |
 | `/undo` | Undo the latest user turn and following response | `/undo` |
 | `/compress` | Manually compress older context | `/compress` |

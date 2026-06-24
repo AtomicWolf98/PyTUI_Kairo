@@ -1147,7 +1147,7 @@ def handle_config_import(agent, raw: str, parts: List[str]) -> CommandResult:
 # ---- Doctor -------------------------------------------------------------------
 
 
-def handle_doctor(agent, raw: str, parts: List[str]) -> CommandResult:
+def handle_doctor(agent, raw: str, parts: List[str], *, local_only: bool = False) -> CommandResult:
     from pathlib import Path
     from agent.profile_resolver import list_profiles
 
@@ -1197,9 +1197,9 @@ def handle_doctor(agent, raw: str, parts: List[str]) -> CommandResult:
     git_ok = shutil.which("git") is not None
     checks.append({"name": "git available", "ok": git_ok, "detail": "git found" if git_ok else "git not found"})
 
-    # Provider health probe (first profile only, non-blocking).
-    # The TUI runs this in a worker to avoid freezing the UI thread.
-    skip_probe = bool(agent.config.ui.get("_doctor_skip_probe", False))
+    # Provider health probe (first profile only).
+    # The TUI runs this in a worker via run_doctor_probe() to avoid freezing the UI thread.
+    skip_probe = local_only
     if not skip_probe and profiles:
         p = profiles[0]
         try:
