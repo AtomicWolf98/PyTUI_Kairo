@@ -503,6 +503,7 @@ class KairoApp(App):
         self.registry.set_output_callback(lambda chunk: self.emit_from_worker("tool_output", chunk))
         self.busy = False
         self.current_state = "idle"
+        self.current_cancel_token = None  # 0.2.6-beta: Esc stop generation
         self.input_history: List[str] = []
         self.history_index = 0
         self.command_matches: List[str] = []
@@ -838,20 +839,60 @@ class KairoApp(App):
 
     @work(thread=True, exclusive=True, group="agent")
     def run_agent(self, text: str):
+        # 0.2.6-beta: create a fresh cancel token for this interaction so Esc
+        # can cooperatively stop streaming/tool execution.
+        from agent.cancellation import CancellationToken
+
+        token = CancellationToken()
+        self.current_cancel_token = token
         try:
             self.agent.run_interaction_events(
                 text,
                 self.emit_from_worker,
                 approve=self._choice_blocking,
                 request_text=self._text_prompt_blocking,
+                cancel_token=token,
             )
         finally:
             self.call_from_thread(self._worker_finished)
 
+    def request_stop_current_task(self) -> None:
+        """Cooperatively stop the current generation (bound to Esc while busy)."""
+        token = self.current_cancel_token
+        if token is None or not self.busy:
+            return
+        token.cancel()
+        self.set_kai_state("stopping")
+        try:
+            self.main_query("#conversation", ConversationView).add_notice(
+                Text("Stopping…", style="#f6c177")
+            )
+        except Exception:
+            pass
+
+    def on_key(self, event: events.Key) -> None:
+        # 0.2.6-beta: Esc stops the current generation when busy and no
+        # modal/palette is consuming the key. Modals are separate screens and
+        # intercept Esc before it reaches here; the composer only consumes Esc
+        # to close its command palette.
+        if (
+            event.key == "escape"
+            and self.busy
+            and self.current_cancel_token is not None
+            and self.config.ui.get("esc_stops_generation", True)
+        ):
+            composer = self.main_query("#composer", Composer)
+            if getattr(composer, "palette_open", False):
+                return
+            event.prevent_default()
+            event.stop()
+            self.request_stop_current_task()
+
     def _worker_finished(self):
         self._flush_deltas()
         self.busy = False
-        if self.current_state not in ("error", "success"):
+        self.current_cancel_token = None
+        if self.current_state not in ("error", "success", "stopped"):
             self.set_kai_state("idle")
         self.refresh_dock()
         self.main_query("#composer", Composer).focus()
@@ -1144,19 +1185,20 @@ class KairoApp(App):
         if choice is None or choice < 0 or choice >= len(profiles):
             return
         selected_profile = profiles[choice]
-        if self.config.llm.get("profiles"):
-            self.config.apply_profile(selected_profile)
-        else:
-            self.config.apply_model_profile(selected_profile)
-        self.agent.conversations.set_context_window(self.config.context_window)
-        self.agent.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
-        self.agent.conversations.save_all(reason="model_switch")
-        self.config.save()
-        self.main_query("#brand-header", BrandHeader).update_meta(
-            self.config.model, self.config.active_model_profile, str(self.workspace_context.root)
-        )
-        self.post_message(AgentEvent("model_selected", profiles[choice]))
-        self.refresh_dock()
+        # 0.2.6-beta: route through the unified switch transaction so Config,
+        # ConversationManager, sessions and the resolved chat profile all stay
+        # consistent (including the model_roles.chat override case).
+        switch = self.agent.switch_model_profile(selected_profile, source="tui")
+        style = "#8bd5ca" if switch.success else "#ed8796"
+        if switch.message:
+            self.post_message(AgentEvent("notice" if switch.success else "error", Text(switch.message, style=style)))
+        if switch.success:
+            self.main_query("#brand-header", BrandHeader).update_meta(
+                self.config.model, self.config.active_model_profile, str(self.workspace_context.root)
+            )
+            self.post_message(AgentEvent("model_selected", switch.data.get("profile_id") or selected_profile))
+            self.post_message(AgentEvent("context_updated", None))
+            self.refresh_dock()
 
     # ---- 0.2.3 runtime-config modal routing ------------------------------------
 
@@ -1339,12 +1381,10 @@ class KairoApp(App):
             self._restore_focus()
             return
         draft.set_active_model(values["name"], f"{values['name']}-default")
-        allowed_inline = [values["name"]] if api_key else None
         report = draft.apply_to(
             self.config,
             backup=True,
             allow_inline_key=bool(api_key),
-            allowed_inline_providers=allowed_inline,
         )
         msg = report.to_text() if not report.ok else f"Provider '{values['name']}' added. Active target: {self.config.active_model_profile}"
         self.post_message(AgentEvent("notice" if report.ok else "error", msg))
@@ -1410,37 +1450,44 @@ class KairoApp(App):
         if not values:
             self._restore_focus()
             return
-        from agent.config_editor import ConfigDraft
+        from agent.config_editor import ConfigDraft, KEY_CLEAR
         draft = ConfigDraft.from_config(self.config)
         api_key = values.get("api_key") or ""
         api_key_env = values.get("api_key_env") or ""
+        clear_key = bool(values.get("clear_key"))
+        # 0.2.6-beta: blank keeps existing; explicit clear uses the sentinel.
+        if clear_key:
+            api_key_arg = KEY_CLEAR
+        else:
+            api_key_arg = api_key  # "" -> keep existing, non-empty -> replace
         draft.update_provider(
             original_name,
             base_url=values["base_url"],
-            api_key=api_key,
+            api_key=api_key_arg,
             api_key_env=api_key_env,
             rename=(values["name"] or None),
         )
-        allow_inline = bool(api_key)
-        if allow_inline:
+        # Only a newly entered (non-empty) inline key needs the safety confirm.
+        if api_key and not clear_key:
             self.push_screen(
                 SecretConfirmModal("Save inline API key to config.json? Env names are recommended."),
-                lambda approved: self._provider_edit_commit(draft, approved, values.get("name") or original_name),
+                lambda approved: self._provider_edit_commit(draft, approved),
             )
             return
-        self._provider_edit_commit(draft, True, "")
+        self._provider_edit_commit(draft, True)
 
-    def _provider_edit_commit(self, draft, approved, inline_provider_name: str = ""):
+    def _provider_edit_commit(self, draft, approved):
         if not approved:
             self.post_message(AgentEvent("notice", "Inline key not authorized; edit cancelled."))
             self._restore_focus()
             return
-        allowed_inline = [inline_provider_name] if inline_provider_name else None
+        # 0.2.6-beta: allow_inline_key only gates *new* inline keys; existing
+        # keys are preserved by the draft, so a keep/clear edit never strips
+        # other providers' keys.
         report = draft.apply_to(
             self.config,
             backup=True,
-            allow_inline_key=bool(allowed_inline),
-            allowed_inline_providers=allowed_inline,
+            allow_inline_key=bool(approved),
         )
         msg = report.to_text() if not report.ok else "Provider updated."
         self.post_message(AgentEvent("notice" if report.ok else "error", msg))
@@ -2631,7 +2678,11 @@ class KairoApp(App):
 
     @work(thread=True, exclusive=True, group="agent")
     def run_compression(self):
-        success, message = self.agent.compress_context(manual=True)
+        from agent.cancellation import CancellationToken
+
+        token = CancellationToken()
+        self.current_cancel_token = token
+        success, message = self.agent.compress_context(manual=True, cancel_token=token)
         self.emit_from_worker("notice" if success else "error", message)
         self.emit_from_worker("state", "success" if success else "error")
         self.call_from_thread(self._worker_finished)

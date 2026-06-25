@@ -7,7 +7,7 @@ from textual import events
 from textual.containers import Horizontal, ScrollableContainer, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, ListItem, ListView, Markdown, ProgressBar, Static, TextArea, Tree
+from textual.widgets import Checkbox, Input, Label, ListItem, ListView, Markdown, ProgressBar, Static, TextArea, Tree
 
 from agent.ui.mascot import KaiMascot
 from agent.workspace import WorkspaceSnapshot
@@ -312,7 +312,7 @@ class BrandHeader(Horizontal):
         yield KaiMascot(id="header-kai", reduced_motion=self.reduced_motion)
         yield Static(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.5[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.6[/#7f849c]\n"
                 f"[#a5adcb]{self.profile or self.model}[/#a5adcb]  [#6e738d]({self.model})[/#6e738d]\n"
                 f"[#7f849c]{self.cwd}[/#7f849c]"
             ),
@@ -323,7 +323,7 @@ class BrandHeader(Horizontal):
         self.model, self.profile, self.cwd = model, profile, cwd
         self.query_one("#brand-meta", Static).update(
             Text.from_markup(
-                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.5[/#7f849c]\n"
+                f"[bold #f5f7fa]KAIRO[/bold #f5f7fa] [#7f849c]v0.2.6[/#7f849c]\n"
                 f"[#a5adcb]{profile or model}[/#a5adcb]  [#6e738d]({model})[/#6e738d]\n"
                 f"[#7f849c]{cwd}[/#7f849c]"
             )
@@ -857,7 +857,12 @@ class ProviderListModal(ModalScreen[Optional[Dict]]):
 
 
 class ProviderEditorModal(ModalScreen[Optional[Dict]]):
-    """Form to add or edit a provider. Dismisses with a values dict or None."""
+    """Form to add or edit a provider. Dismisses with a values dict or None.
+
+    0.2.6-beta: the API key input is never pre-filled with the existing secret.
+    Leaving it blank keeps the existing key; checking "Clear stored key"
+    explicitly clears it.
+    """
 
     def __init__(self, *, title: str, defaults: Optional[Dict[str, Any]] = None):
         super().__init__()
@@ -873,8 +878,14 @@ class ProviderEditorModal(ModalScreen[Optional[Dict]]):
             yield Input(value=str(self.defaults.get("base_url", "")), id="pe-base-url")
             yield Label("API Key env name (blank to skip)")
             yield Input(value=str(self.defaults.get("api_key_env", "")), id="pe-env")
-            yield Label("API Key value (blank to keep env only)")
-            yield Input(value=str(self.defaults.get("api_key", "")), password=True, id="pe-key")
+            yield Label("API Key value (leave blank to keep existing key)")
+            yield Input(
+                value="",
+                placeholder="leave blank to keep existing key",
+                password=True,
+                id="pe-key",
+            )
+            yield Checkbox("Clear stored API key", id="pe-clear-key")
             with Horizontal(id="pe-actions"):
                 yield Static("Enter to save · Esc to cancel", id="pe-hint")
 
@@ -890,6 +901,7 @@ class ProviderEditorModal(ModalScreen[Optional[Dict]]):
             "base_url": self.query_one("#pe-base-url", Input).value.strip(),
             "api_key_env": self.query_one("#pe-env", Input).value.strip(),
             "api_key": self.query_one("#pe-key", Input).value,
+            "clear_key": self.query_one("#pe-clear-key", Checkbox).value,
         }
         self.dismiss(values)
 

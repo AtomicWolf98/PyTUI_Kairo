@@ -1,6 +1,6 @@
 # Kairo 完整用户手册
 
-版本：**0.2.5**
+版本：**0.2.6-beta**
 
 Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
 
@@ -149,13 +149,13 @@ Kairo 有两种界面：
 | `Ctrl+A` | 循环切换 `manual -> auto -> yolo` |
 | `Ctrl+P` | 开关 Plan Mode |
 | `Ctrl+T` | 开关 Thinking Mode |
-| `Esc` | 关闭命令菜单或弹窗 |
+| `Esc` | 关闭命令菜单或弹窗；忙时（流式输出/工具运行中）停止当前输出（0.2.6） |
 
 输入栏会随着文本行数或软换行自动增高，最多显示 8 行；更长内容可继续滚动编辑。
 
 ## 6. 模型 Profile
 
-0.2.5 起 Kairo 从 `config.json` 的 `llm.profiles[]` 读取可选 profile；旧版 `llm.providers[].models[]` 仍兼容。使用 `/model` 打开选择菜单。切换后：
+0.2.5 起 Kairo 从 `config.json` 的 `llm.profiles[]` 读取可选 profile；旧版 `llm.providers[].models[]` 仍兼容。使用 `/model` 打开选择菜单。0.2.6 起 `/model` 是单一事务，切换的是 **chat profile**：会保持 `llm.active_profile` 与 `model_roles.chat` 一致，并同步 context window、runtime state 与所有 session，下一次 chat 请求必定使用新 profile。切换后：
 
 - 当前模型、base URL、temperature、max tokens、context window 立即更新。
 - Dock 的上下文限制立即重新计算。
@@ -323,7 +323,7 @@ def hello_skill(name: str = "Kairo"):
 - `/keys`、`/key set|clear|reveal|migrate` 命令。
 - `/roles`、`/role set|clear` 命令。
 - `workspace_bookmarks` 与 `/workspace save|remove`、`/workspaces` 命令。
-- `/session search` 只读查询会话，`/session open` 按搜索索引或 session id 切换会话。
+- `/session search` 与 `/session open` 只读会话查询。
 - `/config export` 与 `/config import`，默认对 key 脱敏。
 - `/doctor` 健康检查面板。
 - 0.2.5 新功能的测试覆盖。
@@ -527,7 +527,14 @@ Kairo 的运行时配置不是直接让用户手改 JSON，而是通过一条安
 - `/session search <keyword>`：按标题或内容只读搜索已保存 session。
 - `/session open <id-or-index>`：按搜索索引或 session id 切换到指定 session。
 
-## 9. 0.2.5 更新内容
+## 9. 0.2.6-beta 更新内容
+
+- **统一 `/model` 切换**：`/model` 以单一事务切换 chat profile，保持 `model_roles.chat`、`active_profile`、context window 与 session 一致，下一次 chat 请求必定使用新 profile。
+- **Provider key 保留**：编辑某个 provider 不再清空其它 provider 的 inline key。留空保留原 key；显式 clear 只清空目标。
+- **严格消息打包**：所有 LLM 请求 payload 折叠为唯一首位 `system` 消息，兼容严格 OpenAI-compatible provider（`llm.strict_message_packing`，默认 `true`）。
+- **Esc 停止输出**：Textual 模式下流式输出/工具运行中按 `Esc` 协作停止当前输出，partial 回复以 `[stopped]` 标记保存；plain 模式仍使用 `Ctrl+C`。
+
+## 10. 0.2.5 更新内容
 
 - Profile-first 配置：`llm.profiles[]`，并自动兼容旧版 `llm.providers[]`。
 - 本地配置优先的 key 管理：`/keys`、`/key set|clear|reveal|migrate`，默认掩码显示。

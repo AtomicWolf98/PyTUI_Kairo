@@ -1,6 +1,7 @@
 {
   "llm": {
     "active_profile": "minimax/MiniMax-M3",
+    "strict_message_packing": true,
     "defaults": {
       "temperature": 0.2,
       "max_tokens": 4000,
@@ -86,7 +87,9 @@
     "workspace_enabled": true,
     "workspace_refresh_seconds": 2.0,
     "workspace_max_files": 2000,
-    "workspace_diff_max_bytes": 204800
+    "workspace_diff_max_bytes": 204800,
+    "esc_stops_generation": true,
+    "stop_saves_partial_response": true
   },
   "policy": {
     "workspace_path": {

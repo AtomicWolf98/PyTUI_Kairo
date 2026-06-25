@@ -1,6 +1,6 @@
 # Kairo Complete User Manual
 
-Version: **0.2.5**
+Version: **0.2.6-beta**
 
 Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, custom skills, and runtime provider/model configuration.
 
@@ -149,13 +149,13 @@ Type `/` to open the command palette. Keep typing to filter by prefix. Use `Up/D
 | `Ctrl+A` | Cycle `manual -> auto -> yolo` |
 | `Ctrl+P` | Toggle Plan Mode |
 | `Ctrl+T` | Toggle Thinking Mode |
-| `Esc` | Close menus or modals |
+| `Esc` | Close menus or modals; while busy (streaming/running tools), stop the current generation (0.2.6) |
 
 The composer grows with physical and soft-wrapped lines up to 8 visible lines.
 
 ## 6. Model Profiles
 
-Kairo reads selectable model profiles from `config.json` under `llm.profiles[]` (0.2.5) or legacy `llm.providers[].models[]`. Use `/model` to choose one. After switching:
+Kairo reads selectable model profiles from `config.json` under `llm.profiles[]` (0.2.5) or legacy `llm.providers[].models[]`. Use `/model` to choose one. Since 0.2.6 `/model` is a single transaction that switches the **chat profile**: it keeps `llm.active_profile` and `model_roles.chat` consistent and syncs the context window, runtime state and all sessions, so the next chat request is guaranteed to use the selected profile. After switching:
 
 - model, base URL, temperature, max tokens, and context window update immediately;
 - the Dock recalculates the context limit;
@@ -176,12 +176,12 @@ Kairo reads selectable model profiles from `config.json` under `llm.profiles[]` 
 
 Roles:
 
-- `chat` — default user-facing chat.
+- `chat` — default user-facing chat. Updated by `/model` when configured.
 - `plan` — plan/thinking mode.
 - `compress` — context compression summaries.
 - `fast` — quick internal tasks.
 
-Use `/role set <role> <profile>` to bind a role and `/role clear <role>` to unbind. If a role is unbound, the active profile is used.
+Use `/role set <role> <profile>` to bind a role and `/role clear <role>` to unbind. If a role is unbound, the active profile is used. `/model` only affects the `chat` route; `plan`/`compress`/`fast` are not changed.
 
 ## 7. Persisted Sessions
 
@@ -323,7 +323,7 @@ Added:
 - `/keys`, `/key set|clear|reveal|migrate` commands.
 - `/roles`, `/role set|clear` commands.
 - `workspace_bookmarks` and `/workspace save|remove`, `/workspaces` commands.
-- `/session search` read-only lookup and `/session open` switching by search index or session id.
+- `/session search` and `/session open` read-only session lookup.
 - `/config export` and `/config import` with key redaction.
 - `/doctor` health dashboard.
 - Expanded test coverage for 0.2.5 features.
@@ -527,7 +527,14 @@ The result is equivalent to editing `config.json` manually, but with validation,
 - `/session search <keyword>` — search saved sessions by title or content (read-only).
 - `/session open <id-or-index>` — switch to a saved session found by search index or session id.
 
-## 9. What’s New in 0.2.5
+## 9. What’s New in 0.2.6-beta
+
+- **Unified `/model` switch**: `/model` now switches the chat profile through a single transaction that keeps `model_roles.chat`, `active_profile`, context window and sessions consistent — the next chat request actually uses the selected profile.
+- **Provider key preservation**: editing one provider no longer clears other providers' inline API keys. Blank key input keeps the existing key; explicit clear only clears the target.
+- **Strict message packing**: all LLM request payloads are folded into a single leading `system` message for strict OpenAI-compatible providers (`llm.strict_message_packing`, default `true`).
+- **Esc stop generation**: in the Textual UI, press `Esc` while streaming or running tools to cooperatively stop the current output; the partial reply is saved with a `[stopped]` marker. Plain mode still uses `Ctrl+C`.
+
+## 10. What’s New in 0.2.5
 
 - Profile-first config: `llm.profiles[]` with legacy `llm.providers[]` automatic migration.
 - Local config-first key management: `/keys`, `/key set|clear|reveal|migrate` with mask-by-default safety.

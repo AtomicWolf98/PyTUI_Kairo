@@ -285,6 +285,7 @@ def build_help_markdown() -> str:
     lines.append("- `Ctrl+A` : Cycle authorization level (Manual → Auto → YOLO)")
     lines.append("- `Ctrl+P` : Toggle Plan Mode")
     lines.append("- `Ctrl+T` : Toggle Thinking Mode")
+    lines.append("- `Esc` : Stop the current generation (Textual mode, 0.2.6)")
     lines.append("")
     return "\n".join(lines)
 
@@ -626,6 +627,8 @@ class CommandDispatcher:
 
     def _handle_model(self, _raw: str, _parts: List[str]) -> CommandResult:
         cfg = self.agent.config
+        from agent.profile_resolver import get_active_profile
+
         if cfg.llm.get("profiles"):
             profiles = cfg.get_profile_ids()
             if not profiles:
@@ -634,15 +637,24 @@ class CommandDispatcher:
                     success=False,
                     message="No profiles configured.",
                 )
-            default_idx = 0
-            active_id = cfg.llm.get("active_profile") or cfg.active_model_profile
-            if active_id in profiles:
-                default_idx = profiles.index(active_id)
+            # 0.2.6-beta: default index follows the *resolved* chat profile so
+            # the menu highlights the profile that the next request will use,
+            # even when model_roles.chat overrides llm.active_profile.
+            resolved = get_active_profile(cfg)
+            active_id = (resolved.id if resolved else "") or cfg.llm.get("active_profile") or cfg.active_model_profile
+            default_idx = profiles.index(active_id) if active_id in profiles else 0
+            role_override = bool(cfg.model_roles.get("chat"))
             return CommandResult(
                 handled=True,
                 success=True,
                 interactive=True,
-                data={"kind": "model", "profiles": profiles, "default_index": default_idx, "mode": "profile"},
+                data={
+                    "kind": "model",
+                    "profiles": profiles,
+                    "default_index": default_idx,
+                    "mode": "profile",
+                    "role_override": role_override,
+                },
             )
         profiles = cfg.get_model_profile_names()
         if not profiles:
@@ -651,14 +663,21 @@ class CommandDispatcher:
                 success=False,
                 message="No model profiles configured.",
             )
-        default_idx = 0
-        if cfg.active_model_profile in profiles:
-            default_idx = profiles.index(cfg.active_model_profile)
+        resolved = get_active_profile(cfg)
+        active_label = (resolved.label if resolved and resolved.label else "") or cfg.active_model_profile
+        default_idx = profiles.index(active_label) if active_label in profiles else 0
+        role_override = bool(cfg.model_roles.get("chat"))
         return CommandResult(
             handled=True,
             success=True,
             interactive=True,
-            data={"kind": "model", "profiles": profiles, "default_index": default_idx, "mode": "legacy"},
+            data={
+                "kind": "model",
+                "profiles": profiles,
+                "default_index": default_idx,
+                "mode": "legacy",
+                "role_override": role_override,
+            },
         )
 
     def _handle_compress(self, _raw: str, _parts: List[str]) -> CommandResult:

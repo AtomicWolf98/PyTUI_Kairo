@@ -32,6 +32,20 @@ VALIDATION_WARNING = "warning"
 VALIDATION_ERROR = "error"
 
 
+class _ClearKeySentinel:
+    """Sentinel passed to ``update_profile``/``update_provider`` to explicitly
+    clear an inline API key. Distinct from ``None`` (leave untouched) and from
+    an empty string (blank input => keep the existing key)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<KEY_CLEAR>"
+
+
+KEY_CLEAR = _ClearKeySentinel()
+
+
 @dataclass
 class ValidationReport:
     """Structured output of :meth:`ConfigDraft.validate`."""
@@ -87,6 +101,17 @@ class ConfigDraft:
         self.model_roles: Dict[str, str] = copy.deepcopy(getattr(source, "model_roles", {}))
         self.workspace_bookmarks: List[Dict[str, str]] = copy.deepcopy(getattr(source, "workspace_bookmarks", []))
         self.extra_fields: Dict[str, Any] = copy.deepcopy(source._extra_fields)
+        self._tag_original_keys()
+
+    def _tag_original_keys(self) -> None:
+        """Record each provider/profile's original inline key so we can tell
+        'keep existing' from 'new key' when applying. 0.2.6-beta: this is the
+        basis for refusing only *new* inline keys while preserving existing ones
+        when a provider is edited."""
+        for provider in self.llm.get("providers", []):
+            provider["_original_api_key"] = str(provider.get("api_key", ""))
+        for profile in self.llm.get("profiles", []):
+            profile["_original_api_key"] = str(profile.get("api_key", ""))
 
     # ---- snapshot ----------------------------------------------------------------
 
@@ -207,8 +232,14 @@ class ConfigDraft:
             profile["provider"] = provider.strip()
         if base_url is not None:
             profile["base_url"] = base_url.strip()
-        if api_key is not None:
+        if api_key is KEY_CLEAR:
+            # Explicit clear: remove the inline key.
+            profile["api_key"] = ""
+            profile["_api_key_source"] = "env" if profile.get("api_key_env") else "none"
+        elif api_key:  # non-empty string -> replace
             profile["api_key"] = api_key
+            profile["_api_key_source"] = "file"
+        # else: None or "" -> keep existing inline key (no-op); 0.2.6-beta blank-keeps-existing
         if api_key_env is not None:
             profile["api_key_env"] = api_key_env.strip()
         if model is not None:
@@ -260,7 +291,9 @@ class ConfigDraft:
         return self.update_profile(profile_id, api_key=key)
 
     def clear_key(self, profile_id: str) -> bool:
-        return self.update_profile(profile_id, api_key="")
+        # 0.2.6-beta: empty string means "keep existing"; use the sentinel to
+        # actually clear the inline key.
+        return self.update_profile(profile_id, api_key=KEY_CLEAR)
 
     def migrate_keys(self) -> List[str]:
         """Migrate legacy provider inline keys into profile inline keys.
@@ -376,7 +409,7 @@ class ConfigDraft:
         name: str,
         *,
         base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        api_key: Any = None,
         api_key_env: Optional[str] = None,
         rename: Optional[str] = None,
     ) -> bool:
@@ -396,13 +429,17 @@ class ConfigDraft:
             return True  # no-op; caller decides if this is an error via validate
         if base_url is not None:
             provider["base_url"] = base_url.strip()
-        if api_key is not None:
+        if api_key is KEY_CLEAR:
+            provider["api_key"] = ""
+            provider["_api_key_source"] = "env" if provider.get("api_key_env") else "none"
+        elif api_key:  # non-empty string -> replace
             provider["api_key"] = api_key
-            provider["_api_key_source"] = "file" if api_key else ("env" if provider.get("api_key_env") else "none")
+            provider["_api_key_source"] = "file"
+        # else: None or "" -> keep existing inline key (no-op); 0.2.6-beta blank-keeps-existing
         if api_key_env is not None:
             env_value = api_key_env.strip()
             provider["api_key_env"] = env_value
-            if api_key is None:
+            if not provider.get("api_key"):
                 provider["_api_key_source"] = "env" if env_value else "none"
         if rename is not None:
             new_name = rename.strip()
@@ -766,8 +803,11 @@ class ConfigDraft:
         - When ``backup=True`` writes a timestamped backup before overwriting.
         - 0.2.5 defaults ``allow_inline_key=True`` because plaintext keys in
           config.json are the product default.
-        - ``allowed_inline_providers`` narrows inline-key persistence to the
-          providers the current UI flow explicitly authorized (legacy path).
+        - 0.2.6-beta: ``allowed_inline_providers`` is deprecated and ignored.
+          Existing inline keys are always preserved; when
+          ``allow_inline_key=False`` only *new* inline keys (non-empty values
+          that differ from the original) are refused, so editing one provider
+          never clears another provider's key.
         - On save failure, the existing config file is restored from the backup
           and the in-memory ``Config`` state is reloaded from disk.
         """
@@ -775,19 +815,25 @@ class ConfigDraft:
         if not report.ok:
             return report
 
-        # Legacy provider path: strip inline keys unless authorized.
-        if not self.llm.get("profiles"):
-            allowed_inline_names = (
-                {str(name).strip() for name in allowed_inline_providers if str(name).strip()}
-                if allowed_inline_providers is not None
-                else None
-            )
-            if not allow_inline_key or allowed_inline_names is not None:
-                for provider in self.llm["providers"]:
-                    if allow_inline_key and allowed_inline_names is not None and provider.get("name") in allowed_inline_names:
-                        continue
-                    provider.pop("api_key", None)
-                    provider["_api_key_source"] = "env" if provider.get("api_key_env") else "none"
+        # 0.2.6-beta: preserve existing inline keys; refuse only new ones when
+        # allow_inline_key=False. Never strip keys from unedited providers.
+        if not allow_inline_key:
+            for provider in self.llm.get("providers", []):
+                original = str(provider.get("_original_api_key", ""))
+                current = str(provider.get("api_key", ""))
+                if current and current != original:
+                    provider["api_key"] = original
+                    provider["_api_key_source"] = (
+                        "file" if original else ("env" if provider.get("api_key_env") else "none")
+                    )
+            for profile in self.llm.get("profiles", []):
+                original = str(profile.get("_original_api_key", ""))
+                current = str(profile.get("api_key", ""))
+                if current and current != original:
+                    profile["api_key"] = original
+                    profile["_api_key_source"] = (
+                        "file" if original else ("env" if profile.get("api_key_env") else "none")
+                    )
 
         # Take a snapshot of the live config so we can roll back in memory.
         previous_llm = copy.deepcopy(config.llm)

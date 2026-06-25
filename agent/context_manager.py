@@ -469,3 +469,16 @@ class ConversationManager:
                 f"~{session.token_tracker.context_used_tokens:,}/{session.token_tracker.context_window:,}"
             )
         return options
+
+    # ---- provider payload validation (0.2.6-beta) -----------------------------
+
+    def validate_provider_payload(self, messages: Sequence[Dict[str, Any]]) -> List[str]:
+        """Return strict-OpenAI payload violations for *messages*.
+
+        Thin wrapper over :func:`agent.message_packer.validate_provider_payload`
+        so callers that already hold a ConversationManager can validate a
+        packed payload without importing the packer directly.
+        """
+        from agent.message_packer import validate_provider_payload
+
+        return validate_provider_payload(list(messages))

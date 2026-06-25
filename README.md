@@ -4,7 +4,7 @@ Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain t
 
 Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时 provider/model 配置，以及本地配置优先的 key 管理。
 
-Current version / 当前版本：**0.2.5-beta**
+Current version / 当前版本：**0.2.6-beta**
 
 ## Documentation / 文档
 
@@ -18,9 +18,11 @@ Current version / 当前版本：**0.2.5-beta**
 - Slash command palette with keyboard selection and completion.
 - Animated TUI with Kai mascot and reduced-motion/plain fallbacks.
 - Slash command palette with keyboard selection and completion.
-- Configured model profiles through `llm.profiles[]` (new in 0.2.5) or legacy `llm.providers`; switch with `/model`.
-- **Local config-first key management** (0.2.5): `/keys`, `/key set|clear|reveal|migrate` manage inline keys in `config.json` with mask-by-default safety.
+- Configured model profiles through `llm.profiles[]` (new in 0.2.5) or legacy `llm.providers`; switch with `/model`. Since 0.2.6 `/model` switches the chat profile in a single transaction and keeps `model_roles.chat` consistent.
+- **Local config-first key management** (0.2.5): `/keys`, `/key set|clear|reveal|migrate` manage inline keys in `config.json` with mask-by-default safety. Since 0.2.6 editing one provider never clears another provider's inline key (blank keeps existing, explicit clear only clears the target).
 - **Model roles** (0.2.5): `/roles`, `/role set|clear` route `chat`, `plan`, `compress`, `fast` tasks to different profiles.
+- **Strict message packing** (0.2.6): all LLM payloads are folded to a single leading `system` message for strict OpenAI-compatible providers (`llm.strict_message_packing`, default `true`).
+- **Esc stop generation** (0.2.6): in the Textual UI, press `Esc` while streaming/running tools to cooperatively stop the current output; partial response is saved with a `[stopped]` marker. Plain mode still uses `Ctrl+C`.
 - **Workspace bookmarks** (0.2.5): `/workspace save`, `/workspaces`, `/workspace move <name-or-path>`, `/workspace remove`.
 - **Session search** (0.2.5): `/session search <keyword>` finds sessions read-only; `/session open <id-or-index>` switches to the found session.
 - **Config import/export** (0.2.5): `/config export`, `/config export --with-keys`, `/config import <path>` with redaction by default.
@@ -37,11 +39,13 @@ Current version / 当前版本：**0.2.5-beta**
 
 - Kai 终端动效与低动效/plain fallback。
 - 支持键盘选择和补全的 Slash 命令菜单。
-- 通过新版 `llm.profiles[]`（0.2.5）或旧版 `llm.providers` 配置模型 profile，并用 `/model` 切换。
-- **本地配置优先的 key 管理**（0.2.5）：`/keys`、`/key set|clear|reveal|migrate` 管理 `config.json` 中的 inline key，默认掩码显示。
+- 通过新版 `llm.profiles[]`（0.2.5）或旧版 `llm.providers` 配置模型 profile，并用 `/model` 切换。0.2.6 起 `/model` 以单一事务切换 chat profile，并保持 `model_roles.chat` 一致。
+- **本地配置优先的 key 管理**（0.2.5）：`/keys`、`/key set|clear|reveal|migrate` 管理 `config.json` 中的 inline key，默认掩码显示。0.2.6 起编辑某个 provider 不会清空其它 provider 的 inline key（留空保留原 key，显式 clear 只清空目标）。
 - **模型角色**（0.2.5）：`/roles`、`/role set|clear` 将 `chat`、`plan`、`compress`、`fast` 任务路由到不同 profile。
+- **严格消息打包**（0.2.6）：所有 LLM 请求 payload 折叠为唯一首位 `system` 消息，兼容严格 OpenAI-compatible provider（`llm.strict_message_packing`，默认 `true`）。
+- **Esc 停止输出**（0.2.6）：Textual 模式下流式输出/工具运行中按 `Esc` 协作停止当前输出，partial 回复以 `[stopped]` 标记保存；plain 模式仍使用 `Ctrl+C`。
 - **Workspace 书签**（0.2.5）：`/workspace save`、`/workspaces`、`/workspace move <name-or-path>`、`/workspace remove`。
-- **会话搜索**（0.2.5）：`/session search <keyword>` 只读搜索会话，`/session open <id-or-index>` 切换到匹配会话。
+- **会话搜索**（0.2.5）：`/session search <keyword>` 与 `/session open <id-or-index>` 只读搜索会话。
 - **配置导入/导出**（0.2.5）：`/config export`、`/config export --with-keys`、`/config import <path>`，默认脱敏。
 - **Doctor 健康面板**（0.2.5）：`/doctor` 检查配置、key、workspace、session、git 与 provider 连通性。
 - **运行时配置**（0.2.3）：使用 `/providers`、`/provider add|edit|remove|test`、`/model add|edit|remove|test`、`/settings` 以及 `/config validate|backup|restore` 增删改 provider/model 和备份恢复配置。

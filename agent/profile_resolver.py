@@ -198,11 +198,11 @@ def resolve_profile(
     model_roles = getattr(config, "model_roles", None) or {}
 
     chosen_id = profile_id
-    if chosen_id is None:
+    if not chosen_id:
         chosen_id = model_roles.get(role)
-    if chosen_id is None:
+    if not chosen_id:
         chosen_id = llm.get("active_profile")
-    if chosen_id is None:
+    if not chosen_id:
         provider_name = llm.get("active_provider", "")
         model_name = llm.get("active_model", "")
         if provider_name and model_name:

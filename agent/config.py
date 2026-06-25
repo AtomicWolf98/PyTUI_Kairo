@@ -25,6 +25,7 @@ from agent.provider_registry import (
 
 ACTIVE_LLM_FIELDS = ("api_key", "base_url", "model", "temperature", "max_tokens", "context_window")
 BACKUP_GLOB_PREFIX = "config.backup."
+STRICT_MESSAGE_PACKING_DEFAULT = True
 SESSION_DEFAULTS = {
     "enabled": True,
     "storage_dir": ".kairo/sessions",
@@ -53,6 +54,8 @@ UI_DEFAULTS = {
     "workspace_refresh_seconds": 2.0,
     "workspace_max_files": 2000,
     "workspace_diff_max_bytes": 204800,
+    "esc_stops_generation": True,
+    "stop_saves_partial_response": True,
 }
 
 
@@ -140,6 +143,14 @@ class Config:
         """Backward-compatible setter: True -> 'auto', False -> 'manual'."""
         self.authorization_level = "auto" if value else "manual"
 
+    @property
+    def strict_message_packing(self) -> bool:
+        """Whether LLM requests are folded to a single leading system message.
+
+        0.2.6-beta: defaults to True for strict OpenAI-compatible providers.
+        """
+        return bool(self.llm.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT))
+
     def _format_profile_label(self, provider_name: str, model_name: str) -> str:
         return f"{provider_name} / {model_name}"
 
@@ -204,13 +215,17 @@ class Config:
         return normalize_providers(value, self._normalize_context_management)
 
     def _build_llm_from_legacy(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return build_llm_from_legacy(
+        llm = build_llm_from_legacy(
             data,
             self._normalize_context_management,
             self._normalize_llm_defaults,
             str(data.get("base_url", self.base_url)).strip(),
             self.model,
         )
+        llm.setdefault("active_profile", "")
+        llm.setdefault("profiles", [])
+        llm.setdefault("strict_message_packing", bool(data.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)))
+        return llm
 
     def _normalize_llm_config(self, value: Any, fallback_data: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(value, dict):
@@ -228,6 +243,7 @@ class Config:
                 "defaults": defaults,
                 "providers": [],
                 "profiles": list(raw_profiles),
+                "strict_message_packing": bool(value.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
             }
             return llm
 
@@ -239,6 +255,7 @@ class Config:
             "defaults": defaults,
             "providers": self._normalize_providers(value.get("providers", [])),
             "profiles": [],
+            "strict_message_packing": bool(value.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
         }
         if not llm["providers"]:
             return self._build_llm_from_legacy(fallback_data)
@@ -335,7 +352,13 @@ class Config:
         return profiles
 
     def apply_profile(self, profile_id: str) -> bool:
-        """Switch active profile by id (new structure) or legacy label."""
+        """Switch active profile by id (new structure) or legacy label.
+
+        Note: this only updates ``llm.active_profile`` and does NOT keep
+        ``model_roles.chat`` consistent, so a configured chat role can still
+        route requests back to the old profile. Prefer
+        :meth:`switch_active_profile` for ``/model`` transactions.
+        """
         profile_id = (profile_id or "").strip()
         if not profile_id:
             return False
@@ -352,6 +375,100 @@ class Config:
                     return True
             return False
         return self.apply_model_profile(profile_id)
+
+    def switch_active_profile(
+        self,
+        profile_id: str,
+        *,
+        update_roles: bool = True,
+    ) -> Dict[str, Any]:
+        """Unified transaction that switches the active chat profile.
+
+        0.2.6-beta: this is the single entry point for ``/model``. It keeps
+        ``model_roles.chat`` and ``llm.active_profile`` consistent so the next
+        chat request actually uses the selected profile (the resolver prefers
+        ``model_roles.chat`` over ``llm.active_profile``).
+
+        Semantics:
+        - New ``llm.profiles[]`` structure: when ``model_roles.chat`` is
+          configured and ``update_roles=True``, update it to the selected id;
+          otherwise update ``llm.active_profile``. Both are kept consistent
+          when both apply.
+        - Legacy ``llm.providers[]`` structure: delegates to
+          :meth:`apply_model_profile` and keeps ``model_roles.chat`` consistent
+          if it was set to a legacy label.
+
+        Returns a dict with the resolved profile info:
+        ``{ok, profile_id, label, model, base_url, context_window,
+        role_updated, active_updated}``.
+        """
+        profile_id = (profile_id or "").strip()
+        result: Dict[str, Any] = {
+            "ok": False,
+            "profile_id": profile_id,
+            "label": "",
+            "model": "",
+            "base_url": "",
+            "context_window": self.context_window,
+            "role_updated": False,
+            "active_updated": False,
+        }
+        if not profile_id:
+            return result
+
+        if self.llm.get("profiles"):
+            matched_id: Optional[str] = None
+            for profile in self.llm["profiles"]:
+                pid = str(profile.get("id", "")).strip()
+                label = str(profile.get("label", "")).strip()
+                if pid == profile_id or (label and label == profile_id):
+                    matched_id = pid
+                    break
+            if matched_id is None:
+                return result
+            chat_role = self.model_roles.get("chat")
+            if update_roles and chat_role:
+                if chat_role != matched_id:
+                    self.model_roles["chat"] = matched_id
+                    result["role_updated"] = True
+            else:
+                if self.llm.get("active_profile") != matched_id:
+                    self.llm["active_profile"] = matched_id
+                    result["active_updated"] = True
+            # Keep the fallback active_profile consistent with the chat route so
+            # UI surfaces (dock, /config, default index) all show the same profile.
+            if update_roles and chat_role and self.llm.get("active_profile") != matched_id:
+                self.llm["active_profile"] = matched_id
+                result["active_updated"] = True
+            self._sync_runtime_fields()
+            result["ok"] = True
+            resolved = _get_active_profile(self)
+            if resolved is not None:
+                result.update({
+                    "profile_id": resolved.id,
+                    "label": resolved.label,
+                    "model": resolved.model,
+                    "base_url": resolved.base_url,
+                    "context_window": int(resolved.context_window),
+                })
+            return result
+
+        # Legacy provider/model structure.
+        if not self.apply_model_profile(profile_id):
+            return result
+        if update_roles and self.model_roles.get("chat"):
+            if self.model_roles["chat"] != profile_id:
+                self.model_roles["chat"] = profile_id
+                result["role_updated"] = True
+        result["ok"] = True
+        result.update({
+            "profile_id": profile_id,
+            "label": self.active_model_profile,
+            "model": self.model,
+            "base_url": self.base_url,
+            "context_window": int(self.context_window),
+        })
+        return result
 
     def get_active_llm_settings(self) -> Dict[str, Any]:
         """Resolve runtime LLM settings using the profile-first resolver."""
@@ -806,6 +923,7 @@ class Config:
                 "active_profile": self.llm.get("active_profile", ""),
                 "defaults": dict(self.llm["defaults"]),
                 "profiles": self._serialize_profiles(),
+                "strict_message_packing": bool(self.llm.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
             }
             data["model_roles"] = dict(self.model_roles)
         else:
@@ -885,6 +1003,7 @@ class Config:
             "active_model": self.llm["active_model"],
             "defaults": dict(self.llm["defaults"]),
             "providers": providers,
+            "strict_message_packing": bool(self.llm.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
         }
 
     # ---- Backup machinery --------------------------------------------------------

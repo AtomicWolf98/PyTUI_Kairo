@@ -1,6 +1,6 @@
 # Kairo English Docs
 
-Current version: **0.2.5**
+Current version: **0.2.6-beta**
 
 Start here:
 

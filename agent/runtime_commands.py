@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.commands import CommandResult
 from agent.config import Config
-from agent.config_editor import ConfigDraft
+from agent.config_editor import ConfigDraft, KEY_CLEAR
 from agent.plain_io import (
     ask,
     ask_choice,
@@ -170,7 +170,6 @@ def handle_provider_add(agent, raw: str, parts: List[str]) -> CommandResult:
         config,
         backup=True,
         allow_inline_key=allow_inline,
-        allowed_inline_providers=[name] if allow_inline else None,
     )
     if not report.ok:
         error(report.to_text())
@@ -197,35 +196,37 @@ def handle_provider_edit(agent, raw: str, parts: List[str]) -> CommandResult:
     base_url = ask("Base URL", default=provider.get("base_url", ""))
     api_key_mode = ask_choice("API key mode", ["env", "inline", "empty"], default="env" if provider.get("api_key_env") else "inline")
     api_key_env = ""
-    api_key = ""
+    api_key_arg: Any = None
     if api_key_mode == "env":
         api_key_env = ask("API key env name", default=provider.get("api_key_env", ""))
+        api_key_arg = None  # leave inline key untouched
     elif api_key_mode == "inline":
-        api_key = ask("API key value (blank keeps existing)")
+        # blank keeps existing (0.2.6-beta); non-empty replaces.
+        api_key_arg = ask("API key value (blank keeps existing)")
+    elif api_key_mode == "empty":
+        api_key_arg = KEY_CLEAR  # explicit clear
 
     draft = ConfigDraft.from_config(config)
     rename = new_name.strip() or None
     draft.update_provider(
         target,
         base_url=base_url,
-        api_key=api_key if api_key or api_key_mode == "inline" else None,
+        api_key=api_key_arg,
         api_key_env=api_key_env,
         rename=rename,
     )
 
-    if api_key_mode == "inline":
+    if api_key_mode == "inline" and api_key_arg:
         if not confirm("This will save the API key to disk. Continue?", default=False):
             return CommandResult(handled=True, success=False, message="Cancelled; inline key not saved.")
         allow_inline = True
     else:
         allow_inline = False
 
-    inline_provider_name = (new_name.strip() or target) if allow_inline else ""
     report = draft.apply_to(
         config,
         backup=True,
         allow_inline_key=allow_inline,
-        allowed_inline_providers=[inline_provider_name] if allow_inline else None,
     )
     if not report.ok:
         return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())

@@ -11,7 +11,7 @@ The complete configuration guide is maintained in the bilingual manuals:
 
 ### `llm`
 
-Defines OpenAI-compatible profiles. Since 0.2.5 Kairo uses `llm.profiles[]` as the primary format; legacy `llm.providers[]` configs are still loaded and converted automatically. You can manage profiles, keys, roles, bookmarks, and config import/export from inside Kairo without editing `config.json`:
+Defines OpenAI-compatible profiles. Since 0.2.5 Kairo uses `llm.profiles[]` as the primary format; legacy `llm.providers[]` configs are still loaded and converted automatically. Since 0.2.6 `llm.strict_message_packing` (default `true`) folds every LLM request payload into a single leading `system` message for strict OpenAI-compatible providers. You can manage profiles, keys, roles, bookmarks, and config import/export from inside Kairo without editing `config.json`:
 
 - `/providers` · `/provider add` · `/provider edit` · `/provider remove` · `/provider test`
 - `/model add` · `/model edit` · `/model remove` · `/model test`
@@ -21,9 +21,9 @@ Defines OpenAI-compatible profiles. Since 0.2.5 Kairo uses `llm.profiles[]` as t
 - `/config validate` · `/config backup` · `/config restore` · `/config export` · `/config import`
 - `/settings` (TUI menu)
 
-Use `/model` to switch among configured profiles. Use `/role set chat <profile>` to route different tasks to different profiles.
+Use `/model` to switch the chat profile. Since 0.2.6 this is a single transaction that keeps `model_roles.chat` consistent. Use `/role set chat <profile>` to route different tasks to different profiles. Editing one provider never clears another provider's inline key; leave the key blank to keep it.
 
-定义 OpenAI-compatible 模型 profile。0.2.5 起 Kairo 以 `llm.profiles[]` 为主格式；旧版 `llm.providers[]` 仍会被自动转换。可以在 Kairo 内管理 profile、key、role、书签和配置导入导出，无需手动编辑 `config.json`：
+定义 OpenAI-compatible 模型 profile。0.2.5 起 Kairo 以 `llm.profiles[]` 为主格式；旧版 `llm.providers[]` 仍会被自动转换。0.2.6 起 `llm.strict_message_packing`（默认 `true`）将每个 LLM 请求 payload 折叠为唯一首位 `system` 消息，兼容严格 OpenAI-compatible provider。可以在 Kairo 内管理 profile、key、role、书签和配置导入导出，无需手动编辑 `config.json`：
 
 - `/providers`、`/provider add|edit|remove|test`
 - `/model add|edit|remove|test`
@@ -33,7 +33,7 @@ Use `/model` to switch among configured profiles. Use `/role set chat <profile>`
 - `/config validate|backup|restore|export|import`
 - `/settings`（TUI 菜单）
 
-使用 `/model` 切换 profile。使用 `/role set chat <profile>` 把不同任务路由到不同 profile。
+使用 `/model` 切换 chat profile。0.2.6 起这是单一事务，会保持 `model_roles.chat` 一致。使用 `/role set chat <profile>` 把不同任务路由到不同 profile。编辑某个 provider 不会清空其它 provider 的 inline key；留空即保留原 key。
 
 ### API Key Safety
 
@@ -71,9 +71,9 @@ Controls automatic compression, trigger threshold, target size, and recent-turn 
 
 ### `ui`
 
-Controls TUI mode, animations, Dock width, workspace scan interval, and diff limits.
+Controls TUI mode, animations, Dock width, workspace scan interval, and diff limits. Since 0.2.6 it also exposes `esc_stops_generation` (default `true`, lets `Esc` stop the current generation in Textual mode) and `stop_saves_partial_response` (default `true`, saves the partial assistant reply with a `[stopped]` marker when stopped).
 
-控制 TUI 模式、动画、Dock 宽度、workspace 扫描频率和 Diff 限制。
+控制 TUI 模式、动画、Dock 宽度、workspace 扫描频率和 Diff 限制。0.2.6 起新增 `esc_stops_generation`（默认 `true`，Textual 模式下 `Esc` 停止当前输出）与 `stop_saves_partial_response`（默认 `true`，停止时以 `[stopped]` 标记保存 partial 回复）。
 
 ### `workspace_root`
 

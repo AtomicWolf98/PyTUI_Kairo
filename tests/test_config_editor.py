@@ -222,7 +222,10 @@ class TestConfigDraft(unittest.TestCase):
         provider = next(p for p in saved["llm"]["providers"] if p["name"] == "alpha")
         self.assertEqual(provider.get("api_key"), "sk-secret-keep")
 
-    def test_apply_to_limits_inline_keys_to_authorized_providers(self):
+    def test_apply_to_preserves_other_providers_inline_keys(self):
+        # 0.2.6-beta: editing/adding one provider must never clear another
+        # provider's inline key. The deprecated allowed_inline_providers list
+        # is ignored.
         draft = ConfigDraft.from_config(self.config)
         draft.update_provider("alpha", api_key="sk-alpha-keep", api_key_env="")
         draft.add_provider(
@@ -245,8 +248,26 @@ class TestConfigDraft(unittest.TestCase):
         alpha = next(p for p in saved["llm"]["providers"] if p["name"] == "alpha")
         beta = next(p for p in saved["llm"]["providers"] if p["name"] == "beta")
         self.assertEqual(alpha.get("api_key"), "sk-alpha-keep")
+        # beta's key is preserved even though it was not in allowed_inline_providers.
+        self.assertEqual(beta.get("api_key"), "sk-beta-strip")
+
+    def test_apply_to_refuses_only_new_keys_when_disallowed(self):
+        # 0.2.6-beta: allow_inline_key=False refuses *new* inline keys but
+        # preserves existing inline keys from unedited providers.
+        draft = ConfigDraft.from_config(self.config)
+        draft.add_provider(
+            name="beta",
+            base_url="https://beta.example.com/v1",
+            api_key="sk-beta-new",
+            models=[{"name": "beta-1"}],
+        )
+        report = draft.apply_to(self.config, backup=True, allow_inline_key=False)
+        self.assertTrue(report.ok)
+        with open(self.tmp.path, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        beta = next(p for p in saved["llm"]["providers"] if p["name"] == "beta")
+        # New key refused (beta had no original key).
         self.assertNotIn("api_key", beta)
-        self.assertNotIn("sk-beta-strip", json.dumps(saved))
 
     def test_apply_to_rolls_back_on_save_failure(self):
         original_llm = json.loads(json.dumps(self.config.llm))

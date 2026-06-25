@@ -117,6 +117,7 @@ class LLMClient:
         temperature_override: Optional[float] = None,
         profile_role: str = "chat",
         profile_id: Optional[str] = None,
+        cancel_token=None,
     ) -> Generator[Tuple[str, Any], None, None]:
         """
         Sends chat completion request to the OpenAI-compatible endpoint.
@@ -128,8 +129,22 @@ class LLMClient:
             - ("usage", dict): Usage metadata
             - ("error", text): Non-recoverable error details
             - ("context_error", text): Context-length error that the caller may retry after compression
+            - ("stopped", None): The stream was cancelled via *cancel_token*
         """
         from agent.profile_resolver import resolve_profile
+
+        # 0.2.6-beta: defensive backstop. If strict packing is enabled and the
+        # caller passed messages with a system message after index 0, refuse to
+        # send the request rather than triggering a provider format error.
+        if getattr(self.config, "strict_message_packing", True) and len(messages) > 1:
+            for idx in range(1, len(messages)):
+                if messages[idx].get("role") == "system":
+                    yield (
+                        "error",
+                        "Internal error: system message present after the leading system slot; "
+                        "message packing was bypassed. Refusing to send malformed payload.",
+                    )
+                    return
 
         profile = resolve_profile(self.config, profile_id=profile_id, role=profile_role)
         if profile is None:
@@ -154,19 +169,39 @@ class LLMClient:
         if profile.api_key:
             headers["Authorization"] = f"Bearer {profile.api_key}"
 
+        if cancel_token is not None and cancel_token.cancelled:
+            yield ("stopped", None)
+            return
+
         try:
             response = self._post_with_retries(url, payload, headers)
         except _CategorizedError as exc:
             yield (exc.category if exc.category == "context_error" else "error", exc.message)
             return
 
+        if cancel_token is not None:
+            cancel_token.add_cancel_callback(response.close)
+            if cancel_token.cancelled:
+                yield ("stopped", None)
+                return
+
         in_think_tag = False
         text_buffer = ""
         tool_calls_dict: Dict[int, Dict[str, Any]] = {}
+        stopped = False
 
         try:
             for raw_line in response:
+                # 0.2.6-beta: cooperative cancel before reading the next chunk.
+                if cancel_token is not None and cancel_token.cancelled:
+                    stopped = True
+                    yield ("stopped", None)
+                    return
                 line_str = raw_line.decode("utf-8", errors="replace").strip()
+                if cancel_token is not None and cancel_token.cancelled:
+                    stopped = True
+                    yield ("stopped", None)
+                    return
                 if not line_str:
                     continue
 
@@ -248,9 +283,20 @@ class LLMClient:
                                 yield ("thought", text_buffer)
                                 text_buffer = ""
         except Exception as exc:
+            if cancel_token is not None and cancel_token.cancelled:
+                stopped = True
+                yield ("stopped", None)
+                return
             yield ("error", f"Error reading response stream: {exc}")
         finally:
             response.close()
+
+        if stopped:
+            return
+
+        if cancel_token is not None and cancel_token.cancelled:
+            yield ("stopped", None)
+            return
 
         if text_buffer:
             if in_think_tag:

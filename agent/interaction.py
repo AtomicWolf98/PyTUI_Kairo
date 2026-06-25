@@ -15,6 +15,7 @@ from agent import tui_widgets
 from agent.config import Config
 from agent.context_manager import ConversationManager
 from agent.llm import LLMClient
+from agent.message_packer import pack_messages_for_provider
 from tools.base import ToolRegistry
 from tools.policy import is_authorized, AUTHORIZATION_AUTO, AUTHORIZATION_YOLO
 
@@ -38,6 +39,22 @@ class InteractionRunner:
         self.llm = LLMClient(config)
         self.current_task = "Idle"
         self.task_status = "Idle"
+        self.cancel_token = None  # 0.2.6-beta: optional CancellationToken
+
+    def _packed_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fold internal history into a strict provider-safe payload.
+
+        0.2.6-beta: the internal history may carry several system-class
+        messages (main prompt, runtime state, summary); strict OpenAI-compatible
+        providers only accept a single leading system message. Packing only
+        affects the request payload, never the persisted history.
+        """
+        packed, warnings = pack_messages_for_provider(
+            messages, strict_openai=self.config.strict_message_packing
+        )
+        for warning in warnings:
+            self.console.print(f"[yellow]message packer: {warning}[/yellow]")
+        return packed
 
     @property
     def history(self) -> List[Dict[str, Any]]:
@@ -74,7 +91,7 @@ class InteractionRunner:
             {"role": "user", "content": source_text},
         ]
 
-    def _generate_context_summary(self, source: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    def _generate_context_summary(self, source: List[Dict[str, Any]], cancel_token=None) -> Tuple[Optional[str], Optional[str]]:
         messages = self._compression_messages(source)
         safety_margin = max(1024, int(self.config.context_window * 0.02))
         estimated_prompt = self.conversations.estimator.estimate_messages(messages)
@@ -87,11 +104,12 @@ class InteractionRunner:
         error = None
         usage_recorded = False
         for type_, data in self.llm.stream_response(
-            messages,
+            self._packed_messages(messages),
             tools=None,
             max_tokens_override=summary_limit,
             temperature_override=0.1,
             profile_role="compress",
+            cancel_token=cancel_token,
         ):
             if type_ == "content":
                 summary += data
@@ -102,6 +120,8 @@ class InteractionRunner:
                         data.get("completion_tokens", 0),
                     )
                     usage_recorded = True
+            elif type_ == "stopped":
+                return None, "Compression stopped by user."
             elif type_ in ("error", "context_error"):
                 error = str(data)
                 break
@@ -111,7 +131,9 @@ class InteractionRunner:
             return None, "The compression request returned an empty summary."
         return summary.strip(), None
 
-    def compress_context(self, manual: bool = False, tools=None) -> Tuple[bool, str]:
+    def compress_context(self, manual: bool = False, tools=None, cancel_token=None) -> Tuple[bool, str]:
+        if cancel_token is None:
+            cancel_token = self.cancel_token
         settings = self.config.context_management
         preserve_turns = settings["preserve_recent_turns"]
         self.conversations.refresh_context(tools)
@@ -121,7 +143,7 @@ class InteractionRunner:
             return False, f"Nothing to compress; fewer than {preserve_turns + 1} complete turns are available."
 
         source, retained = parts
-        summary, error = self._generate_context_summary(source)
+        summary, error = self._generate_context_summary(source, cancel_token=cancel_token)
         if error:
             return False, f"Context compression failed: {error}"
 
@@ -209,7 +231,7 @@ class InteractionRunner:
         plan_content = ""
         has_official_usage = False
         with Live(Text("Generating...", style="italic dim"), console=self.console, refresh_per_second=10) as live:
-            for type_, data in self.llm.stream_response(plan_messages, profile_role="plan"):
+            for type_, data in self.llm.stream_response(self._packed_messages(plan_messages), profile_role="plan"):
                 if type_ == "content":
                     plan_content += data
                     live.update(Markdown(plan_content))
@@ -239,8 +261,17 @@ class InteractionRunner:
         emit: Callable[[str, Any], None],
         approve: Optional[Callable[[str, List[str], int], int]] = None,
         request_text: Optional[Callable[[str], str]] = None,
+        cancel_token=None,
     ) -> None:
-        """Run one interaction without terminal rendering, emitting structured UI events."""
+        """Run one interaction without terminal rendering, emitting structured UI events.
+
+        0.2.6-beta: *cancel_token* is a :class:`agent.cancellation.CancellationToken`.
+        When cancelled mid-stream, the partial assistant content is saved with a
+        ``[stopped]`` marker and the loop exits cleanly. Tool execution already
+        in progress is allowed to finish, but no further LLM round starts.
+        """
+        if cancel_token is None:
+            cancel_token = self.cancel_token
         self.current_task = user_input.strip()
         self.task_status = "In Progress"
         emit("task_status", {"task": self.current_task, "status": self.task_status})
@@ -258,7 +289,10 @@ class InteractionRunner:
                 emit("state", "thinking")
                 emit("message_started", {"kind": "plan"})
                 plan_content = ""
-                for type_, data in self.llm.stream_response(plan_messages, profile_role="plan"):
+                plan_stopped = False
+                for type_, data in self.llm.stream_response(
+                    self._packed_messages(plan_messages), profile_role="plan", cancel_token=cancel_token
+                ):
                     if type_ == "content":
                         plan_content += data
                         emit("content_delta", data)
@@ -268,10 +302,17 @@ class InteractionRunner:
                         self.token_tracker.add_tokens(
                             data.get("prompt_tokens", 0), data.get("completion_tokens", 0)
                         )
+                    elif type_ == "stopped":
+                        plan_stopped = True
+                        break
                     elif type_ in ("error", "context_error"):
                         emit("error", str(data))
                         return
                 emit("message_finished", None)
+                if plan_stopped:
+                    emit("state", "stopped")
+                    emit("notice", "Plan generation stopped by user.")
+                    return
 
                 if approve:
                     choice = approve(
@@ -291,12 +332,18 @@ class InteractionRunner:
             self.conversations.mark_dirty(reason="user_message")
 
             while True:
+                # 0.2.6-beta: cooperative cancel before starting the next LLM round.
+                if cancel_token is not None and cancel_token.cancelled:
+                    emit("state", "stopped")
+                    emit("notice", "Generation stopped by user.")
+                    return
                 schemas = self.registry.get_schemas()
                 if not self.ensure_context_capacity(schemas):
                     emit("error", "The request cannot fit in the configured context window.")
                     return
 
                 retry_count = 0
+                stopped = False
                 while True:
                     current_thought = ""
                     current_content = ""
@@ -307,13 +354,19 @@ class InteractionRunner:
 
                     emit("state", "connecting")
                     emit("message_started", {"kind": "assistant"})
-                    for type_, data in self.llm.stream_response(self.history, tools=schemas, profile_role="chat"):
+                    for type_, data in self.llm.stream_response(
+                        self._packed_messages(self.history), tools=schemas, profile_role="chat",
+                        cancel_token=cancel_token,
+                    ):
                         if type_ == "context_error":
                             context_error = str(data)
                             break
                         if type_ == "error":
                             emit("error", str(data))
                             return
+                        if type_ == "stopped":
+                            stopped = True
+                            break
                         if type_ == "thought":
                             self.task_status = "Thinking"
                             current_thought += data
@@ -334,6 +387,8 @@ class InteractionRunner:
                             official_context_tokens = prompt_tokens + completion_tokens
                             has_usage = True
 
+                    if stopped:
+                        break
                     if context_error is None:
                         break
                     if retry_count >= 1:
@@ -350,6 +405,23 @@ class InteractionRunner:
                 if not has_usage:
                     input_text = "".join(message.get("content", "") or "" for message in self.history)
                     self.token_tracker.add_text(input_text, current_content + current_thought)
+
+                # 0.2.6-beta: on cooperative stop, save the partial assistant
+                # content with a [stopped] marker so the user does not lose
+                # visible output, then exit the loop cleanly.
+                if stopped:
+                    if self.config.ui.get("stop_saves_partial_response", True):
+                        partial = current_content
+                        if partial and "[stopped]" not in partial:
+                            partial = f"{partial}\n\n[stopped]"
+                        elif not partial:
+                            partial = "[stopped]"
+                        self.history.append({"role": "assistant", "content": partial})
+                        self.conversations.refresh_context(schemas)
+                        self.conversations.mark_dirty(reason="stopped")
+                    emit("state", "stopped")
+                    emit("notice", "Generation stopped by user.")
+                    return
 
                 assistant_message = {"role": "assistant", "content": current_content or ""}
                 if current_tool_calls:
@@ -450,6 +522,13 @@ class InteractionRunner:
                     self.conversations.refresh_context(schemas)
                     self.conversations.mark_dirty(reason="tool_result")
                     emit("usage_updated", None)
+                    # 0.2.6-beta: cooperative cancel after the tool finishes;
+                    # the in-progress tool was allowed to complete, but we do
+                    # not start the next LLM round.
+                    if cancel_token is not None and cancel_token.cancelled:
+                        emit("state", "stopped")
+                        emit("notice", "Task stopped by user after tool completion.")
+                        return
         except Exception as exc:
             emit("error", str(exc))
         finally:
@@ -457,8 +536,15 @@ class InteractionRunner:
             self.task_status = "Idle"
             emit("task_status", {"task": "Idle", "status": "Idle"})
 
-    def run_interaction(self, user_input: str) -> None:
-        """Executes the agent logic for a single user interaction in the local console."""
+    def run_interaction(self, user_input: str, cancel_token=None) -> None:
+        """Executes the agent logic for a single user interaction in the local console.
+
+        0.2.6-beta: *cancel_token* allows cooperative stop. Plain mode still
+        uses Ctrl+C to interrupt the current turn; this token is mainly used
+        when the Textual UI drives the events path.
+        """
+        if cancel_token is None:
+            cancel_token = self.cancel_token
         self.current_task = user_input.strip()
         self.task_status = "In Progress"
 
@@ -511,7 +597,10 @@ class InteractionRunner:
                     official_context_tokens = None
 
                     with Live(group, console=self.console, auto_refresh=True, refresh_per_second=10) as live:
-                        for type_, data in self.llm.stream_response(self.history, tools=schemas, profile_role="chat"):
+                        for type_, data in self.llm.stream_response(
+                            self._packed_messages(self.history), tools=schemas, profile_role="chat",
+                            cancel_token=cancel_token,
+                        ):
                             if first_token:
                                 first_token = False
                                 group.renderables.clear()
@@ -521,6 +610,16 @@ class InteractionRunner:
                                 break
                             if type_ == "error":
                                 live.console.print(f"\n[bold red]{data}[/bold red]")
+                                return
+                            if type_ == "stopped":
+                                live.console.print("\n[bold yellow]Generation stopped by user.[/bold yellow]")
+                                if current_content and self.config.ui.get("stop_saves_partial_response", True):
+                                    self.history.append({
+                                        "role": "assistant",
+                                        "content": f"{current_content}\n\n[stopped]",
+                                    })
+                                    self.conversations.refresh_context(schemas)
+                                    self.conversations.mark_dirty(reason="stopped")
                                 return
 
                             if type_ == "thought":
@@ -688,7 +787,14 @@ class InteractionRunner:
                     self.conversations.refresh_context(schemas)
                     self.conversations.mark_dirty(reason="tool_result")
                     self.task_status = "Processing results"
-
+                    # 0.2.6-beta: cooperative cancel after tool completion.
+                    if cancel_token is not None and cancel_token.cancelled:
+                        self.console.print("\n[bold yellow]Task stopped by user after tool completion.[/bold yellow]")
+                        return
+        except KeyboardInterrupt:
+            # 0.2.6-beta: plain-mode Ctrl+C interrupts the current turn only;
+            # session persistence is preserved because mark_dirty/save still ran.
+            self.console.print("\n[bold yellow]Generation interrupted by user (Ctrl+C).[/bold yellow]")
         finally:
             self.current_task = "Idle"
             self.task_status = "Idle"
