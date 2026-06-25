@@ -1,6 +1,6 @@
 # Kairo 完整用户手册
 
-版本：**0.2.6-beta**
+版本：**0.2.7-beta**
 
 Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
 
@@ -86,7 +86,7 @@ $env:KAIRO_DEEPSEEK_API_KEY = "your-api-key"
 }
 ```
 
-优先使用 `api_key_env`，避免把 secret 落盘。若仅本地使用，也可以用 inline `api_key`；通过 `/key set` 安全地管理 key。
+优先使用 `api_key_env`，避免把 secret 落盘。若仅本地使用，也可以用 inline `api_key`；在 `/settings` > Keys 中安全地管理 key。
 
 旧版 `llm.providers[]` 配置仍会被自动转换为 profile 继续使用。
 
@@ -103,40 +103,44 @@ Kairo 有两种界面：
 
 输入 `/` 会打开命令菜单。继续输入会按前缀过滤；`Up/Down` 选择，`Tab` 或 `Enter` 补全，`Esc` 关闭。
 
+0.2.7-beta 将默认 slash 命令从 52 条收敛到 18 条工作流入口。provider/model/key/session/config 的细粒度命令已迁移到交互面板。
+
 | 命令 | 作用 | 使用示例 |
 | --- | --- | --- |
-| `/help` | 显示帮助 | `/help` |
+| `/help` | 显示分组帮助 | `/help` |
 | `/exit` | 退出 Kairo | `/exit` |
-| `/config` | 显示当前配置 | `/config` |
-| `/config export` | 导出配置（默认脱敏） | `/config export --with-keys` |
-| `/config import` | 导入配置文件 | `/config import backup.json` |
-| `/model` | 从配置好的模型 profile 中选择 | `/model` |
-| `/keys` | 列出已配置的 key | `/keys` |
-| `/key set` | 设置某个 profile 的 key | `/key set deepseek-chat` |
-| `/key clear` | 清除某个 profile 的 key | `/key clear deepseek-chat` |
-| `/key reveal` | 显示当前 profile 的完整 key | `/key reveal` |
-| `/roles` | 列出模型角色绑定 | `/roles` |
-| `/role set` | 把角色绑定到 profile | `/role set plan deepseek-reasoner` |
-| `/role clear` | 解除角色绑定 | `/role clear fast` |
-| `/manual` | 每个工具调用都需要确认 | `/manual` |
-| `/auto` | workspace 内常规工具自动执行，外部/系统/危险操作仍确认 | `/auto` |
-| `/yolo` | 跳过工具确认；仍应谨慎使用 | `/yolo` |
-| `/plan` | 开关 Plan Mode | `/plan` |
-| `/think` | 开关 Thinking Mode | `/think` |
-| `/skills` | 查看已加载工具和自定义 skills | `/skills` |
 | `/new [名称]` | 创建并切换到新持久化会话 | `/new Refactor auth` |
-| `/sessions` | 切换已保存会话 | `/sessions` |
-| `/session search` | 只读搜索已保存会话 | `/session search auth` |
-| `/session open` | 按搜索索引或 id 切换到指定会话 | `/session open 3` |
+| `/sessions` | 打开会话管理面板 | `/sessions` |
 | `/clear` | 清空当前会话，不删除会话文件 | `/clear` |
 | `/undo` | 撤销当前会话最近一轮用户输入及后续回复 | `/undo` |
 | `/compress` | 手动压缩较早上下文，保留近期轮次 | `/compress` |
-| `/workspace` | 显示当前 workspace | `/workspace` |
-| `/workspace move <path\|name>` | 热切换 workspace，无需重启 | `/workspace move C:\repo\app` |
-| `/workspace save` | 收藏当前 workspace | `/workspace save app` |
-| `/workspaces` | 列出 workspace 书签 | `/workspaces` |
-| `/workspace remove` | 移除 workspace 书签 | `/workspace remove app` |
+| `/model` | 切换当前 chat profile | `/model` |
+| `/setup` | 运行首次配置向导 | `/setup` |
+| `/settings` | 打开设置/配置面板 | `/settings` |
+| `/mode` | 打开模式面板（授权/Plan/Thinking） | `/mode` |
+| `/workspace [path-or-bookmark]` | 打开 workspace 面板或热切换 workspace | `/workspace C:\repo\app` |
+| `/status` | 显示只读运行状态 | `/status` |
+| `/find <keyword>` | 搜索当前会话与持久化会话 | `/find auth` |
+| `/export` | 导出会话或配置 | `/export` |
 | `/doctor` | 运行健康检查 | `/doctor` |
+| `/skills` | 查看已加载工具和自定义 skills | `/skills` |
+| `/docs` | 显示本地文档索引 | `/docs` |
+
+### 已删除命令与迁移（0.2.7-beta）
+
+| 已删除命令 | 替代方式 |
+| --- | --- |
+| `/manual` `/auto` `/yolo` `/plan` `/think` | `/mode` |
+| `/providers` `/provider add|edit|remove|test` | `/settings` > Providers |
+| `/model add|edit|remove|test` | `/settings` > Models |
+| `/keys` `/key set|clear|reveal|migrate` | `/settings` > Keys |
+| `/roles` `/role set|clear` | `/settings` > Roles |
+| `/config validate|backup|restore|export|import` | `/settings` > Config 或 `/export` |
+| `/session rename|delete|export|reveal|search|open` | `/sessions` |
+| `/workspace save` `/workspaces` `/workspace remove` | `/workspace` |
+| `/docs config` `/docs providers` `/docs sessions` | `/docs` |
+
+`/model` 现在仅用于切换 chat profile；provider/model/key/role/config 管理都在 `/settings` 中。`/workspace move <path>` 现在是 `/workspace <path-or-bookmark>`。
 
 ## 5. 快捷键与输入
 
@@ -181,7 +185,7 @@ Kairo 有两种界面：
 - `compress` — 上下文压缩总结。
 - `fast` — 快速内部任务。
 
-使用 `/role set <role> <profile>` 绑定角色，`/role clear <role>` 解除绑定。未绑定的角色使用当前 active profile。
+使用 `/settings` > Roles 绑定或解除角色。未绑定的角色使用当前 active profile。
 
 ## 7. 会话持久化
 
@@ -242,7 +246,7 @@ Workspace 是 Kairo 认为可以安全操作的项目根目录。配置项：
 
 ```text
 /workspace
-/workspace move C:\Users\Admin\Desktop\project\my-app
+/workspace C:\Users\Admin\Desktop\project\my-app
 ```
 
 0.2.2 的热切换行为：
@@ -259,13 +263,12 @@ Workspace 是 Kairo 认为可以安全操作的项目根目录。配置项：
 收藏常用的 workspace：
 
 ```text
-/workspace save app
-/workspaces
-/workspace move app
-/workspace remove app
+/workspace
+/workspace C:\Users\Admin\Desktop\project\app
+/workspace app
 ```
 
-书签保存在 `config.json` 的 `workspace_bookmarks` 中，跨重启生效。使用 `/workspace move <bookmark-name>` 可快速切换。
+`/workspace` 面板可保存、重命名、移除书签。书签保存在 `config.json` 的 `workspace_bookmarks` 中，跨重启生效。使用 `/workspace <bookmark-name>` 可快速切换。
 
 Dock 中的 Workspace Review 是只读审查，不会执行 git add、恢复、删除或覆盖操作。
 
@@ -411,7 +414,7 @@ echo $env:KAIRO_DEEPSEEK_API_KEY
 
 ### workspace 切换后 Dock 没更新
 
-使用 `/workspace` 确认当前 root。若 Dock 短暂为空，通常是后台扫描尚未完成；等待一次刷新即可。若路径不存在或不可写，`/workspace move` 会失败并提示原因。
+使用 `/workspace` 确认当前 root。若 Dock 短暂为空，通常是后台扫描尚未完成；等待一次刷新即可。若路径不存在或不可写，`/workspace <path>` 会失败并提示原因。
 
 ### TUI 不适配当前终端
 
@@ -432,115 +435,134 @@ kairo --reduced-motion
 使用：
 
 ```text
-/manual
+/mode
 ```
 
-或启动参数：
+选择 Manual 授权，或启动参数：
 
 ```powershell
 kairo --authorization manual
 ```
 
-## 8. 运行时配置（0.2.3 + 0.2.5）
+## 8. 运行时配置与面板（0.2.7-beta）
 
-Kairo 支持在已启动的 TUI 内增删改模型 profile，无需退出程序或编辑 `config.json`。旧版 `llm.providers[]` 配置会被自动转换为 profile。
+Kairo 支持在已启动的 TUI 内增删改模型 profile，无需退出程序或编辑 `config.json`。旧版 `llm.providers[]` 配置会被自动转换为 profile。0.2.7-beta 起，所有 provider/model/key/role/config 的细粒度命令被迁移到交互面板；slash 命令收敛为工作流入口。
 
-### 8.1 Provider 管理
+### 8.1 `/settings` — 配置面板
 
-- `/providers`：列出所有已配置的 provider。
-- `/provider add`：启动新增 provider 向导，会依次询问名称、base URL、API Key 模式（env/inline/empty）、env 名称、model 名称、context window、max tokens、temperature，以及是否立即测试连接。
-- `/provider edit`：选择并编辑现有 provider。
-- `/provider remove`：删除 provider（保留至少一个）。
-- `/provider test`：发送最小探测请求，返回 Success / Auth Error / Model Error / URL Error / Rate Limit / Unknown。
+`/settings` 打开集中配置面板，覆盖原先分散在 `/providers`、`/model`、`/keys`、`/roles`、`/config` 中的能力：
 
-### 8.2 Model 管理
+- **Providers**：列出、新增、编辑、删除、测试 provider。
+- **Models**：列出、新增、编辑、删除、测试 model。
+- **Keys**：列出 key 来源、设置 inline key、清除 key、reveal、migrate 旧版 key。
+- **Roles**：绑定或解绑 `chat`/`plan`/`compress`/`fast` 角色到 profile。
+- **Config**：校验、备份、恢复、导入、导出当前配置。
 
-- `/model add`：给 provider 添加新 model。
-- `/model edit`：编辑现有 model 的 context window、max tokens、temperature。
-- `/model remove`：删除 provider 下的 model（保留至少一个）。
-- `/model test`：测试 provider 下的指定 model。
+provider/model 测试会发送最小 OpenAI-compatible 探测请求；测试不会写入 session history，也不会触发上下文压缩。
 
-### 8.3 配置备份与恢复
+### 8.2 `/setup` — 首次配置向导
 
-- `/config validate`：校验当前配置并列出错误与警告。
-- `/config backup`：生成带时间戳的 `config.backup.YYYYMMDD-HHMMSS.json`。
-- `/config restore`：从备份列表选择并恢复。
+`/setup` 运行首次配置向导，适用于新安装或 active profile 无效时。它会引导创建 profile/provider、设置 base URL、model、API key 模式（inline/env）、参数，然后运行最小连接测试并保存配置，保存前自动生成备份。
 
-### 8.4 API Key 安全
+### 8.3 `/mode` — 授权与模式
 
-- **本地部署默认**（0.2.5）：允许在 `config.json` 中保存 inline `api_key`。请勿将 `config.json` 纳入版本控制或提交到仓库。
+`/mode` 统一替代 `/manual`、`/auto`、`/yolo`、`/plan`、`/think`。打开紧凑面板，可设置：
+
+- **Authorization**：Manual / Auto / YOLO。
+- **Plan Mode**：ON / OFF。
+- **Thinking Mode**：ON / OFF。
+
+### 8.4 `/status` — 运行状态
+
+`/status` 显示只读运行状态摘要：
+
+- Kairo 版本。
+- 当前 chat profile、model、base URL。
+- API key 来源与脱敏状态。
+- 当前 session 名称、id、消息数。
+- 上下文已用 / 窗口 / 百分比。
+- Workspace root。
+- Plan / Thinking / Authorization 状态。
+- Session persistence 与 strict message packing 状态。
+
+不显示完整 API key 或未脱敏 config JSON。
+
+### 8.5 `/sessions` — 会话管理
+
+`/sessions` 打开会话管理面板，覆盖原先分散在 `/session` 子命令中的能力：
+
+- 切换当前会话。
+- 按标题或内容搜索会话（`/find <keyword>` 是快捷入口）。
+- 从搜索结果打开会话。
+- 重命名或删除会话（最后一个 active session 不可删除）。
+- 导出当前会话为 Markdown 或 JSON。
+- 显示当前会话文件的绝对路径。
+
+### 8.6 `/workspace [path-or-bookmark]` — Workspace 面板与热切换
+
+`/workspace` 无参数时打开 workspace 面板，显示当前 root、书签、文件树、变更文件与 diff。带参数时在当前进程热切换到指定路径或书签名：文件工具、Shell cwd、Python REPL、自定义 skills、Dock 文件树、会话 runtime state 都会更新，无需重启 Kairo。
+
+旧版本的 `/workspace move <path>` 现在统一为 `/workspace <path-or-bookmark>`。
+
+### 8.7 `/export` — 统一导出
+
+`/export` 打开统一导出面版：
+
+- 当前会话导出为 Markdown。
+- 当前会话导出为 JSON。
+- 配置导出，默认脱敏。
+- 含 key 的配置导出，需要二次确认。
+
+### 8.8 API Key 安全
+
+- **本地部署默认**：允许在 `config.json` 中保存 inline `api_key`。请勿将 `config.json` 纳入版本控制或提交到仓库。
 - **多人或 CI 项目推荐**：使用 `api_key_env` 并在系统环境变量中设置 key。env key **不会**被写回 `config.json`。
-- `/key reveal` 与 `/config export --with-keys` 需要二次确认。
-- `/config`、日志、会话历史、`/doctor` 只显示掩码预览，不会输出完整 key。
+- Key reveal 与含 key 的配置导出需要二次确认。
+- `/status`、日志、会话历史、`/doctor` 只显示掩码预览，不会输出完整 key。
 
-### 8.5 Key 与 Role 管理（0.2.5）
+### 8.9 运行时配置的实现方式
 
-- `/keys`：列出 profile 的 key 来源（env / inline / missing）。
-- `/key set <profile-id> [value]`：设置 inline key；未提供值时安全提示输入。
-- `/key clear <profile-id>`：移除 profile 的 inline key。
-- `/key reveal`：确认后显示当前 active profile 的完整 key。
-- `/key migrate`：将旧版 `llm.providers[]` 中的 inline API Key 迁移到 `llm.profiles[]` 对应 profile 中（一次性从 0.2.4 配置升级）。
-- `/roles`：查看当前角色绑定。
-- `/role set <role> <profile-id>`：绑定 chat/plan/compress/fast 到指定 profile。
-- `/role clear <role>`：解除角色绑定。
+运行时配置不是直接让用户手改 JSON，而是通过“命令 -> 面板 -> 草稿 -> 校验 -> 备份 -> 保存 -> 热切换”的安全流程完成。
 
-### 8.6 配置导入/导出（0.2.5）
-
-- `/config export [<path>]`：导出当前配置的干净副本，默认对所有 `api_key` 字段脱敏。
-- `/config export --with-keys [<path>]`：导出包含明文 key 的配置；需要二次确认。
-- `/config import <path>`：校验后导入配置文件；导入前会自动备份当前配置。
-
-### 8.7 Doctor（0.2.5）
-
-- `/doctor`：运行健康检查面板，检查配置合法性、key 是否存在、workspace 是否可达、session 存储、git 状态以及 provider 连通性。不会输出任何 secret。
-
-### 8.8 首次启动向导
-
-当 `config.json` 不存在、`llm.profiles` 为空或 active profile 无效时：
-
-- plain 模式：启动后自动运行交互式 first-run wizard，按提示选择模板并输入必要信息即可。
-- TUI 模式：启动后会显示提示，按 `/provider add` 即可打开新增向导（Modal）。也可以选择跳过，等需要发送模型请求时再用 `/provider add` 配置。
-
-### 8.9 终端内配置模型的实现方式
-
-Kairo 的运行时配置不是直接让用户手改 JSON，而是通过一条安全的“命令 -> 草稿 -> 校验 -> 备份 -> 保存 -> 热切换”流程完成。
-
-1. **命令入口**：输入 `/provider add`、`/provider edit`、`/model add`、`/model edit` 或 `/settings`。
-2. **界面收集信息**：Textual TUI 中会打开 Modal 表单；Plain 模式中会用逐步问答收集同样字段。
+1. **命令入口**：输入 `/settings` 或 `/setup`。
+2. **界面收集信息**：Textual TUI 中打开 Modal 表单；Plain 模式中用逐步问答收集同样字段。
 3. **写入 ConfigDraft**：表单内容先写入内存中的 `ConfigDraft`，不会立刻覆盖 `config.json`。
-4. **校验配置**：保存前检查 provider 名称是否重复、base URL 是否合法、active model 是否存在、`context_window`、`max_tokens` 和 `temperature` 是否合理。
-5. **API Key 处理**：选择 `env` 时只保存 `api_key_env` 名称，不保存环境变量里的真实 key；选择 `inline` 时会要求确认，因为 key 会写入 `config.json`；`/config` 只显示 key 来源和安全预览。
+4. **校验配置**：保存前检查 provider/profile 名称是否重复、base URL 是否合法、active profile 是否存在、`context_window`、`max_tokens` 和 `temperature` 是否合理。
+5. **API Key 处理**：选择 `env` 时只保存 `api_key_env` 名称；选择 `inline` 时会要求确认，因为 key 会写入磁盘。
 6. **自动备份**：保存前生成 `config.backup.YYYYMMDD-HHMMSS.json`。
 7. **原子保存与回滚**：Kairo 使用临时文件写入再替换原配置；如果保存失败，会保留原配置。
-8. **立即生效**：保存成功后重新加载 active provider/model，更新 `base_url`、`model`、`temperature`、`max_tokens`、`context_window` 和上下文管理参数。
+8. **立即生效**：保存成功后重新加载 active profile，更新 `base_url`、`model`、`temperature`、`max_tokens`、`context_window` 和上下文管理参数。
 9. **会话联动**：当前会话的 runtime state 会记录新的模型 profile；Dock 中的模型名和上下文窗口也会刷新。
-10. **连接测试**：`/provider test` 或 `/model test` 会发起最小 OpenAI-compatible 探测请求。测试不会写入 session history，也不会触发上下文压缩。
 
-因此，终端内配置模型的结果和手动编辑 `config.json` 等价，但多了校验、备份、API Key 安全处理和当前会话热更新。
+因此，运行时配置的结果和手动编辑 `config.json` 等价，但多了校验、备份、API Key 安全处理和当前会话热更新。
 
-### 8.7 会话整理
+### 8.10 `/doctor`
 
-- `/session rename`：重命名当前 session。
-- `/session delete`：删除选中的 session（保留至少一个 active session）。
-- `/session export`：导出当前 session 为 Markdown 或 JSON，保存到 `<storage_dir>/exports/`。
-- `/session reveal`：显示当前 session 文件的绝对路径。
-- `/session search <keyword>`：按标题或内容只读搜索已保存 session。
-- `/session open <id-or-index>`：按搜索索引或 session id 切换到指定 session。
+`/doctor` 运行健康检查面板，检查配置合法性、key 是否存在、workspace 是否可达、session 存储、git 状态以及 provider 连通性。不会输出任何 secret。
 
-## 9. 0.2.6-beta 更新内容
+## 9. 0.2.7-beta 更新内容
+
+- **Slash 命令重构**：默认 slash 命令从 52 条收敛到 18 条工作流入口。
+- **面板化管理**：provider/model/key/role/config 管理迁移到 `/settings`；会话管理迁移到 `/sessions`；workspace 管理迁移到 `/workspace`。
+- **新增命令**：`/setup`（首次配置向导）、`/mode`（授权/Plan/Thinking）、`/status`（只读运行状态）、`/find`（会话搜索）、`/export`（统一导出）。
+- **删除子命令**：`/manual`、`/auto`、`/yolo`、`/plan`、`/think`、`/provider ...`、`/model add|edit|remove|test`、`/key ...`、`/role ...`、`/config ...`、`/session ...`、`/workspace save|remove`、`/docs config|providers|sessions`。已删除命令现在返回迁移提示。
+- **`/workspace <path-or-bookmark>`**：旧版 `/workspace move <path>` 现在统一为 `/workspace` 的参数形式。
+- **`/model` 仅切换**：用于选择 chat profile；编辑管理请使用 `/settings`。
+
+## 10. 0.2.6-beta 更新内容
 
 - **统一 `/model` 切换**：`/model` 以单一事务切换 chat profile，保持 `model_roles.chat`、`active_profile`、context window 与 session 一致，下一次 chat 请求必定使用新 profile。
 - **Provider key 保留**：编辑某个 provider 不再清空其它 provider 的 inline key。留空保留原 key；显式 clear 只清空目标。
 - **严格消息打包**：所有 LLM 请求 payload 折叠为唯一首位 `system` 消息，兼容严格 OpenAI-compatible provider（`llm.strict_message_packing`，默认 `true`）。
 - **Esc 停止输出**：Textual 模式下流式输出/工具运行中按 `Esc` 协作停止当前输出，partial 回复以 `[stopped]` 标记保存；plain 模式仍使用 `Ctrl+C`。
 
-## 10. 0.2.5 更新内容
+## 11. 0.2.5 更新内容
 
 - Profile-first 配置：`llm.profiles[]`，并自动兼容旧版 `llm.providers[]`。
-- 本地配置优先的 key 管理：`/keys`、`/key set|clear|reveal|migrate`，默认掩码显示。
-- 模型角色：通过 `/role set` 与 `llm.model_roles` 路由 `chat`、`plan`、`compress`、`fast`。
-- Workspace 书签：`/workspace save`、`/workspaces`、`/workspace move <name>`、`/workspace remove`。
-- 会话搜索与切换：`/session search`、`/session open`。
-- 配置导入/导出：默认脱敏，`--with-keys` 需二次确认。
+- 本地配置优先的 key 管理，默认掩码显示。
+- 模型角色：通过 `llm.model_roles` 路由 `chat`、`plan`、`compress`、`fast`。
+- Workspace 书签与热切换。
+- 会话搜索与切换。
+- 配置导入/导出：默认脱敏，with-keys 需二次确认。
 - `/doctor` 健康检查面板。
 - 更新配置文档、用户手册并扩展测试。

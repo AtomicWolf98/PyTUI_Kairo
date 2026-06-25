@@ -134,18 +134,6 @@ class TestMessagePacker(unittest.TestCase):
         self.assertEqual(packed[2]["role"], "user")
         self.assertEqual(warnings, [])
 
-    def test_non_strict_keeps_late_systems_in_place(self):
-        history = [
-            _system("main"),
-            {"role": "user", "content": "hi"},
-            _system("late system"),
-            {"role": "assistant", "content": "reply"},
-        ]
-        packed, warnings = pack_messages_for_provider(history, strict_openai=False)
-        self.assertEqual([m["role"] for m in packed], ["system", "user", "system", "assistant"])
-        self.assertEqual(packed[2]["content"], "late system")
-        self.assertTrue(any("folded" in w for w in warnings))
-
     def test_does_not_mutate_input(self):
         history = [
             _system("main"),

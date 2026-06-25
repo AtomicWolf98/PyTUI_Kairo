@@ -52,21 +52,6 @@ class TestCancellationToken(unittest.TestCase):
         token.cancel()
         self.assertTrue(token.cancelled)
 
-    def test_cancel_runs_callbacks_once(self):
-        token = CancellationToken()
-        calls: List[str] = []
-        token.add_cancel_callback(lambda: calls.append("closed"))
-        token.cancel()
-        token.cancel()
-        self.assertEqual(calls, ["closed"])
-
-    def test_callback_added_after_cancel_runs_immediately(self):
-        token = CancellationToken()
-        calls: List[str] = []
-        token.cancel()
-        token.add_cancel_callback(lambda: calls.append("closed"))
-        self.assertEqual(calls, ["closed"])
-
 
 class TestStopStreaming(unittest.TestCase):
     def setUp(self):

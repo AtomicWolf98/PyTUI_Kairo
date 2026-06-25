@@ -1,6 +1,6 @@
 # Commands / 命令
 
-Current version / 当前版本：**0.2.6-beta**
+Current version / 当前版本：**0.2.7-beta**
 
 The complete command reference is maintained in the bilingual manuals:
 
@@ -9,57 +9,63 @@ The complete command reference is maintained in the bilingual manuals:
 - 中文：[Slash 命令](zh/user-manual.md#4-slash-命令)
 - English: [Slash Commands](en/user-manual.md#4-slash-commands)
 
-## Notes / 说明 (0.2.6-beta)
+## Notes / 说明 (0.2.7-beta)
 
-- `/model` switches the **chat profile** in a single transaction. If `model_roles.chat` is configured it is updated too, so the next chat request uses the selected profile. `/roles` is still used for `plan`/`compress`/`fast` routing.
-- Editing a provider no longer clears other providers' inline API keys. Leave the key blank to keep the existing key; use the explicit clear option to clear only the target.
-- All LLM request payloads are folded to a single leading `system` message (`llm.strict_message_packing`, default `true`).
-- Textual mode: press `Esc` while streaming or running tools to stop the current output. Plain mode: `Ctrl+C`.
+- `/model` is **switch-only**: it selects the current chat profile in a single transaction. Provider/model management moved to `/settings`.
+- `/settings` opens the config panel for providers, models, keys, roles, and config operations.
+- `/sessions` opens the session management panel for switch, search, rename, delete, export, and reveal.
+- `/workspace` opens the workspace panel with no argument, or hot-switches to a path/bookmark when an argument is given.
+- `/mode` replaces `/manual`, `/auto`, `/yolo`, `/plan`, and `/think` as the unified mode panel.
+- `/status` replaces the read-only use of `/config` with a focused runtime status view.
+- `/find <keyword>` replaces `/session search` as the unified session search entry.
+- `/export` unifies session export and config export with redaction by default.
 
-- `/model` 以单一事务切换 **chat profile**。若配置了 `model_roles.chat` 会同步更新，下一次 chat 请求使用新 profile。`/roles` 仍用于 `plan`/`compress`/`fast` 路由。
-- 编辑某个 provider 不会清空其它 provider 的 inline API key。留空保留原 key；使用显式 clear 只清空目标。
-- 所有 LLM 请求 payload 折叠为唯一首位 `system` 消息（`llm.strict_message_packing`，默认 `true`）。
-- Textual 模式：流式输出/工具运行中按 `Esc` 停止当前输出；plain 模式：`Ctrl+C`。
+- `/model` **仅用于切换** chat profile，是单一事务。provider/model 管理已迁移到 `/settings`。
+- `/settings` 打开配置面板，管理 providers、models、keys、roles 与配置操作。
+- `/sessions` 打开会话管理面板，支持切换、搜索、重命名、删除、导出与显示路径。
+- `/workspace` 无参数时打开 workspace 面板，带参数时作为路径或书签名热切换 workspace。
+- `/mode` 统一替代 `/manual`、`/auto`、`/yolo`、`/plan`、`/think`。
+- `/status` 替代原 `/config` 的只读展示用途，集中显示运行状态。
+- `/find <keyword>` 统一替代 `/session search`，作为会话搜索入口。
+- `/export` 统一会话导出与配置导出，默认脱敏。
 
 ## Command List
 
 | Command | Purpose |
 | --- | --- |
-| `/help` | Show help |
+| `/help` | Show grouped help |
 | `/exit` | Exit Kairo |
-| `/config` | Show current settings (now includes API key safety hint) |
-| `/config validate` | Validate current configuration and list issues |
-| `/config backup` | Write a timestamped backup of `config.json` |
-| `/config restore` | Restore a previously written backup |
-| `/settings` | Open the settings menu (plain + TUI) |
-| `/providers` | List configured providers |
-| `/provider add` | Add a new provider via wizard |
-| `/provider edit` | Edit an existing provider |
-| `/provider remove` | Remove a provider (with confirmation) |
-| `/provider test` | Test provider connection / key / model |
-| `/model` | Select a configured model profile |
-| `/model add` | Add a model to a provider |
-| `/model edit` | Edit an existing model |
-| `/model remove` | Remove a model (with confirmation) |
-| `/model test` | Test a model against its provider |
-| `/manual` | Confirm every tool call |
-| `/auto` | Auto-run normal in-workspace tools |
-| `/yolo` | Skip tool confirmations |
-| `/plan` | Toggle Plan Mode |
-| `/think` | Toggle Thinking Mode |
-| `/skills` | List tools and skills |
 | `/new [name]` | Create and switch to a new persisted session |
-| `/sessions` | Switch saved sessions |
-| `/session rename` | Rename the current session |
-| `/session delete` | Delete a session (with confirmation) |
-| `/session export` | Export the current session as Markdown or JSON |
-| `/session reveal` | Print the current session file path |
+| `/sessions` | Open the session management panel |
 | `/clear` | Clear the current session |
 | `/undo` | Undo the latest conversation turn |
-| `/compress` | Compress older context |
-| `/docs` | List local documentation paths |
-| `/docs config` | Open the configuration doc path |
-| `/docs providers` | Open the provider doc path |
-| `/docs sessions` | Open the sessions doc path |
-| `/workspace` | Show the current workspace |
-| `/workspace move <path>` | Hot-switch workspace without restarting |
+| `/compress` | Manually compress older context |
+| `/model` | Switch the current chat profile |
+| `/setup` | Run the first-run setup wizard |
+| `/settings` | Open the settings/config panel |
+| `/mode` | Open the mode panel (authorization, plan, thinking) |
+| `/workspace [path-or-bookmark]` | Open workspace panel or hot-switch workspace |
+| `/status` | Show read-only runtime status |
+| `/find <keyword>` | Search current and persisted sessions |
+| `/export` | Export session or config |
+| `/doctor` | Run health checks |
+| `/skills` | List tools and skills |
+| `/docs` | Show local documentation index |
+
+## Removed commands / 已删除命令
+
+The following commands were removed in 0.2.7-beta. Inputting them now shows a migration hint instead of running old behavior.
+
+以下命令在 0.2.7-beta 中已删除，现在输入会返回迁移提示，不再执行旧逻辑。
+
+| Removed command / 已删除命令 | Migration / 迁移方式 |
+| --- | --- |
+| `/manual` `/auto` `/yolo` `/plan` `/think` | Use `/mode` / 使用 `/mode` |
+| `/providers` `/provider add|edit|remove|test` | Use `/settings` > Providers / 使用 `/settings` 的 Providers |
+| `/model add|edit|remove|test` | Use `/settings` > Models / 使用 `/settings` 的 Models |
+| `/keys` `/key set|clear|reveal|migrate` | Use `/settings` > Keys / 使用 `/settings` 的 Keys |
+| `/roles` `/role set|clear` | Use `/settings` > Roles / 使用 `/settings` 的 Roles |
+| `/config validate|backup|restore|export|import` | Use `/settings` > Config or `/export` / 使用 `/settings` 的 Config 或 `/export` |
+| `/session rename|delete|export|reveal|search|open` | Use `/sessions` / 使用 `/sessions` |
+| `/workspace save` `/workspaces` `/workspace remove` | Use `/workspace` / 使用 `/workspace` |
+| `/docs config` `/docs providers` `/docs sessions` | Use `/docs` / 使用 `/docs` |

@@ -14,7 +14,7 @@ The maintained troubleshooting sections are in the bilingual manuals:
 | No model profiles | Check `llm.providers`, `active_provider`, and `active_model` |
 | API key missing | Check the referenced environment variable, such as `KAIRO_DEEPSEEK_API_KEY` |
 | Sessions not saved | Check `sessions.enabled`, `sessions.storage_dir`, and directory write permissions |
-| Workspace did not move | Run `/workspace`, then retry `/workspace move <path>` with an existing writable directory |
+| Workspace did not move | Run `/workspace`, then retry `/workspace <path>` with an existing writable directory |
 | TUI is unstable | Start with `kairo --plain` or `kairo --reduced-motion` |
-| Too many tool prompts | Use `/auto` only if workspace-internal automation is acceptable |
-| Too much automation | Use `/manual` |
+| Too many tool prompts | Use `/mode` and select Auto only if workspace-internal automation is acceptable |
+| Too much automation | Use `/mode` and select Manual |

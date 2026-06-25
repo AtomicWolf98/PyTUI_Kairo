@@ -169,39 +169,23 @@ class LLMClient:
         if profile.api_key:
             headers["Authorization"] = f"Bearer {profile.api_key}"
 
-        if cancel_token is not None and cancel_token.cancelled:
-            yield ("stopped", None)
-            return
-
         try:
             response = self._post_with_retries(url, payload, headers)
         except _CategorizedError as exc:
             yield (exc.category if exc.category == "context_error" else "error", exc.message)
             return
 
-        if cancel_token is not None:
-            cancel_token.add_cancel_callback(response.close)
-            if cancel_token.cancelled:
-                yield ("stopped", None)
-                return
-
         in_think_tag = False
         text_buffer = ""
         tool_calls_dict: Dict[int, Dict[str, Any]] = {}
-        stopped = False
 
         try:
             for raw_line in response:
                 # 0.2.6-beta: cooperative cancel before reading the next chunk.
                 if cancel_token is not None and cancel_token.cancelled:
-                    stopped = True
                     yield ("stopped", None)
                     return
                 line_str = raw_line.decode("utf-8", errors="replace").strip()
-                if cancel_token is not None and cancel_token.cancelled:
-                    stopped = True
-                    yield ("stopped", None)
-                    return
                 if not line_str:
                     continue
 
@@ -283,20 +267,9 @@ class LLMClient:
                                 yield ("thought", text_buffer)
                                 text_buffer = ""
         except Exception as exc:
-            if cancel_token is not None and cancel_token.cancelled:
-                stopped = True
-                yield ("stopped", None)
-                return
             yield ("error", f"Error reading response stream: {exc}")
         finally:
             response.close()
-
-        if stopped:
-            return
-
-        if cancel_token is not None and cancel_token.cancelled:
-            yield ("stopped", None)
-            return
 
         if text_buffer:
             if in_think_tag:

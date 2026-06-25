@@ -267,13 +267,19 @@ class Agent:
         welcome_text.append(f"Thinking Mode: {'ON' if self.config.thinking_mode else 'OFF'}\n", style="yellow" if self.config.thinking_mode else "gray")
         welcome_text.append("Type /help to see available commands.", style="dim")
 
-        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.6"))
+        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.7"))
+
+    def _is_plain_console(self) -> bool:
+        """Return True when running in the plain console and not under Textual."""
+        return getattr(self.console, "__class__", object).__name__ != "EventConsole"
 
     def handle_command(self, user_input: str) -> bool:
         """
         Handles slash commands entered by the user.
         Returns True if a command was matched and handled, False otherwise.
         """
+        from agent import runtime_commands as rc
+
         dispatcher = CommandDispatcher(self)
         result = dispatcher.dispatch(user_input)
         if not result.handled:
@@ -288,7 +294,7 @@ class Agent:
             style = "bold green" if result.success else "bold yellow"
             self.console.print(f"[{style}]{result.message}[/{style}]")
 
-        if result.interactive:
+        if result.interactive and self._is_plain_console():
             kind = result.data.get("kind")
             if kind == "sessions":
                 options = result.data["options"]
@@ -312,6 +318,42 @@ class Agent:
                         self.console.print(f"[{style}]{switch.message}[/{style}]")
                 else:
                     self.console.print("[bold yellow]Model switch cancelled: invalid selection.[/bold yellow]")
+            elif kind == "setup":
+                setup_result = rc.handle_setup(self, user_input, [])
+                if setup_result.message:
+                    style = "bold green" if setup_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{setup_result.message}[/{style}]")
+            elif kind == "mode":
+                mode_result = rc.handle_mode(self, user_input, [])
+                if mode_result.message:
+                    style = "bold green" if mode_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{mode_result.message}[/{style}]")
+            elif kind == "find":
+                results = result.data.get("results", [])
+                if results:
+                    options = [f"[{r['index']}] {r['name']}" for r in results]
+                    idx = tui_widgets.select_menu("Open which session:", options)
+                    if isinstance(idx, int) and 0 <= idx < len(results):
+                        session_id = results[idx]["id"]
+                        self.conversations.switch_session(session_id)
+                        self.console.print(f"[bold green]Switched to conversation:[/bold green] {self.conversations.active.name}")
+                    else:
+                        self.console.print("[bold yellow]Session open cancelled: invalid selection.[/bold yellow]")
+            elif kind == "export":
+                export_result = rc.handle_export(self, user_input, [])
+                if export_result.message:
+                    style = "bold green" if export_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{export_result.message}[/{style}]")
+            elif kind == "settings":
+                settings_result = rc.handle_settings(self, user_input, [])
+                if settings_result.message:
+                    style = "bold green" if settings_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{settings_result.message}[/{style}]")
+            elif kind == "workspace":
+                workspace_result = rc.handle_workspace(self, user_input, [])
+                if workspace_result.message:
+                    style = "bold green" if workspace_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{workspace_result.message}[/{style}]")
 
         return True
 

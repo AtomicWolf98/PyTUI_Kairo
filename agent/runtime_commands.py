@@ -79,7 +79,7 @@ def _list_models_for_provider(config: Config, provider_name: str) -> List[str]:
 def _choose_provider(config: Config, prompt: str = "Select provider") -> Optional[str]:
     names = _list_provider_lines(config)
     if not names:
-        notice("No providers configured. Use '/provider add' to create one.")
+        notice("No providers configured. Use /settings > Providers.")
         return None
     idx = select(prompt, names)
     if idx < 0:
@@ -92,7 +92,10 @@ def _switch_after_save(agent, draft: ConfigDraft, report_text: str) -> str:
     config = agent.config
     config._sync_runtime_fields()
     agent.conversations.set_context_window(config.context_window)
-    agent.conversations.update_runtime_state(model_profile=config.active_model_profile)
+    agent.conversations.update_runtime_state(
+        model_profile=config.active_model_profile,
+        authorization_level=config.authorization_level,
+    )
     agent.conversations.save_all(reason="model_config_update")
     return report_text
 
@@ -109,7 +112,8 @@ def handle_providers(agent, raw: str, parts: List[str]) -> CommandResult:
     banner("Configured Providers")
     lines = _list_provider_lines(agent.config) or ["(none)"]
     notice("\n".join(lines))
-    notice("Use '/provider add' to add a new provider, '/provider edit|remove|test' to manage, '/model add' for new models.")
+    notice("Use /settings > Providers to manage providers.")
+    notice("Use /settings > Models to manage models.")
     return CommandResult(handled=True, success=True, data={"kind": "providers"})
 
 
@@ -439,12 +443,13 @@ def handle_model_test(agent, raw: str, parts: List[str]) -> CommandResult:
 
 
 _SETTINGS_OPTIONS = [
-    "Manage providers",
-    "Manage models",
-    "Toggle Plan Mode",
-    "Toggle Thinking Mode",
-    "Cycle authorization level",
-    "Exit settings",
+    "Providers",
+    "Models",
+    "Keys",
+    "Roles",
+    "Config",
+    "Doctor",
+    "Exit",
 ]
 
 
@@ -452,23 +457,39 @@ def handle_settings(agent, raw: str, parts: List[str]) -> CommandResult:
     banner("Settings")
     idx = select("Choose an area", _SETTINGS_OPTIONS)
     if idx == 0:
+        return _settings_providers_submenu(agent, raw, parts)
+    if idx == 1:
+        return _settings_models_submenu(agent, raw, parts)
+    if idx == 2:
+        return _settings_keys_submenu(agent, raw, parts)
+    if idx == 3:
+        return _settings_roles_submenu(agent, raw, parts)
+    if idx == 4:
+        return _settings_config_submenu(agent, raw, parts)
+    if idx == 5:
+        return handle_doctor(agent, raw, parts)
+    return CommandResult(handled=True, success=True, message="Settings closed.", data={"kind": "settings"})
+
+
+def _settings_providers_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
+    options = ["List providers", "Add provider", "Edit provider", "Remove provider", "Test provider", "Back"]
+    idx = select("Providers", options)
+    if idx == 0:
         return handle_providers(agent, raw, parts)
     if idx == 1:
-        return _model_submenu(agent, raw, parts)
+        return handle_provider_add(agent, raw, parts)
     if idx == 2:
-        return agent.handle_command("/plan")
+        return handle_provider_edit(agent, raw, parts)
     if idx == 3:
-        return agent.handle_command("/think")
+        return handle_provider_remove(agent, raw, parts)
     if idx == 4:
-        current = agent.config.authorization_level
-        nxt = {"manual": "auto", "auto": "yolo", "yolo": "manual"}.get(current, "manual")
-        return agent.handle_command(f"/{nxt}")
-    return CommandResult(handled=True, success=True, message="Settings closed.")
+        return handle_provider_test(agent, raw, parts)
+    return CommandResult(handled=True, success=True, data={"kind": "settings"})
 
 
-def _model_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
+def _settings_models_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
     options = ["Add model", "Edit model", "Remove model", "Test model", "Back"]
-    idx = select("Model actions", options)
+    idx = select("Models", options)
     if idx == 0:
         return handle_model_add(agent, raw, parts)
     if idx == 1:
@@ -477,7 +498,54 @@ def _model_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
         return handle_model_remove(agent, raw, parts)
     if idx == 3:
         return handle_model_test(agent, raw, parts)
-    return CommandResult(handled=True, success=True)
+    return CommandResult(handled=True, success=True, data={"kind": "settings"})
+
+
+def _settings_keys_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
+    options = ["List keys", "Set key", "Clear key", "Reveal key", "Migrate keys", "Back"]
+    idx = select("Keys", options)
+    if idx == 0:
+        return handle_keys(agent, raw, parts)
+    if idx == 1:
+        return handle_key_set(agent, raw, parts)
+    if idx == 2:
+        return handle_key_clear(agent, raw, parts)
+    if idx == 3:
+        return handle_key_reveal(agent, raw, parts)
+    if idx == 4:
+        return handle_key_migrate(agent, raw, parts)
+    return CommandResult(handled=True, success=True, data={"kind": "settings"})
+
+
+def _settings_roles_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
+    options = ["List roles", "Set role", "Clear role", "Back"]
+    idx = select("Roles", options)
+    if idx == 0:
+        return handle_roles(agent, raw, parts)
+    if idx == 1:
+        return handle_role_set(agent, raw, parts)
+    if idx == 2:
+        return handle_role_clear(agent, raw, parts)
+    return CommandResult(handled=True, success=True, data={"kind": "settings"})
+
+
+def _settings_config_submenu(agent, raw: str, parts: List[str]) -> CommandResult:
+    options = ["Validate", "Backup", "Restore", "Import", "Export (redacted)", "Back"]
+    idx = select("Config", options)
+    if idx == 0:
+        return handle_config_validate(agent, raw, parts)
+    if idx == 1:
+        return handle_config_backup(agent, raw, parts)
+    if idx == 2:
+        return handle_config_restore(agent, raw, parts)
+    if idx == 3:
+        path = ask("Path to import from")
+        if not path:
+            return CommandResult(handled=True, success=False, message="Path required.")
+        return handle_config_import(agent, raw, ["", "", path])
+    if idx == 4:
+        return handle_config_export(agent, raw, parts)
+    return CommandResult(handled=True, success=True, data={"kind": "settings"})
 
 
 # ---- Config validate / backup / restore ----------------------------------------
@@ -706,12 +774,382 @@ def _session_options(agent) -> List[str]:
     return options
 
 
-def _session_options(agent) -> List[str]:
-    options = []
-    for session in agent.conversations.sessions:
-        marker = "*" if session.id == agent.conversations.active_session_id else " "
-        options.append(f"{marker} {session.name} | {len(session.history)} messages")
-    return options
+# ---- New 0.2.7-beta interactive handlers --------------------------------------
+
+
+def handle_setup(agent, raw: str, parts: List[str]) -> CommandResult:
+    """First-run setup wizard that creates a chat profile and saves config."""
+    config = agent.config
+    profiles = config.get_profile_ids()
+    if profiles:
+        if not confirm("Configuration already has profiles. Create a new profile anyway?", default=False):
+            return CommandResult(handled=True, success=False, message="Setup cancelled.")
+
+    provider_name = ask("Provider name")
+    if not provider_name:
+        return CommandResult(handled=True, success=False, message="Provider name is required.")
+
+    base_url = ask("Base URL", default="https://api.openai.com/v1")
+    model_name = ask("Model name")
+    if not model_name:
+        return CommandResult(handled=True, success=False, message="Model name is required.")
+
+    api_key_mode = ask_choice("API key mode", ["env", "inline", "empty"], default="env")
+    api_key_env = ""
+    api_key = ""
+    if api_key_mode == "env":
+        api_key_env = ask("API key env name", default=f"KAIRO_{provider_name.upper().replace('-', '_')}_API_KEY")
+    elif api_key_mode == "inline":
+        api_key = ask("API key value (will be saved to config.json)")
+
+    context_window = ask_int("Context window", default=int(config.llm["defaults"]["context_window"]), minimum=1)
+    max_tokens = ask_int("Max tokens", default=int(config.llm["defaults"]["max_tokens"]), minimum=1)
+    temperature = ask_float("Temperature", default=float(config.llm["defaults"]["temperature"]), minimum=0.0, maximum=2.0)
+
+    profile_id = f"{provider_name}/{model_name}"
+    draft = ConfigDraft.from_config(config)
+    if not draft.add_profile(
+        id=profile_id,
+        provider=provider_name,
+        base_url=base_url,
+        api_key=api_key,
+        api_key_env=api_key_env,
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        context_window=context_window,
+    ):
+        return CommandResult(handled=True, success=False, message=f"Failed to add profile '{profile_id}'.")
+
+    allow_inline = False
+    if api_key_mode == "inline":
+        notice("WARNING: inline API keys are written to config.json.")
+        if not confirm("This will save the API key to disk. Continue?", default=False):
+            return CommandResult(handled=True, success=False, message="Cancelled; no changes saved.")
+        allow_inline = True
+
+    if confirm("Test connection now?", default=True):
+        test_key = api_key or _env_value(api_key_env)
+        _test_and_show(agent, base_url=base_url, api_key=test_key, model=model_name)
+
+    if not confirm("Save and switch to this profile?", default=True):
+        return CommandResult(handled=True, success=True, message="Draft discarded; no changes saved.")
+
+    draft.set_active_profile(profile_id)
+    report = draft.apply_to(config, backup=True, allow_inline_key=allow_inline)
+    if not report.ok:
+        error(report.to_text())
+        return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+
+    _switch_after_save(agent, draft, report.to_text())
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Profile '{profile_id}' created and saved. Active target: {config.active_model_profile}",
+        refresh_ui=True,
+        data={"kind": "setup"},
+    )
+
+
+def handle_mode(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Interactive mode switcher for authorization, plan and thinking."""
+    config = agent.config
+    options = [
+        "Toggle Authorization",
+        "Toggle Plan Mode",
+        "Toggle Thinking Mode",
+        "Done",
+    ]
+    while True:
+        banner("Mode Settings")
+        notice(f"Authorization: {config.authorization_level.upper()}")
+        notice(f"Plan Mode: {'ON' if config.plan_mode else 'OFF'}")
+        notice(f"Thinking Mode: {'ON' if config.thinking_mode else 'OFF'}")
+        idx = select("Choose an option", options)
+        if idx < 0 or idx == 3:
+            return CommandResult(handled=True, success=True, message="Mode settings closed.", data={"kind": "mode"})
+
+        draft = ConfigDraft.from_config(config)
+        if idx == 0:
+            current = config.authorization_level
+            nxt = {"manual": "auto", "auto": "yolo", "yolo": "manual"}.get(current, "manual")
+            draft.authorization_level = nxt
+        elif idx == 1:
+            draft.plan_mode = not config.plan_mode
+        elif idx == 2:
+            draft.thinking_mode = not config.thinking_mode
+
+        report = draft.apply_to(config, backup=True)
+        if not report.ok:
+            error(report.to_text())
+            return CommandResult(handled=True, success=False, message="Save refused:\n" + report.to_text())
+        _switch_after_save(agent, draft, report.to_text())
+        notice("Saved.")
+
+
+def handle_status(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Read-only runtime status summary with redacted secrets."""
+    cfg = agent.config
+    from agent.profile_resolver import get_active_profile
+
+    active = get_active_profile(cfg)
+    key_hint = cfg.describe_active_api_key()
+
+    try:
+        tracker = agent.conversations.active.token_tracker
+        ctx_used = tracker.context_used_tokens
+        ctx_window = tracker.context_window
+        ctx_pct = tracker.context_percent
+    except Exception:
+        ctx_used = 0
+        ctx_window = cfg.context_window
+        ctx_pct = 0.0
+
+    session = agent.conversations.active
+    session_id_short = session.id[:8] if hasattr(session, "id") else ""
+
+    lines = [
+        "Kairo version: 0.2.7-beta",
+        f"Active profile: {active.id if active else 'none'}",
+        f"Model: {cfg.model}",
+        f"Base URL: {cfg.base_url}",
+        f"API Key: {key_hint}",
+        "",
+        f"Session: {agent.active_session_name}",
+        f"Session ID: {session_id_short}...",
+        f"Messages: {len(agent.history)}",
+        f"Context: {ctx_used}/{ctx_window} ({ctx_pct:.1f}%)",
+        "",
+        f"Workspace: {agent.workspace_context.root}",
+        f"Authorization: {cfg.authorization_level.upper()}",
+        f"Plan Mode: {'ON' if cfg.plan_mode else 'OFF'}",
+        f"Thinking Mode: {'ON' if cfg.thinking_mode else 'OFF'}",
+        f"Session persistence: {'ON' if cfg.sessions.get('enabled') else 'OFF'}",
+        f"Strict message packing: {'ON' if cfg.strict_message_packing else 'OFF'}",
+        f"Esc stops generation: {'ON' if cfg.ui.get('esc_stops_generation') else 'OFF'}",
+    ]
+    text = "\n".join(lines)
+    notice(text)
+    return CommandResult(handled=True, success=True, message=text, data={"kind": "status"})
+
+
+def handle_find(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Search sessions and optionally open one by index."""
+    keyword = parts[2].strip() if len(parts) > 2 else ""
+    if not keyword:
+        keyword = ask("Search keyword")
+    if not keyword:
+        return CommandResult(handled=True, success=False, message="Search keyword is required.")
+
+    results = _search_sessions(agent, keyword)
+    if not results:
+        return CommandResult(handled=True, success=True, message=f"No sessions matched '{keyword}'.", data={"kind": "find", "results": []})
+
+    notice(f"Search results for '{keyword}':")
+    lines = [f"[{r['index']}] {r['name']}  ({r['path']})" for r in results]
+    notice("\n".join(lines))
+
+    choice = ask("Enter index to open (blank to cancel)")
+    if not choice:
+        return CommandResult(handled=True, success=True, message="Cancelled.", data={"kind": "find", "results": results})
+    try:
+        idx = int(choice)
+    except ValueError:
+        return CommandResult(handled=True, success=False, message="Invalid index.", data={"kind": "find", "results": results})
+    if idx < 0 or idx >= len(results):
+        return CommandResult(handled=True, success=False, message="Index out of range.", data={"kind": "find", "results": results})
+
+    session_id = results[idx]["id"]
+    agent.conversations.switch_session(session_id)
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Switched to session: {agent.conversations.active.name}",
+        refresh_ui=True,
+        data={"kind": "find", "session_id": session_id},
+    )
+
+
+def handle_export(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Unified export menu for sessions and config."""
+    options = [
+        "Export current session as Markdown",
+        "Export current session as JSON",
+        "Export config (redacted)",
+        "Export config with keys",
+        "Cancel",
+    ]
+    idx = select("Choose export option", options)
+    if idx == 0:
+        return handle_session_export(agent, raw, parts)
+    if idx == 1:
+        store = _get_session_store(agent)
+        if store is None:
+            return CommandResult(handled=True, success=False, message="Session persistence is disabled.")
+        session = agent.conversations.active
+        dest = store.export_session(session.id, fmt="json")
+        if not dest:
+            return CommandResult(handled=True, success=False, message="Export failed.")
+        return CommandResult(
+            handled=True,
+            success=True,
+            message=f"Exported '{session.name}' (json) to:\n{dest}",
+            data={"kind": "export", "path": str(dest), "format": "json"},
+        )
+    if idx == 2:
+        return handle_config_export(agent, raw, parts)
+    if idx == 3:
+        return handle_config_export(agent, raw, parts + ["--with-keys"])
+    return CommandResult(handled=True, success=True, message="Export cancelled.", data={"kind": "export"})
+
+
+# ---- Session management panel -------------------------------------------------
+
+
+def handle_sessions(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Session management panel."""
+    options = ["Switch", "Search", "Open", "Rename", "Delete", "Export", "Reveal path", "Back"]
+    idx = select("Session management", options)
+    if idx == 0:
+        switch_options = _session_options(agent)
+        idx2 = select("Switch to which session", switch_options)
+        if idx2 < 0:
+            return CommandResult(handled=True, success=True, message="Cancelled.", data={"kind": "sessions"})
+        session = agent.conversations.sessions[idx2]
+        agent.conversations.switch_session(session.id)
+        return CommandResult(
+            handled=True,
+            success=True,
+            message=f"Switched to session: {session.name}",
+            refresh_ui=True,
+            data={"kind": "sessions"},
+        )
+    if idx == 1:
+        keyword = ask("Search keyword")
+        if not keyword:
+            return CommandResult(handled=True, success=False, message="Keyword required.")
+        return handle_find(agent, raw, ["", "", keyword])
+    if idx == 2:
+        target = ask("Session id or index")
+        if not target:
+            return CommandResult(handled=True, success=False, message="Target required.")
+        return handle_session_open(agent, raw, ["", "", target])
+    if idx == 3:
+        return handle_session_rename(agent, raw, parts)
+    if idx == 4:
+        return handle_session_delete(agent, raw, parts)
+    if idx == 5:
+        return handle_session_export(agent, raw, parts)
+    if idx == 6:
+        return handle_session_reveal(agent, raw, parts)
+    return CommandResult(handled=True, success=True, message="Back.", data={"kind": "sessions"})
+
+
+# ---- Workspace management panel -----------------------------------------------
+
+
+def _workspace_tree_review(agent):
+    from agent.workspace import WorkspaceMonitor
+    monitor = WorkspaceMonitor(agent.workspace_context.root)
+    snapshot = monitor.refresh()
+    files = list(snapshot.files[:50])
+    notice(f"Workspace tree: {snapshot.root}")
+    if snapshot.tree_truncated:
+        notice("(truncated)")
+    notice("\n".join(files) or "(no files)")
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Workspace tree: {snapshot.root}",
+        data={"kind": "workspace", "files": files},
+    )
+
+
+def _workspace_changed_files(agent):
+    from agent.workspace import WorkspaceMonitor
+    monitor = WorkspaceMonitor(agent.workspace_context.root)
+    snapshot = monitor.refresh()
+    changes = snapshot.changes
+    if not changes:
+        notice("No changed files.")
+        return CommandResult(handled=True, success=True, message="No changed files.", data={"kind": "workspace"})
+    lines = [f"  {c.status} {c.path}{' *' if c.session_touched else ''}" for c in changes]
+    notice("Changed files:")
+    notice("\n".join(lines))
+    return CommandResult(handled=True, success=True, message="\n".join(lines), data={"kind": "workspace"})
+
+
+def _workspace_diff_viewer(agent):
+    from agent.workspace import WorkspaceMonitor
+    monitor = WorkspaceMonitor(agent.workspace_context.root)
+    snapshot = monitor.refresh()
+    changes = snapshot.changes
+    if not changes:
+        notice("No changed files to diff.")
+        return CommandResult(handled=True, success=True, message="No changed files to diff.", data={"kind": "workspace"})
+    options = [c.path for c in changes]
+    idx = select("Select file to diff", options)
+    if idx < 0:
+        return CommandResult(handled=True, success=True, message="Cancelled.", data={"kind": "workspace"})
+    selected = options[idx]
+    snapshot = monitor.refresh(selected_file=selected)
+    notice(f"Diff for {selected}:")
+    notice(snapshot.diff)
+    return CommandResult(
+        handled=True,
+        success=True,
+        message=f"Diff for {selected}:\n{snapshot.diff}",
+        data={"kind": "workspace"},
+    )
+
+
+def handle_workspace(agent, raw: str, parts: List[str]) -> CommandResult:
+    """Workspace management panel."""
+    options = [
+        "Show current workspace",
+        "Move workspace",
+        "Save bookmark",
+        "Remove bookmark",
+        "List bookmarks",
+        "Tree review",
+        "Changed files",
+        "Diff viewer",
+        "Back",
+    ]
+    idx = select("Workspace management", options)
+    if idx == 0:
+        root = agent.workspace_context.root
+        bookmarks = agent.config.workspace_bookmarks
+        lines = [f"Current workspace: {root}"]
+        if bookmarks:
+            lines.append("Bookmarks:")
+            for b in bookmarks:
+                lines.append(f"  - {b['name']}: {b['path']}")
+        else:
+            lines.append("No bookmarks saved.")
+        notice("\n".join(lines))
+        return CommandResult(handled=True, success=True, message="\n".join(lines), data={"kind": "workspace"})
+    if idx == 1:
+        target = ask("Path or bookmark name")
+        if not target:
+            return CommandResult(handled=True, success=False, message="Target required.")
+        resolved = _resolve_workspace_target(agent.config, target)
+        if resolved is None:
+            return CommandResult(handled=True, success=False, message="Target required.")
+        return agent.move_workspace(resolved)
+    if idx == 2:
+        return handle_workspace_save(agent, raw, parts)
+    if idx == 3:
+        return handle_workspace_remove(agent, raw, parts)
+    if idx == 4:
+        return handle_workspaces(agent, raw, parts)
+    if idx == 5:
+        return _workspace_tree_review(agent)
+    if idx == 6:
+        return _workspace_changed_files(agent)
+    if idx == 7:
+        return _workspace_diff_viewer(agent)
+    return CommandResult(handled=True, success=True, message="Back.", data={"kind": "workspace"})
 
 
 # ---- Key management -----------------------------------------------------------
@@ -721,7 +1159,7 @@ def handle_keys(agent, raw: str, parts: List[str]) -> CommandResult:
     lines = _list_profile_key_lines(agent.config) or ["(none)"]
     banner("API Key Status")
     notice("\n".join(lines))
-    notice("Use '/key set <profile>', '/key clear <profile>', '/key reveal <profile>', '/key migrate'.")
+    notice("Use /settings > Keys to manage API keys.")
     return CommandResult(
         handled=True,
         success=True,
@@ -868,7 +1306,7 @@ def handle_roles(agent, raw: str, parts: List[str]) -> CommandResult:
         lines = ["  (none configured)"]
     notice("Model Roles")
     notice("\n".join(lines))
-    notice("Use '/role set <role> <profile>' and '/role clear <role>'.")
+    notice("Use /settings > Roles to manage model roles.")
     return CommandResult(
         handled=True,
         success=True,
@@ -958,14 +1396,16 @@ def handle_workspaces(agent, raw: str, parts: List[str]) -> CommandResult:
         return CommandResult(
             handled=True,
             success=True,
-            message="No workspace bookmarks. Use '/workspace save <name>' to create one.",
+            message="No workspace bookmarks. Use /workspace > Save bookmark to create one.",
             data={"kind": "workspaces", "bookmarks": []},
         )
     options = [f"{b['name']}: {b['path']}" for b in bookmarks]
+    notice("Workspace bookmarks:")
+    notice("\n".join(options))
     return CommandResult(
         handled=True,
         success=True,
-        interactive=True,
+        message="\n".join(options),
         data={"kind": "workspaces", "options": options, "bookmarks": bookmarks},
     )
 
@@ -1260,11 +1700,14 @@ __all__ = [
     "handle_config_validate",
     "handle_docs",
     "handle_doctor",
+    "handle_export",
+    "handle_find",
     "handle_key_clear",
     "handle_key_migrate",
     "handle_key_reveal",
     "handle_key_set",
     "handle_keys",
+    "handle_mode",
     "handle_model_add",
     "handle_model_edit",
     "handle_model_remove",
@@ -1283,7 +1726,11 @@ __all__ = [
     "handle_session_rename",
     "handle_session_reveal",
     "handle_session_search",
+    "handle_sessions",
     "handle_settings",
+    "handle_setup",
+    "handle_status",
+    "handle_workspace",
     "handle_workspace_remove",
     "handle_workspace_save",
     "handle_workspaces",

@@ -24,7 +24,9 @@ from agent.ui.widgets import (
     ConnectionTestModal,
     ConversationView,
     DoctorModal,
+    ExportModal,
     KeyEditorModal,
+    ModeModal,
     ModelEditorModal,
     ProfileEditorModal,
     ProfileListModal,
@@ -34,6 +36,7 @@ from agent.ui.widgets import (
     SearchResultModal,
     SecretConfirmModal,
     SettingsScreen,
+    SetupWizardModal,
     StatusDock,
     TextPromptModal,
     WorkspaceFileSelected,
@@ -421,7 +424,8 @@ class KairoApp(App):
     ProviderListModal, ProviderEditorModal, ModelEditorModal,
     ConnectionTestModal, SecretConfirmModal, SettingsScreen,
     ProfileListModal, ProfileEditorModal, KeyEditorModal,
-    RoleEditorModal, ConfirmModal, SearchResultModal, DoctorModal {
+    RoleEditorModal, ConfirmModal, SearchResultModal, DoctorModal,
+    ModeModal, SetupWizardModal, ExportModal {
         align: center middle;
         background: #000000 55%;
     }
@@ -429,7 +433,8 @@ class KairoApp(App):
     #provider-list-shell, #provider-editor-shell, #model-editor-shell,
     #connection-test-shell, #secret-confirm-shell, #settings-shell,
     #profile-list-shell, #profile-editor-shell, #key-editor-shell,
-    #role-editor-shell, #confirm-shell, #search-result-shell, #doctor-shell {
+    #role-editor-shell, #confirm-shell, #search-result-shell, #doctor-shell,
+    #mode-shell, #setup-wizard-shell, #export-shell {
         width: 72;
         height: auto;
         max-height: 28;
@@ -480,6 +485,76 @@ class KairoApp(App):
         background: $surface;
         padding: 1;
         border: solid #343b44;
+    }
+
+    #setup-wizard-summary {
+        height: auto;
+        max-height: 14;
+        background: $surface;
+        padding: 1;
+        border: solid #343b44;
+    }
+
+    #mode-shell {
+        height: auto;
+        max-height: 24;
+    }
+
+    #mode-title, #setup-wizard-title, #export-title {
+        color: $cyan;
+        text-style: bold;
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #mode-auth-list {
+        height: auto;
+        max-height: 6;
+        background: $surface;
+        border: solid #343b44;
+    }
+
+    #mode-auth-list > ListItem {
+        height: 1;
+        padding: 0 1;
+    }
+
+    #mode-auth-list > ListItem.--highlight {
+        background: #29323a;
+    }
+
+    .mode-section-title {
+        height: 1;
+        color: $muted;
+        text-style: bold;
+        margin-top: 1;
+    }
+
+    #mode-hint, #setup-wizard-hint, #export-hint {
+        color: #7f849c;
+        height: 1;
+        margin-top: 1;
+    }
+
+    #setup-wizard-progress {
+        color: #7f849c;
+        height: 1;
+    }
+
+    #export-list {
+        height: auto;
+        max-height: 12;
+        background: $surface;
+        border: solid #343b44;
+    }
+
+    #export-list > ListItem {
+        height: 1;
+        padding: 0 1;
+    }
+
+    #export-list > ListItem.--highlight {
+        background: #29323a;
     }
     """
 
@@ -583,8 +658,8 @@ class KairoApp(App):
         view = self.main_query("#conversation", ConversationView)
         async def emit():
             await view.add_notice(Text(
-                "No usable provider/model is configured. Type '/provider add' to launch the setup wizard, "
-                "or '/docs providers' for instructions.",
+                "No usable provider/model is configured. Type '/setup' to launch the setup wizard, "
+                "or '/docs' for instructions.",
                 style="#f6c177",
             ), "notice-message")
         self.call_after_refresh(emit)
@@ -964,8 +1039,8 @@ class KairoApp(App):
                 self.pop_screen()
                 self.workspace_modal = None
                 return
-            self.workspace_modal = WorkspaceModal(self.workspace_snapshot)
-            self.push_screen(self.workspace_modal, lambda _value: setattr(self, "workspace_modal", None))
+            self.workspace_modal = WorkspaceModal(self.workspace_snapshot, self.config.workspace_bookmarks)
+            self.push_screen(self.workspace_modal, self._workspace_modal_done)
             return
         focused = self.focused
         dock = self.main_query("#status-dock", StatusDock)
@@ -974,11 +1049,77 @@ class KairoApp(App):
         else:
             dock.query_one(WorkspaceTree).focus()
 
+    def _workspace_modal_done(self, value):
+        self.workspace_modal = None
+        if not value:
+            self._restore_focus()
+            return
+        action = value.get("action")
+        if action == "current":
+            bookmarks = self.config.workspace_bookmarks
+            lines = [f"Current workspace: {self.agent.workspace_context.root}"]
+            if bookmarks:
+                lines.append("Bookmarks:")
+                lines.extend(f"  - {item['name']}: {item['path']}" for item in bookmarks)
+            else:
+                lines.append("No bookmarks saved.")
+            self.post_message(AgentEvent("notice", "\n".join(lines)))
+            self._restore_focus()
+            return
+        if action == "move":
+            self.push_screen(TextPromptModal("Path or bookmark name"), self._workspace_move_done)
+            return
+        if action == "save":
+            self.push_screen(TextPromptModal("Bookmark name"), self._workspace_save_done)
+            return
+        if action == "remove":
+            bookmarks = self.config.workspace_bookmarks
+            if not bookmarks:
+                self.post_message(AgentEvent("notice", "No workspace bookmarks."))
+                self._restore_focus()
+                return
+            options = [item["name"] for item in bookmarks]
+            self.push_screen(
+                ChoiceModal("Remove which bookmark", options, 0),
+                lambda idx: self._workspace_remove_chosen(idx, bookmarks),
+            )
+            return
+        if action == "list":
+            bookmarks = self.config.workspace_bookmarks
+            if bookmarks:
+                message = "Workspace bookmarks:\n" + "\n".join(
+                    f"  - {item['name']}: {item['path']}" for item in bookmarks
+                )
+            else:
+                message = "No workspace bookmarks."
+            self.post_message(AgentEvent("notice", message))
+            self._restore_focus()
+            return
+        self._restore_focus()
+
+    def _workspace_move_done(self, target: str):
+        target = (target or "").strip()
+        if not target:
+            self._restore_focus()
+            return
+        from agent.runtime_commands import _resolve_workspace_target
+        resolved = _resolve_workspace_target(self.config, target)
+        if resolved is None:
+            self.post_message(AgentEvent("error", "Workspace target is required."))
+            self._restore_focus()
+            return
+        result = self.agent.move_workspace(resolved)
+        self.post_message(AgentEvent("notice" if result.success else "error", result.message))
+        if result.success:
+            self.refresh_dock()
+        self._restore_focus()
+
     def action_toggle_auth(self):
         levels = ["manual", "auto", "yolo"]
         current = self.config.authorization_level
         next_level = levels[(levels.index(current) + 1) % len(levels)] if current in levels else "manual"
-        self.agent.handle_command(f"/{next_level}")
+        self.config.authorization_level = next_level
+        self.config.save(backup=False)
         self.refresh_dock()
         try:
             self.main_query("#composer", Composer).focus()
@@ -990,13 +1131,17 @@ class KairoApp(App):
         self.action_toggle_auth()
 
     def action_toggle_plan(self):
-        self._toggle_mode("/plan")
+        self.config.plan_mode = not self.config.plan_mode
+        self.config.save(backup=False)
+        self.refresh_dock()
+        try:
+            self.main_query("#composer", Composer).focus()
+        except Exception:
+            pass
 
     def action_toggle_think(self):
-        self._toggle_mode("/think")
-
-    def _toggle_mode(self, command: str):
-        self.agent.handle_command(command)
+        self.config.thinking_mode = not self.config.thinking_mode
+        self.config.save(backup=False)
         self.refresh_dock()
         try:
             self.main_query("#composer", Composer).focus()
@@ -1066,6 +1211,51 @@ class KairoApp(App):
         if kind == "config":
             await view.add_notice(Markdown(result.message))
             self.refresh_dock()
+            return
+
+        if kind == "settings":
+            self.push_screen(SettingsScreen(), self._settings_choice)
+            return
+
+        if kind == "mode":
+            self.push_screen(
+                ModeModal(current={
+                    "authorization": self.config.authorization_level,
+                    "plan": self.config.plan_mode,
+                    "thinking": self.config.thinking_mode,
+                }),
+                self._mode_done,
+            )
+            return
+
+        if kind == "setup":
+            self.push_screen(SetupWizardModal(), self._setup_wizard_done)
+            return
+
+        if kind == "status":
+            await view.add_notice(Text(result.message, style="#a5adcb"))
+            return
+
+        if kind == "find":
+            results = result.data.get("results", [])
+            if results:
+                self.agent._last_session_search_results = results
+                options = [f"[{r['index']}] {r['name']}" for r in results]
+                self.push_screen(
+                    SearchResultModal(f"Search: {result.data.get('keyword', '')}", options, 0),
+                    self._session_search_chosen,
+                )
+            else:
+                await view.add_notice(Text(result.message, style="#a5adcb"))
+            return
+
+        if kind == "export":
+            self.push_screen(ExportModal(), self._export_done)
+            return
+
+        if kind == "workspace":
+            self.workspace_modal = WorkspaceModal(self.workspace_snapshot, self.config.workspace_bookmarks)
+            self.push_screen(self.workspace_modal, self._workspace_modal_done)
             return
 
         if kind == "new":
@@ -1200,79 +1390,128 @@ class KairoApp(App):
             self.post_message(AgentEvent("context_updated", None))
             self.refresh_dock()
 
+    def _mode_done(self, values):
+        if not values:
+            self._restore_focus()
+            return
+        level = values.get("authorization", "").lower()
+        if level in ("manual", "auto", "yolo"):
+            self.config.authorization_level = level
+        self.config.plan_mode = bool(values.get("plan", False))
+        self.config.thinking_mode = bool(values.get("thinking", False))
+        self.config.save(backup=False)
+        self.refresh_dock()
+        self.post_message(AgentEvent("notice", f"Mode updated: auth={level.upper()} plan={'ON' if self.config.plan_mode else 'OFF'} think={'ON' if self.config.thinking_mode else 'OFF'}"))
+        self._restore_focus()
+
+    def _setup_wizard_done(self, values):
+        if not values:
+            self._restore_focus()
+            return
+        self._pending_setup_values = values
+        self.run_worker(
+            lambda: self._run_setup_test_worker(values),
+            thread=True, exclusive=True, group="setup-test",
+        )
+
+    def _run_setup_test_worker(self, values: Dict[str, Any]):
+        import os as _os
+        from agent.provider_health import test_connection
+        mode = values.get("api_key_mode", "inline")
+        key_value = values.get("api_key_value", "")
+        api_key = _os.environ.get(key_value, "") if mode == "env" else key_value
+        result = test_connection(base_url=values.get("base_url", ""), api_key=api_key, model=values.get("model", ""))
+        self.call_from_thread(self._setup_test_done, result, values)
+
+    def _setup_test_done(self, result, values):
+        if result.ok:
+            self._commit_setup_profile(values)
+            self.post_message(AgentEvent("notice", f"Setup test passed. Profile '{values.get('name', '')}' saved."))
+        else:
+            self.push_screen(ConnectionTestModal(result.summary(), result.ok), None)
+            self.post_message(AgentEvent("error", "Setup test failed. Profile not saved."))
+        self._restore_focus()
+
+    def _commit_setup_profile(self, values: Dict[str, Any]):
+        from agent.config_editor import ConfigDraft
+        draft = ConfigDraft.from_config(self.config)
+        mode = values.get("api_key_mode", "inline")
+        key_value = values.get("api_key_value", "")
+        api_key = key_value if mode == "inline" else ""
+        api_key_env = key_value if mode == "env" else ""
+        try:
+            added = draft.add_profile(
+                id=values.get("name", ""),
+                base_url=values.get("base_url", ""),
+                api_key=api_key,
+                api_key_env=api_key_env,
+                model=values.get("model", ""),
+                context_window=int(values.get("context_window", 128000)),
+                max_tokens=int(values.get("max_tokens", 4000)),
+                temperature=float(values.get("temperature", 0.7)),
+            )
+        except (TypeError, ValueError) as exc:
+            self.post_message(AgentEvent("error", f"Invalid setup values: {exc}"))
+            self._restore_focus()
+            return
+        if not added:
+            self.post_message(AgentEvent("error", f"Profile '{values.get('name', '')}' already exists or is invalid."))
+            self._restore_focus()
+            return
+        draft.set_active_profile(values.get("name", ""))
+        report = draft.apply_to(self.config, backup=True, allow_inline_key=bool(api_key))
+        msg = report.to_text() if not report.ok else f"Profile '{values.get('name', '')}' added. Active: {self.config.active_model_profile}"
+        self.post_message(AgentEvent("notice" if report.ok else "error", msg))
+        if report.ok:
+            self.config._sync_runtime_fields()
+            self.main_query("#brand-header", BrandHeader).update_meta(
+                self.config.model, self.config.active_model_profile, str(self.workspace_context.root)
+            )
+            self.post_message(AgentEvent("model_selected", self.config.active_model_profile))
+            self.refresh_dock()
+        self._restore_focus()
+
+    def _export_done(self, values):
+        if not values:
+            self._restore_focus()
+            return
+        action = values.get("action", "")
+        store = getattr(self.agent.conversations, "session_store", None)
+        if action in ("session_markdown", "session_json"):
+            if store is None:
+                self.post_message(AgentEvent("error", "Session persistence is disabled."))
+                self._restore_focus()
+                return
+            fmt = "markdown" if action == "session_markdown" else "json"
+            session = self.agent.conversations.active
+            dest = store.export_session(session.id, fmt=fmt)
+            if dest:
+                self.post_message(AgentEvent("notice", f"Exported '{session.name}' ({fmt}) to:\n{dest}"))
+            else:
+                self.post_message(AgentEvent("error", "Export failed."))
+            self._restore_focus()
+            return
+        if action == "config_redacted":
+            self._config_export_with_keys_confirmed(False)
+            return
+        if action == "config_with_keys":
+            self.push_screen(
+                ConfirmModal("Export config WITH plaintext keys? This will write secrets to disk.", default=False),
+                self._config_export_with_keys_confirmed,
+            )
+            return
+        self._restore_focus()
+
     # ---- 0.2.3 runtime-config modal routing ------------------------------------
 
     async def _maybe_route_runtime_modal(self, raw: str) -> bool:
-        """For runtime config commands, pop the corresponding modal.
+        """0.2.7-beta: runtime modals are driven by the dispatcher result kinds.
 
         Returns True if *raw* was consumed here (caller should stop),
         False otherwise.
         """
-        stripped = raw.strip()
-        parts = stripped.split(maxsplit=2)
-        command = parts[0].lower()
-        sub = parts[1].lower() if len(parts) > 1 else ""
-
-        if stripped == "/settings":
-            self.push_screen(SettingsScreen(), self._settings_choice)
-            return True
-
-        # Runtime config modal paths share the plain-handler completion,
-        # but the user interaction can be carried through dedicated modals.
-        # For 0.2.3 we wire the most impactful ones to modals and fall back
-        # to plain-mode for the rest so feature parity is guaranteed.
-        if command == "/provider" and sub in ("add", "edit", "remove", "test"):
-            return await self._route_provider_subcommand(stripped, sub)
-
-        if command == "/model" and sub in ("add", "edit", "remove", "test"):
-            return await self._route_model_subcommand(stripped, sub)
-
-        if command == "/session" and sub in ("rename", "delete", "export", "reveal", "search", "open"):
-            return await self._route_session_subcommand(sub)
-
-        if command == "/docs":
-            self._handle_docs_notice(sub)
-            return True
-
-        if command == "/config" and sub in ("validate", "backup", "restore", "export", "import"):
-            return await self._route_config_subcommand(stripped, sub)
-
-        if command == "/key" and sub in ("set", "clear", "reveal", "migrate"):
-            return await self._route_key_subcommand(stripped, sub)
-
-        if command == "/role" and sub in ("set", "clear"):
-            return await self._route_role_subcommand(stripped, sub)
-
-        if stripped == "/keys":
-            self._handle_keys_notice()
-            return True
-
-        if stripped == "/roles":
-            self._handle_roles_notice()
-            return True
-
-        if stripped == "/doctor":
-            self._handle_doctor_notice()
-            return True
-
-        if stripped == "/workspaces":
-            self._handle_workspaces_notice()
-            return True
-
-        if command == "/workspace" and sub in ("save", "remove"):
-            return await self._route_workspace_subcommand(stripped, sub)
-
-        if stripped == "/profile" or stripped == "/profiles":
-            self._handle_profiles_notice()
-            return True
-
-        if command == "/profile" and sub in ("add", "edit", "remove"):
-            return await self._route_profile_subcommand(stripped, sub)
-
-        if command == "/providers":
-            self._handle_providers_notice()
-            return True
-
+        # All slash commands now flow through CommandDispatcher; the TUI
+        # handles interactive results in handle_command().
         return False
 
     async def _route_provider_subcommand(self, raw: str, sub: str) -> bool:
@@ -1998,7 +2237,7 @@ class KairoApp(App):
             model_names = ", ".join(m["name"] for m in provider["models"])
             lines.append(f"{marker}{provider['name']}  base_url={provider.get('base_url', '')}  models=[{model_names}]")
         msg = "Configured Providers\n" + "\n".join(lines or ["(none)"])
-        msg += "\n\nUse '/provider add' to add, '/provider edit|remove|test' to manage."
+        msg += "\n\nUse '/settings > Providers' to manage."
         self.post_message(AgentEvent("notice", msg))
 
     # ---- 0.2.5 profile / key / role / workspace / doctor modal routing ----------
@@ -2011,7 +2250,7 @@ class KairoApp(App):
             marker = "* " if profile.get("id") == active_id else "  "
             lines.append(f"{marker}{profile.get('id', '')}  model={profile.get('model', '')}  base_url={profile.get('base_url', '')}")
         msg = "Configured Profiles\n" + "\n".join(lines or ["(none)"])
-        msg += "\n\nUse '/profile add' to add, '/profile edit|remove' to manage."
+        msg += "\n\nUse '/settings > Providers' to manage profiles."
         self.post_message(AgentEvent("notice", msg))
 
     async def _route_profile_subcommand(self, raw: str, sub: str) -> bool:
@@ -2616,35 +2855,220 @@ class KairoApp(App):
         if not choice or choice == "close":
             self._restore_focus()
             return
-        mapping = {
-            "providers": "/providers",
-            "profiles": "/profiles",
-            "profile_add": "/profile add",
-            "profile_edit": "/profile edit",
-            "profile_remove": "/profile remove",
-            "keys": "/keys",
-            "key_set": "/key set",
-            "key_clear": "/key clear",
-            "roles": "/roles",
-            "role_set": "/role set",
-            "model_add": "/model add",
-            "model_edit": "/model edit",
-            "model_remove": "/model remove",
-            "model_test": "/model test",
-            "config_validate": "/config validate",
-            "config_backup": "/config backup",
-            "config_restore": "/config restore",
-            "config_export": "/config export",
-            "config_import": "/config import",
-            "doctor": "/doctor",
-        }
-        target = mapping.get(choice) or ""
-        if not target:
+        if choice == "providers":
+            self._open_providers_management()
+            return
+        if choice == "models":
+            self._open_models_management()
+            return
+        if choice == "keys":
+            self._open_keys_management()
+            return
+        if choice == "roles":
+            self._open_roles_management()
+            return
+        if choice == "config_validate":
+            self._run_config_validate()
+            return
+        if choice == "config_backup":
+            self._run_config_backup()
+            return
+        if choice == "config_restore":
+            self._run_config_restore()
+            return
+        if choice == "config_import":
+            self.push_screen(TextPromptModal("Config import path"), self._config_import_done)
+            return
+        if choice == "config_export":
+            self.push_screen(
+                ConfirmModal("Export config WITH plaintext keys?", default=False),
+                self._config_export_with_keys_confirmed,
+            )
+            return
+        if choice == "doctor":
+            self._handle_doctor_notice()
+            return
+        self._restore_focus()
+
+    def _is_profile_mode(self) -> bool:
+        return bool(self.config.llm.get("profiles"))
+
+    def _open_providers_management(self):
+        self.push_screen(
+            ChoiceModal("Providers", ["Add", "Edit", "Remove", "Test"], 0),
+            self._providers_subchoice,
+        )
+
+    def _providers_subchoice(self, idx: int):
+        if idx is None or idx < 0:
             self._restore_focus()
             return
-        async def fire():
-            await self.handle_command(target)
-        self.call_after_refresh(fire)
+        actions = ["add", "edit", "remove", "test"]
+        action = actions[idx]
+        if self._is_profile_mode():
+            self._route_profile_action(action)
+            return
+        if action == "add":
+            self.push_screen(ProviderEditorModal(title="Add provider"), self._provider_add_form_done)
+            return
+        providers = list(self.config.llm.get("providers", []))
+        active_name = self.config.llm.get("active_provider", "")
+        if not providers:
+            self.post_message(AgentEvent("notice", "No providers configured."))
+            self._restore_focus()
+            return
+        if action == "edit":
+            self.push_screen(ProviderListModal(providers=providers, active_name=active_name), self._provider_edit_choice)
+        elif action == "remove":
+            self.push_screen(ProviderListModal(providers=providers, active_name=active_name), self._provider_remove_choice)
+        elif action == "test":
+            self.push_screen(ProviderListModal(providers=providers, active_name=active_name), self._provider_test_choice)
+
+    def _provider_remove_choice(self, choice):
+        if not choice or choice.get("action") != "edit":
+            self._restore_focus()
+            return
+        name = choice.get("name") or ""
+        if len(self.config.llm.get("providers", [])) <= 1:
+            self.post_message(AgentEvent("notice", "Cannot remove the last provider."))
+            self._restore_focus()
+            return
+        self.push_screen(
+            ChoiceModal(f"Remove provider '{name}' and all its models?", ["Remove", "Cancel"], 1),
+            lambda idx: self._provider_remove_confirmed(idx, name),
+        )
+
+    def _route_profile_action(self, action: str):
+        profiles = list(self.config.llm.get("profiles", []))
+        active_id = self.config.llm.get("active_profile", "")
+        if action == "add":
+            self.push_screen(ProfileEditorModal(title="Add profile"), self._profile_add_form_done)
+        elif action in ("edit", "remove"):
+            if not profiles:
+                self.post_message(AgentEvent("notice", "No profiles configured."))
+                self._restore_focus()
+                return
+            self.push_screen(ProfileListModal(profiles=profiles, active_id=active_id), self._profile_edit_choice)
+        elif action == "test":
+            if not profiles:
+                self.post_message(AgentEvent("notice", "No profiles configured."))
+                self._restore_focus()
+                return
+            self.push_screen(ProfileListModal(profiles=profiles, active_id=active_id), self._profile_test_choice)
+
+    def _profile_test_choice(self, choice):
+        if not choice or choice.get("action") != "edit":
+            self._restore_focus()
+            return
+        pid = choice.get("id") or ""
+        from agent.profile_resolver import resolve_profile
+        profile = resolve_profile(self.config, profile_id=pid)
+        if profile is None:
+            self.post_message(AgentEvent("error", f"Profile '{pid}' not found."))
+            self._restore_focus()
+            return
+        self.run_worker(
+            lambda: self._run_provider_test_worker(profile.base_url, profile.api_key_env, profile.api_key, profile.model),
+            thread=True, exclusive=True, group="provider-test",
+        )
+
+    def _open_models_management(self):
+        self.push_screen(
+            ChoiceModal("Models", ["Add", "Edit", "Remove", "Test"], 0),
+            self._models_subchoice,
+        )
+
+    def _models_subchoice(self, idx: int):
+        if idx is None or idx < 0:
+            self._restore_focus()
+            return
+        actions = ["add", "edit", "remove", "test"]
+        action = actions[idx]
+        if self._is_profile_mode():
+            # In profile mode models are part of profiles; reuse profile management.
+            self._route_profile_action(action)
+            return
+        providers = list(self.config.llm.get("providers", []))
+        active_name = self.config.llm.get("active_provider", "")
+        if not providers:
+            self.post_message(AgentEvent("notice", "No providers configured."))
+            self._restore_focus()
+            return
+        if action in ("add", "edit"):
+            self.push_screen(
+                ProviderListModal(providers=providers, active_name=active_name),
+                lambda choice: self._model_form_after_provider(action, choice),
+            )
+        else:
+            self.push_screen(
+                ProviderListModal(providers=providers, active_name=active_name),
+                lambda choice: self._model_action_after_provider(action, choice),
+            )
+
+    def _open_keys_management(self):
+        ids = self.config.get_profile_ids()
+        if not ids:
+            self.post_message(AgentEvent("notice", "No profiles configured."))
+            self._restore_focus()
+            return
+        self.push_screen(ChoiceModal("Keys", ["Set", "Clear", "Reveal", "Migrate"], 0), self._keys_subchoice)
+
+    def _keys_subchoice(self, idx: int):
+        if idx is None or idx < 0:
+            self._restore_focus()
+            return
+        ids = self.config.get_profile_ids()
+        actions = ["set", "clear", "reveal", "migrate"]
+        action = actions[idx]
+        if action == "set":
+            self.push_screen(ChoiceModal("Set key for which profile", ids, 0), lambda idx: self._key_set_profile_chosen(idx, ids))
+        elif action == "clear":
+            self.push_screen(ChoiceModal("Clear key for which profile", ids, 0), lambda idx: self._key_clear_profile_chosen(idx, ids))
+        elif action == "reveal":
+            self.push_screen(ChoiceModal("Reveal key for which profile", ids, 0), lambda idx: self._key_reveal_profile_chosen(idx, ids))
+        elif action == "migrate":
+            self.push_screen(
+                ConfirmModal("Migrate legacy provider keys into profile keys?", default=False),
+                self._key_migrate_confirmed,
+            )
+
+    def _open_roles_management(self):
+        ids = self.config.get_profile_ids()
+        if not ids:
+            self.post_message(AgentEvent("notice", "No profiles configured."))
+            self._restore_focus()
+            return
+        current = self.config.model_roles.get("chat")
+        self.push_screen(
+            RoleEditorModal(roles=["chat", "plan", "compress", "fast"], profiles=ids, current=current),
+            self._role_editor_done,
+        )
+
+    def _run_config_validate(self):
+        from agent.config_editor import ConfigDraft
+        report = ConfigDraft.from_config(self.config).validate()
+        kind = "notice" if report.ok else "error"
+        self.post_message(AgentEvent(kind, report.to_text()))
+        self._restore_focus()
+
+    def _run_config_backup(self):
+        from agent.config import Config as _Config
+        backup_path = _Config.create_backup(self.config.config_path)
+        if backup_path:
+            self.post_message(AgentEvent("notice", f"Backup written: {backup_path}"))
+        else:
+            self.post_message(AgentEvent("error", "Failed to create backup."))
+        self._restore_focus()
+
+    def _run_config_restore(self):
+        from agent.config import Config as _Config
+        backups = _Config.list_backups(self.config.config_path)
+        if not backups:
+            self.post_message(AgentEvent("error", "No backups available."))
+            self._restore_focus()
+            return
+        options = [f"{b['name']}  ({b['size']} bytes)" for b in backups]
+        self.push_screen(ChoiceModal("Restore config backup", options, 0), self._config_restore_chosen)
 
     # ---- plain-handler runner for non-modal commands ---------------------------
 

@@ -1,10 +1,10 @@
 # Kairo
 
-Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, runtime provider/model configuration, and local config-first key management.
+Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, runtime configuration panels, and local config-first key management.
 
-Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时 provider/model 配置，以及本地配置优先的 key 管理。
+Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时配置面板，以及本地配置优先的 key 管理。
 
-Current version / 当前版本：**0.2.6-beta**
+Current version / 当前版本：**0.2.7-beta**
 
 ## Documentation / 文档
 
@@ -14,49 +14,25 @@ Current version / 当前版本：**0.2.6-beta**
 
 ## Highlights / 核心能力
 
-- Animated TUI with Kai mascot and reduced-motion/plain fallbacks.
-- Slash command palette with keyboard selection and completion.
-- Animated TUI with Kai mascot and reduced-motion/plain fallbacks.
-- Slash command palette with keyboard selection and completion.
-- Configured model profiles through `llm.profiles[]` (new in 0.2.5) or legacy `llm.providers`; switch with `/model`. Since 0.2.6 `/model` switches the chat profile in a single transaction and keeps `model_roles.chat` consistent.
-- **Local config-first key management** (0.2.5): `/keys`, `/key set|clear|reveal|migrate` manage inline keys in `config.json` with mask-by-default safety. Since 0.2.6 editing one provider never clears another provider's inline key (blank keeps existing, explicit clear only clears the target).
-- **Model roles** (0.2.5): `/roles`, `/role set|clear` route `chat`, `plan`, `compress`, `fast` tasks to different profiles.
-- **Strict message packing** (0.2.6): all LLM payloads are folded to a single leading `system` message for strict OpenAI-compatible providers (`llm.strict_message_packing`, default `true`).
-- **Esc stop generation** (0.2.6): in the Textual UI, press `Esc` while streaming/running tools to cooperatively stop the current output; partial response is saved with a `[stopped]` marker. Plain mode still uses `Ctrl+C`.
-- **Workspace bookmarks** (0.2.5): `/workspace save`, `/workspaces`, `/workspace move <name-or-path>`, `/workspace remove`.
-- **Session search** (0.2.5): `/session search <keyword>` finds sessions read-only; `/session open <id-or-index>` switches to the found session.
-- **Config import/export** (0.2.5): `/config export`, `/config export --with-keys`, `/config import <path>` with redaction by default.
-- **Doctor health dashboard** (0.2.5): `/doctor` checks config, keys, workspace, sessions, git and provider reachability.
-- **Runtime configuration** (0.2.3): add/edit/remove providers and models with `/providers`, `/provider add|edit|remove|test`, `/model add|edit|remove|test`, `/settings`, and validate/backup/restore with `/config validate|backup|restore`.
-- **Provider health check** (0.2.3): `/provider test` and `/model test` verify reachability, key validity, and model acceptance.
-- **API key safety** (0.2.5): inline keys are allowed in `config.json` for local deployment but are masked in UI, logs, session history, doctor and default exports; env keys remain supported; reveal/export-with-keys requires confirmation.
-- Persisted sessions under `sessions.storage_dir`; switch with `/sessions`, rename/delete/export/reveal/search/open with `/session ...`.
-- Manual and automatic context compression with `/compress`.
-- Workspace Dock with file tree, touched files, Git/non-Git diff review, and context progress.
-- Runtime workspace hot switching with `/workspace move <path>` or a saved bookmark name.
-- Built-in file, search, patch, shell, Python, web, and custom skill tools.
-- Authorization levels: `manual`, `auto`, and `yolo`.
+- Animated Textual TUI with Kai mascot, reduced-motion mode, and plain terminal fallback.
+- Slash command palette reduced to 18 workflow-oriented commands in 0.2.7-beta.
+- `/settings` manages providers, models, API keys, model roles, config validation, backup, restore, import, and export.
+- `/sessions` manages persisted conversations, including switch, search, rename, delete, export, and reveal path.
+- `/workspace [path-or-bookmark]` opens workspace review or hot-switches the active workspace without restarting.
+- `/mode` replaces separate mode commands and controls authorization, Plan Mode, and Thinking Mode.
+- `/status` shows a read-only runtime summary with masked key status.
+- Strict OpenAI-compatible message packing keeps provider payloads to a single leading `system` message.
+- Esc stops the current Textual generation cooperatively; plain mode still uses `Ctrl+C`.
 
-- Kai 终端动效与低动效/plain fallback。
-- 支持键盘选择和补全的 Slash 命令菜单。
-- 通过新版 `llm.profiles[]`（0.2.5）或旧版 `llm.providers` 配置模型 profile，并用 `/model` 切换。0.2.6 起 `/model` 以单一事务切换 chat profile，并保持 `model_roles.chat` 一致。
-- **本地配置优先的 key 管理**（0.2.5）：`/keys`、`/key set|clear|reveal|migrate` 管理 `config.json` 中的 inline key，默认掩码显示。0.2.6 起编辑某个 provider 不会清空其它 provider 的 inline key（留空保留原 key，显式 clear 只清空目标）。
-- **模型角色**（0.2.5）：`/roles`、`/role set|clear` 将 `chat`、`plan`、`compress`、`fast` 任务路由到不同 profile。
-- **严格消息打包**（0.2.6）：所有 LLM 请求 payload 折叠为唯一首位 `system` 消息，兼容严格 OpenAI-compatible provider（`llm.strict_message_packing`，默认 `true`）。
-- **Esc 停止输出**（0.2.6）：Textual 模式下流式输出/工具运行中按 `Esc` 协作停止当前输出，partial 回复以 `[stopped]` 标记保存；plain 模式仍使用 `Ctrl+C`。
-- **Workspace 书签**（0.2.5）：`/workspace save`、`/workspaces`、`/workspace move <name-or-path>`、`/workspace remove`。
-- **会话搜索**（0.2.5）：`/session search <keyword>` 与 `/session open <id-or-index>` 只读搜索会话。
-- **配置导入/导出**（0.2.5）：`/config export`、`/config export --with-keys`、`/config import <path>`，默认脱敏。
-- **Doctor 健康面板**（0.2.5）：`/doctor` 检查配置、key、workspace、session、git 与 provider 连通性。
-- **运行时配置**（0.2.3）：使用 `/providers`、`/provider add|edit|remove|test`、`/model add|edit|remove|test`、`/settings` 以及 `/config validate|backup|restore` 增删改 provider/model 和备份恢复配置。
-- **Provider 健康检查**（0.2.3）：`/provider test`、`/model test` 检测连通性、key 有效性和模型名。
-- **API Key 安全**（0.2.5）：为本地部署允许 `config.json` 保存 inline key，但 UI、日志、会话历史、doctor 与默认导出均掩码显示；仍支持 env key；reveal/导出完整 key 需二次确认。
-- 会话持久化到 `sessions.storage_dir`，`/sessions` 切换，`/session rename|delete|export|reveal|search|open` 整理。
-- 使用 `/compress` 进行手动或自动上下文压缩。
-- Workspace Dock 含文件树、变更文件、Git/非 Git diff 预览、上下文进度。
-- `/workspace move <path>` 或书签名称当前进程热切换 workspace。
-- 内置文件、搜索、patch、shell、Python、web、自定义 skill 工具。
-- 授权级别：`manual`、`auto`、`yolo`。
+- Textual 动态 TUI、Kai 吉祥物、低动态模式和 plain 终端 fallback。
+- 0.2.7-beta 将 slash 命令收敛为 18 条工作流入口。
+- `/settings` 管理 provider、model、API key、模型角色、配置校验、备份、恢复、导入和导出。
+- `/sessions` 管理持久化会话，包括切换、搜索、重命名、删除、导出和显示路径。
+- `/workspace [path-or-bookmark]` 打开 workspace 审查，或在不重启的情况下热切换当前 workspace。
+- `/mode` 替代分散的模式命令，统一控制授权级别、Plan Mode 和 Thinking Mode。
+- `/status` 显示只读运行状态，并只展示脱敏 key 状态。
+- 严格 OpenAI-compatible 消息打包保证 provider payload 只有首位 `system` 消息。
+- Textual 模式下 `Esc` 可协作停止当前输出；plain 模式仍使用 `Ctrl+C`。
 
 ## Quick Start / 快速开始
 
@@ -88,30 +64,38 @@ kairo
 
 ```powershell
 Copy-Item config.example.json config.json
-$env:KAIRO_DEEPSEEK_API_KEY = "your-api-key"
 kairo
 ```
 
-Use `api_key_env` whenever possible so secrets stay in environment variables instead of `config.json`.
+Inside Kairo, run `/setup` for the first-run wizard or `/settings` for the full configuration panel. Inline API keys may be saved in local `config.json`; Kairo masks keys in UI, logs, session history, doctor, and default exports.
 
-推荐使用 `api_key_env`，让密钥保留在环境变量中，而不是写入 `config.json`。
+启动 Kairo 后，可运行 `/setup` 使用首次配置向导，或运行 `/settings` 打开完整配置面板。inline API key 可以保存到本地 `config.json`；Kairo 会在 UI、日志、会话历史、doctor 和默认导出中掩码显示 key。
 
 ## Common Commands / 常用命令
 
 | Command | Purpose |
 | --- | --- |
 | `/help` | Show help / 显示帮助 |
-| `/model` | Select model profile / 选择模型 profile |
+| `/model` | Switch chat profile / 切换 chat profile |
+| `/setup` | Run first-time setup / 运行首次配置向导 |
+| `/settings` | Manage providers, models, keys, roles and config / 管理模型与配置 |
+| `/mode` | Change authorization, Plan Mode and Thinking Mode / 切换授权与模式 |
+| `/status` | Show runtime status / 显示运行状态 |
 | `/new [name]` | Create persisted session / 创建持久化会话 |
-| `/sessions` | Switch sessions / 切换会话 |
+| `/sessions` | Manage sessions / 管理会话 |
+| `/find <keyword>` | Search sessions / 搜索会话 |
+| `/export` | Export session or config / 导出会话或配置 |
 | `/compress` | Compress older context / 压缩早期上下文 |
-| `/workspace move <path>` | Hot-switch workspace / 热切换 workspace |
-| `/manual` `/auto` `/yolo` | Change authorization / 切换授权级别 |
-| `/plan` `/think` | Toggle modes / 切换模式 |
+| `/workspace [path-or-bookmark]` | Review or hot-switch workspace / 审查或热切换 workspace |
+| `/doctor` | Run health checks / 运行健康检查 |
 | `/exit` | Exit / 退出 |
+
+Removed 0.2.7-beta commands such as `/provider add`, `/key set`, `/session export`, `/workspace save`, `/manual`, `/auto`, `/plan`, and `/think` now show migration hints instead of executing. Use `/settings`, `/sessions`, `/workspace`, and `/mode` instead.
+
+0.2.7-beta 已删除 `/provider add`、`/key set`、`/session export`、`/workspace save`、`/manual`、`/auto`、`/plan`、`/think` 等细粒度命令；输入时只显示迁移提示，不再执行。请改用 `/settings`、`/sessions`、`/workspace` 和 `/mode`。
 
 ## Privacy / 隐私提醒
 
-Session files may contain prompts, code, file contents, command output, and secrets. The default `.kairo/` directory is ignored by Git.
+Session files may contain prompts, code, file contents, command output, and secrets. The default `.kairo/` directory and local `config.json` should stay out of version control.
 
-Session 文件可能包含提示词、代码、文件内容、命令输出和敏感信息。默认 `.kairo/` 目录已被 Git 忽略。
+Session 文件可能包含提示词、代码、文件内容、命令输出和敏感信息。默认 `.kairo/` 目录和本地 `config.json` 不应提交到版本控制。

@@ -13,39 +13,27 @@ The complete configuration guide is maintained in the bilingual manuals:
 
 Defines OpenAI-compatible profiles. Since 0.2.5 Kairo uses `llm.profiles[]` as the primary format; legacy `llm.providers[]` configs are still loaded and converted automatically. Since 0.2.6 `llm.strict_message_packing` (default `true`) folds every LLM request payload into a single leading `system` message for strict OpenAI-compatible providers. You can manage profiles, keys, roles, bookmarks, and config import/export from inside Kairo without editing `config.json`:
 
-- `/providers` · `/provider add` · `/provider edit` · `/provider remove` · `/provider test`
-- `/model add` · `/model edit` · `/model remove` · `/model test`
-- `/keys` · `/key set` · `/key clear` · `/key reveal` · `/key migrate`
-- `/roles` · `/role set` · `/role clear`
-- `/workspaces` · `/workspace save` · `/workspace remove`
-- `/config validate` · `/config backup` · `/config restore` · `/config export` · `/config import`
-- `/settings` (TUI menu)
+- `/settings` — central panel for providers, models, keys, roles, and config operations.
 
-Use `/model` to switch the chat profile. Since 0.2.6 this is a single transaction that keeps `model_roles.chat` consistent. Use `/role set chat <profile>` to route different tasks to different profiles. Editing one provider never clears another provider's inline key; leave the key blank to keep it.
+Use `/model` to switch the chat profile. Since 0.2.6 this is a single transaction that keeps `model_roles.chat` consistent. Use `/settings` > Roles to route different tasks to different profiles. Editing one provider never clears another provider's inline key; leave the key blank to keep it.
 
 定义 OpenAI-compatible 模型 profile。0.2.5 起 Kairo 以 `llm.profiles[]` 为主格式；旧版 `llm.providers[]` 仍会被自动转换。0.2.6 起 `llm.strict_message_packing`（默认 `true`）将每个 LLM 请求 payload 折叠为唯一首位 `system` 消息，兼容严格 OpenAI-compatible provider。可以在 Kairo 内管理 profile、key、role、书签和配置导入导出，无需手动编辑 `config.json`：
 
-- `/providers`、`/provider add|edit|remove|test`
-- `/model add|edit|remove|test`
-- `/keys`、`/key set|clear|reveal|migrate`
-- `/roles`、`/role set|clear`
-- `/workspaces`、`/workspace save|remove`
-- `/config validate|backup|restore|export|import`
-- `/settings`（TUI 菜单）
+- `/settings` — 集中管理 providers、models、keys、roles 与配置操作。
 
-使用 `/model` 切换 chat profile。0.2.6 起这是单一事务，会保持 `model_roles.chat` 一致。使用 `/role set chat <profile>` 把不同任务路由到不同 profile。编辑某个 provider 不会清空其它 provider 的 inline key；留空即保留原 key。
+使用 `/model` 切换 chat profile。0.2.6 起这是单一事务，会保持 `model_roles.chat` 一致。使用 `/settings` > Roles 把不同任务路由到不同 profile。编辑某个 provider 不会清空其它 provider 的 inline key；留空即保留原 key。
 
 ### API Key Safety
 
 - **Local deployment default**: inline `api_key` in `config.json` is allowed, but the file contains secrets and must not be committed.
 - Prefer `api_key_env` so keys stay in environment variables when multiple users or CI share the project.
-- `/key reveal` and `/config export --with-keys` require explicit confirmation.
-- `/config`, logs, session history, and `/doctor` show only masked previews; full keys are never printed.
+- Key reveal and config export with keys require explicit confirmation (in `/settings` or `/export`).
+- `/status`, logs, session history, and `/doctor` show only masked previews; full keys are never printed.
 
 - **本地部署默认**：允许在 `config.json` 中保存 inline `api_key`，但该文件包含密钥，不可提交到仓库。
 - 若多人或 CI 共用项目，仍推荐 `api_key_env`，让 key 保存在环境变量中。
-- `/key reveal` 和 `/config export --with-keys` 需要二次确认。
-- `/config`、日志、会话历史、`/doctor` 只显示掩码预览，不会输出完整 key。
+- Key reveal 与含 key 的配置导出需要二次确认（在 `/settings` 或 `/export` 中）。
+- `/status`、日志、会话历史、`/doctor` 只显示掩码预览，不会输出完整 key。
 
 ### `sessions`
 
@@ -77,9 +65,9 @@ Controls TUI mode, animations, Dock width, workspace scan interval, and diff lim
 
 ### `workspace_root`
 
-The active workspace root. It can also be changed at runtime with `/workspace move <path>` or `/workspace move <bookmark-name>`.
+The active workspace root. It can also be changed at runtime with `/workspace <path>` or `/workspace <bookmark-name>`.
 
-当前 workspace 根目录，也可以运行时用 `/workspace move <path>` 或 `/workspace move <bookmark-name>` 切换。
+当前 workspace 根目录，也可以运行时用 `/workspace <path>` 或 `/workspace <bookmark-name>` 切换。
 
 ### `policy`
 

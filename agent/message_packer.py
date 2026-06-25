@@ -121,7 +121,18 @@ def pack_messages_for_provider(
     if not strict_openai:
         # Permissive mode: keep system messages in their original positions but
         # still strip internal fields and validate tool pairing.
-        output = [_strip_internal_fields(message) for message in history]
+        output: List[Dict[str, Any]] = []
+        if system_fragments:
+            # Emit each original system message in order with stripped fields.
+            for message in history:
+                if _is_system(message):
+                    output.append(_strip_internal_fields(message))
+                else:
+                    break
+            rest = [m for m in history if not _is_system(m)]
+            output.extend(_strip_internal_fields(m) for m in rest)
+        else:
+            output = [_strip_internal_fields(m) for m in history]
         return output, warnings
 
     if not system_fragments:

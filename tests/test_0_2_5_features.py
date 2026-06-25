@@ -363,7 +363,8 @@ class TestRuntimeCommands025(unittest.TestCase):
         self.assertEqual(self.config.workspace_bookmarks[0]["name"], "home")
 
         result = handle_workspaces(self.agent, "", [])
-        self.assertTrue(result.interactive)
+        self.assertTrue(result.success)
+        self.assertIn("home", result.message)
 
         result = handle_workspace_remove(self.agent, "", ["/workspace", "remove", "home"])
         self.assertTrue(result.success)
@@ -447,7 +448,8 @@ class TestCommandDispatcher025(unittest.TestCase):
         dispatcher = CommandDispatcher(self.agent)
         result = dispatcher.dispatch("/role set chat p/m")
         self.assertTrue(result.handled)
-        self.assertTrue(result.success)
+        self.assertFalse(result.success)
+        self.assertEqual(result.data.get("kind"), "removed_command")
 
     def test_doctor_command(self):
         dispatcher = CommandDispatcher(self.agent)
@@ -458,7 +460,8 @@ class TestCommandDispatcher025(unittest.TestCase):
         dispatcher = CommandDispatcher(self.agent)
         result = dispatcher.dispatch("/workspace save home")
         self.assertTrue(result.handled)
-        self.assertTrue(result.success)
+        self.assertFalse(result.success)
+        self.assertEqual(result.data.get("kind"), "removed_command")
 
     def test_workspaces_command(self):
         dispatcher = CommandDispatcher(self.agent)

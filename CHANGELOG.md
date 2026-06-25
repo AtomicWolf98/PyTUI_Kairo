@@ -1,5 +1,51 @@
 # Changelog / 更新记录
 
+## [0.2.7-beta]
+
+### Changed / 变更
+
+- Slash command surface reduced from 52 commands to 18 workflow-oriented commands.
+- Fine-grained provider/model/key/session/config commands were removed and moved into interactive panels (`/settings`, `/sessions`, `/workspace`).
+- New workflow commands added: `/setup`, `/mode`, `/status`, `/find`, `/export`.
+- Removed command categories and migration paths:
+  - `/manual`, `/auto`, `/yolo`, `/plan`, `/think` → use `/mode`.
+  - `/provider ...`, `/providers`, `/model add|edit|remove|test` → use `/settings`.
+  - `/keys`, `/key ...`, `/roles`, `/role ...` → use `/settings`.
+  - `/config validate|backup|restore|export|import` → use `/settings` or `/export`.
+  - `/session rename|delete|export|reveal|search|open` → use `/sessions`.
+  - `/workspace save`, `/workspaces`, `/workspace remove` → use `/workspace`.
+  - `/docs config`, `/docs providers`, `/docs sessions` → use `/docs`.
+- `/workspace move <path>` is now `/workspace <path-or-bookmark>`. The argument is interpreted as a path or bookmark name and switches workspace in the current process.
+
+### Added / 新增
+
+- `/setup`: first-run setup wizard for creating a provider/profile, setting base URL, model, API key, and parameters.
+- `/mode`: unified panel for Authorization (Manual/Auto/YOLO), Plan Mode, and Thinking Mode.
+- `/status`: read-only runtime status page showing version, active profile, masked key state, session info, context usage, workspace root, and modes.
+- `/find <keyword>`: unified search for current and persisted sessions.
+- `/export`: unified export panel for sessions (Markdown/JSON) and config (redacted or with keys after confirmation).
+
+- Slash 命令从 52 条收敛到 18 条工作流入口。
+- provider/model/key/session/config 的细粒度命令被删除，相关能力迁移到交互面板（`/settings`、`/sessions`、`/workspace`）。
+- 新增工作流命令：`/setup`、`/mode`、`/status`、`/find`、`/export`。
+- 已删除命令类别及迁移路径：
+  - `/manual`、`/auto`、`/yolo`、`/plan`、`/think` → 使用 `/mode`。
+  - `/provider ...`、`/providers`、`/model add|edit|remove|test` → 使用 `/settings`。
+  - `/keys`、`/key ...`、`/roles`、`/role ...` → 使用 `/settings`。
+  - `/config validate|backup|restore|export|import` → 使用 `/settings` 或 `/export`。
+  - `/session rename|delete|export|reveal|search|open` → 使用 `/sessions`。
+  - `/workspace save`、`/workspaces`、`/workspace remove` → 使用 `/workspace`。
+  - `/docs config`、`/docs providers`、`/docs sessions` → 使用 `/docs`。
+- `/workspace move <path>` 改为 `/workspace <path-or-bookmark>`，参数作为路径或书签名解析并热切换。
+
+### 新增
+
+- `/setup`：首次配置向导，创建 provider/profile、设置 base URL、model、API Key 与参数。
+- `/mode`：统一面板，管理 Authorization（Manual/Auto/YOLO）、Plan Mode、Thinking Mode。
+- `/status`：只读运行状态页，显示版本、当前 profile、脱敏 key 状态、会话信息、上下文占用、workspace root 与模式。
+- `/find <keyword>`：统一搜索当前会话与持久化会话。
+- `/export`：统一导出入口，支持会话（Markdown/JSON）与配置（默认脱敏；with-keys 需二次确认）导出。
+
 ## [0.2.6-beta]
 
 ### Added / 新增

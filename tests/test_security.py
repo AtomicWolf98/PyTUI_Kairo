@@ -368,7 +368,7 @@ class TestWorkspaceMoveCommand(TestCase):
 
         config = Config(config_path=str(self.config_path))
         self.agent = build_agent(config)
-        handled = self.agent.handle_command(f"/workspace move {self.other_dir}")
+        handled = self.agent.handle_command(f"/workspace {self.other_dir}")
         self.assertTrue(handled)
         self.assertEqual(Path(config.workspace_root).resolve(), self.other_dir.resolve())
 
@@ -378,7 +378,7 @@ class TestWorkspaceMoveCommand(TestCase):
 
         config = Config(config_path=str(self.config_path))
         self.agent = build_agent(config)
-        handled = self.agent.handle_command("/workspace move /does/not/exist")
+        handled = self.agent.handle_command("/workspace /does/not/exist")
         self.assertTrue(handled)
         self.assertNotEqual(Path(config.workspace_root).resolve(), Path("/does/not/exist").resolve())
 
@@ -391,7 +391,7 @@ class TestWorkspaceMoveCommand(TestCase):
 
         config = Config(config_path=str(self.config_path))
         self.agent = build_agent(config)
-        handled = self.agent.handle_command(f"/workspace move {self.other_dir}")
+        handled = self.agent.handle_command(f"/workspace {self.other_dir}")
         self.assertTrue(handled)
         self.assertTrue(sentinel.exists())
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "user data")
@@ -407,7 +407,7 @@ class TestWorkspaceMoveCommand(TestCase):
         self.assertIsInstance(read_tool, ReadFileTool)
         initial_root = read_tool.policy.root
 
-        handled = self.agent.handle_command(f"/workspace move {self.other_dir}")
+        handled = self.agent.handle_command(f"/workspace {self.other_dir}")
         self.assertTrue(handled)
         self.assertEqual(read_tool.policy.root.resolve(), self.other_dir.resolve())
         self.assertNotEqual(read_tool.policy.root.resolve(), initial_root.resolve())
