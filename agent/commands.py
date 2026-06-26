@@ -302,17 +302,11 @@ class CommandDispatcher:
         )
 
     def _handle_sessions(self, _raw: str, _parts: List[str]) -> CommandResult:
-        options = self.agent.conversations.session_menu_options()
-        current_idx = next(
-            (index for index, session in enumerate(self.agent.conversations.sessions)
-             if session.id == self.agent.conversations.active_session_id),
-            0,
-        )
         return CommandResult(
             handled=True,
             success=True,
             interactive=True,
-            data={"kind": "sessions", "options": options, "default_index": current_idx},
+            data={"kind": "sessions"},
         )
 
     def _handle_model(self, _raw: str, parts: List[str]) -> CommandResult:

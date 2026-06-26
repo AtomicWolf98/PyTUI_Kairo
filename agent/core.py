@@ -297,15 +297,10 @@ class Agent:
         if result.interactive and self._is_plain_console():
             kind = result.data.get("kind")
             if kind == "sessions":
-                options = result.data["options"]
-                default_index = result.data["default_index"]
-                idx = tui_widgets.select_menu("Switch Conversation:", options, default_index=default_index)
-                if isinstance(idx, int) and 0 <= idx < len(self.conversations.sessions):
-                    session = self.conversations.sessions[idx]
-                    self.conversations.switch_session(session.id)
-                    self.console.print(f"[bold green]Switched to conversation:[/bold green] {session.name}")
-                else:
-                    self.console.print("[bold yellow]Session switch cancelled: invalid selection.[/bold yellow]")
+                session_result = rc.handle_sessions(self, user_input, user_input.split())
+                if session_result.message:
+                    style = "bold green" if session_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{session_result.message}[/{style}]")
             elif kind == "model":
                 profiles = result.data["profiles"]
                 default_index = result.data["default_index"]

@@ -20,6 +20,8 @@ from agent.ui.widgets import (
     ConversationView,
     ExpandableToolOutput,
     ModeModal,
+    SessionManagementModal,
+    TextPromptModal,
     ThoughtView,
     WorkspaceModal,
     WorkspacePanel,
@@ -350,6 +352,31 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(composer.text, "")
             self.assertGreaterEqual(len(app.query_one("#conversation", ConversationView).children), 2)
             self.assertTrue(composer.has_focus)
+
+    async def test_sessions_command_opens_management_panel(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "/sessions"
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            self.assertIsInstance(app.screen, SessionManagementModal)
+            self.assertIsNotNone(app.screen.query_one("#session-management-list"))
+
+    async def test_session_management_rename_uses_textual_prompt(self):
+        app = self.make_app()
+        async with app.run_test(size=(120, 35)) as pilot:
+            await app.handle_command("/sessions")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, SessionManagementModal)
+
+            await pilot.press("down", "down", "down", "enter")
+            for _ in range(5):
+                await pilot.pause(0.05)
+
+            self.assertIsInstance(app.screen, TextPromptModal)
 
     async def test_workspace_modal_and_context_threshold_colors(self):
         app = self.make_app()

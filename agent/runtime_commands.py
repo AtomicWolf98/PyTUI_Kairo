@@ -1015,6 +1015,13 @@ def handle_sessions(agent, raw: str, parts: List[str]) -> CommandResult:
         idx2 = select("Switch to which session", switch_options)
         if idx2 < 0:
             return CommandResult(handled=True, success=True, message="Cancelled.", data={"kind": "sessions"})
+        if idx2 >= len(agent.conversations.sessions):
+            return CommandResult(
+                handled=True,
+                success=False,
+                message="Session switch cancelled: invalid selection.",
+                data={"kind": "sessions"},
+            )
         session = agent.conversations.sessions[idx2]
         agent.conversations.switch_session(session.id)
         return CommandResult(

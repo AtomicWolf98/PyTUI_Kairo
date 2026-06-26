@@ -35,6 +35,7 @@ from agent.ui.widgets import (
     RoleEditorModal,
     SearchResultModal,
     SecretConfirmModal,
+    SessionManagementModal,
     SettingsScreen,
     SetupWizardModal,
     StatusDock,
@@ -392,12 +393,12 @@ class KairoApp(App):
         margin: 0;
     }
 
-    ChoiceModal, TextPromptModal, WorkspaceModal {
+    ChoiceModal, TextPromptModal, WorkspaceModal, SessionManagementModal {
         align: center middle;
         background: #000000 55%;
     }
 
-    #choice-title, #prompt-title {
+    #choice-title, #prompt-title, #session-management-title {
         width: 64;
         height: 3;
         padding: 1 2;
@@ -407,12 +408,19 @@ class KairoApp(App):
         border: solid #3a414b;
     }
 
-    #choice-list {
+    #choice-list, #session-management-list {
         width: 64;
         height: auto;
         max-height: 16;
         background: $surface;
         border: solid #3a414b;
+    }
+
+    #session-management-hint {
+        width: 64;
+        padding: 0 2;
+        color: $text-muted;
+        background: $surface-2;
     }
 
     #prompt-input {
@@ -1232,6 +1240,10 @@ class KairoApp(App):
             self.push_screen(SetupWizardModal(), self._setup_wizard_done)
             return
 
+        if kind == "sessions":
+            self.push_screen(SessionManagementModal(), self._sessions_management_done)
+            return
+
         if kind == "status":
             await view.add_notice(Text(result.message, style="#a5adcb"))
             return
@@ -1335,12 +1347,7 @@ class KairoApp(App):
             await view.add_notice(Text(result.message, style=style))
 
         if result.interactive:
-            if kind == "sessions":
-                self.push_screen(
-                    ChoiceModal("Switch conversation", result.data["options"], result.data["default_index"]),
-                    self._session_selected,
-                )
-            elif kind == "model":
+            if kind == "model":
                 self.push_screen(
                     ChoiceModal("Select provider / model", result.data["profiles"], result.data["default_index"]),
                     self._model_selected,
@@ -1864,6 +1871,36 @@ class KairoApp(App):
         )
 
     # ---- session modal routing (0.2.4) ------------------------------------------
+
+    def _sessions_management_done(self, action: str):
+        if not action or action == "close":
+            self._restore_focus()
+            return
+        if action == "switch":
+            options = self.agent.conversations.session_menu_options()
+            current_idx = next(
+                (
+                    index
+                    for index, session in enumerate(self.agent.conversations.sessions)
+                    if session.id == self.agent.conversations.active_session_id
+                ),
+                0,
+            )
+            self.push_screen(
+                ChoiceModal("Switch conversation", options, current_idx),
+                self._session_selected,
+            )
+            return
+        if action == "search":
+            self.push_screen(TextPromptModal("Search sessions"), self._session_search_done)
+            return
+        if action == "open":
+            self.push_screen(TextPromptModal("Open session (id or index)"), self._session_open_done)
+            return
+        if action in {"rename", "delete", "export", "reveal"}:
+            self.run_worker(self._route_session_subcommand(action))
+            return
+        self._restore_focus()
 
     async def _route_session_subcommand(self, sub: str) -> bool:
         if sub == "rename":

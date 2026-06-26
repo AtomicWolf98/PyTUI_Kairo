@@ -583,6 +583,39 @@ class WorkspaceModal(ModalScreen[Optional[Dict[str, str]]]):
             self.dismiss(None)
 
 
+class SessionManagementModal(ModalScreen[Optional[str]]):
+    """Top-level session management entry point for Textual mode."""
+
+    ACTIONS = [
+        ("Switch session", "switch"),
+        ("Search sessions", "search"),
+        ("Open by id or search index", "open"),
+        ("Rename current session", "rename"),
+        ("Delete session", "delete"),
+        ("Export current session", "export"),
+        ("Reveal current session path", "reveal"),
+        ("Close", "close"),
+    ]
+
+    def compose(self):
+        with Vertical(id="session-management-shell"):
+            yield Static("SESSIONS - manage conversations", id="session-management-title")
+            yield Static(
+                "Enter to select - Esc to close",
+                id="session-management-hint",
+            )
+            items = [ListItem(Label(label)) for label, _action in self.ACTIONS]
+            yield ListView(*items, initial_index=0, id="session-management-list")
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        if 0 <= event.index < len(self.ACTIONS):
+            self.dismiss(self.ACTIONS[event.index][1])
+
+    def on_key(self, event: events.Key):
+        if event.key == "escape":
+            self.dismiss(None)
+
+
 class ChoiceModal(ModalScreen[int]):
     def __init__(self, title: str, options: List[str], default_index: int = 0):
         super().__init__()

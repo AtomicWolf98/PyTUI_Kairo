@@ -107,7 +107,7 @@ class TestAgentCommands(unittest.TestCase):
         self.assertEqual(self.agent.active_session_name, "Work Session")
         self.assertNotIn("first conversation", str(self.agent.history))
 
-        with patch('agent.tui_widgets.select_menu', return_value=0):
+        with patch('agent.runtime_commands.select', side_effect=[0, 0]):
             self.assertTrue(self.agent.handle_command("/sessions"))
         self.assertEqual(self.agent.conversations.active_session_id, first_session_id)
         self.assertIn("first conversation", str(self.agent.history))
@@ -126,7 +126,7 @@ class TestAgentCommands(unittest.TestCase):
     def test_sessions_ignores_invalid_selection_index(self):
         original_session_id = self.agent.conversations.active_session_id
 
-        with patch('agent.tui_widgets.select_menu', return_value=99):
+        with patch('agent.runtime_commands.select', side_effect=[0, 99]):
             with patch.object(self.agent.console, 'print') as mock_print:
                 self.assertTrue(self.agent.handle_command("/sessions"))
 
