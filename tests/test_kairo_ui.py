@@ -19,7 +19,9 @@ from agent.ui.widgets import (
     Composer,
     ConversationView,
     ExpandableToolOutput,
+    ModeModal,
     ThoughtView,
+    WorkspaceModal,
     WorkspacePanel,
     WorkspaceTree,
 )
@@ -304,13 +306,10 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
 
             composer.text = "/c"
             await pilot.pause()
-            self.assertEqual(
-                palette.matches,
-                ["/clear", "/compress", "/config", "/config validate", "/config backup", "/config restore"],
-            )
-            # Navigate down three times to land on "/config" (index 2) and accept it.
-            await pilot.press("down", "down", "enter")
-            self.assertEqual(composer.text, "/config ")
+            self.assertEqual(palette.matches, ["/clear", "/compress"])
+            # Navigate down once to land on "/compress" (index 1) and accept it.
+            await pilot.press("down", "enter")
+            self.assertEqual(composer.text, "/compress ")
 
             composer.text = "/se"
             await pilot.pause()
@@ -339,11 +338,11 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(composer.text, "")
             self.assertGreaterEqual(len(app.query_one("#conversation", ConversationView).children), 2)
 
-    async def test_config_command_can_emit_console_content_on_ui_thread(self):
+    async def test_status_command_can_emit_console_content_on_ui_thread(self):
         app = self.make_app()
         async with app.run_test(size=(120, 35)) as pilot:
             composer = app.query_one("#composer", Composer)
-            composer.text = "/config"
+            composer.text = "/status"
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -360,6 +359,9 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             await pilot.press("ctrl+b")
             await pilot.pause()
             self.assertGreater(len(app.screen_stack), 1)
+            self.assertIsInstance(app.screen, WorkspaceModal)
+            self.assertIsNotNone(app.screen.query_one("#workspace-modal-title"))
+            self.assertIsNotNone(app.screen.query_one("#workspace-actions"))
             self.assertIsNotNone(app.screen.query_one(WorkspacePanel))
             await pilot.press("escape")
 
@@ -387,21 +389,29 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.workspace_snapshot.files)
             self.assertTrue(app.query_one("#composer", Composer).has_focus)
 
-    async def test_manual_command_sets_authorization_level(self):
+    async def test_mode_command_sets_authorization_level(self):
         app = self.make_app()
         async with app.run_test(size=(120, 35)) as pilot:
             composer = app.query_one("#composer", Composer)
-            composer.text = "/manual"
+            composer.text = "/mode"
             await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, ModeModal)
+            # Default auth is "auto" at index 1; navigate to "manual" (index 0) and save.
+            await pilot.press("up", "enter")
             await pilot.pause()
             self.assertEqual(app.config.authorization_level, "manual")
 
-    async def test_yolo_command_sets_authorization_level(self):
+    async def test_mode_command_can_set_yolo_authorization_level(self):
         app = self.make_app()
         async with app.run_test(size=(120, 35)) as pilot:
             composer = app.query_one("#composer", Composer)
-            composer.text = "/yolo"
+            composer.text = "/mode"
             await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, ModeModal)
+            # Default auth is "auto" at index 1; navigate to "yolo" (index 2) and save.
+            await pilot.press("down", "enter")
             await pilot.pause()
             self.assertEqual(app.config.authorization_level, "yolo")
 
@@ -421,7 +431,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
             app = KairoApp(config, ToolRegistry(), animation=False, reduced_motion=True)
             async with app.run_test(size=(140, 35)) as pilot:
                 composer = app.query_one("#composer", Composer)
-                composer.text = f"/workspace move {other}"
+                composer.text = f"/workspace {other}"
                 await pilot.press("enter")
                 for _ in range(20):
                     await pilot.pause(0.05)
@@ -458,7 +468,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(str(tree.root.label), "old")
 
                 composer = app.query_one("#composer", Composer)
-                composer.text = f"/workspace move {new}"
+                composer.text = f"/workspace {new}"
                 await pilot.press("enter")
                 for _ in range(30):
                     await pilot.pause(0.05)
@@ -496,7 +506,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("old_file.txt", initial_files)
 
                 composer = app.query_one("#composer", Composer)
-                composer.text = f"/workspace move {new}"
+                composer.text = f"/workspace {new}"
                 await pilot.press("enter")
                 for _ in range(30):
                     await pilot.pause(0.05)
@@ -532,7 +542,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
                         break
 
                 composer = app.query_one("#composer", Composer)
-                composer.text = f"/workspace move {new}"
+                composer.text = f"/workspace {new}"
                 await pilot.press("enter")
                 for _ in range(30):
                     await pilot.pause(0.05)
@@ -574,7 +584,7 @@ class TestKairoApp(unittest.IsolatedAsyncioTestCase):
 
                 composer = app.query_one("#composer", Composer)
                 for target in (b, c):
-                    composer.text = f"/workspace move {target}"
+                    composer.text = f"/workspace {target}"
                     await pilot.press("enter")
 
                 for _ in range(40):

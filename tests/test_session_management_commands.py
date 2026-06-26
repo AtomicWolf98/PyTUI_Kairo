@@ -11,6 +11,7 @@ from typing import List
 from unittest.mock import patch
 
 from agent.context_manager import ConversationManager
+from agent import runtime_commands as rc
 from agent.session_store import SessionStore
 
 
@@ -76,6 +77,19 @@ def _dispatch(agent, raw: str, lines: List[str]):
     return result, buffer.getvalue()
 
 
+def _call_handler(agent, handler, lines: List[str]):
+    responses = list(lines)
+    buffer = io.StringIO()
+
+    def fake_input(prompt=""):
+        return responses.pop(0) if responses else ""
+
+    with redirect_stdout(buffer):
+        with patch("builtins.input", fake_input):
+            result = handler(agent, "", [""])
+    return result, buffer.getvalue()
+
+
 class TestSessionManagement(unittest.TestCase):
     def setUp(self):
         self.tmp = _TempSessions()
@@ -88,7 +102,7 @@ class TestSessionManagement(unittest.TestCase):
         store = self.agent.conversations.session_store
         session = self.agent.conversations.active
         original_name = session.name
-        result, _ = _dispatch(self.agent, "/session rename", ["Renamed One"])
+        result, _ = _call_handler(self.agent, rc.handle_session_rename, ["Renamed One"])
         self.assertTrue(result.success, result.message)
         # In-memory session reflects the rename.
         self.assertEqual(session.name, "Renamed One")
@@ -108,11 +122,11 @@ class TestSessionManagement(unittest.TestCase):
         self.assertNotEqual(original_name, "Renamed One")
 
     def test_rename_rejects_blank_name(self):
-        result, _ = _dispatch(self.agent, "/session rename", [""])
+        result, _ = _call_handler(self.agent, rc.handle_session_rename, [""])
         self.assertFalse(result.success)
 
     def test_reveal_returns_existing_path(self):
-        result, _ = _dispatch(self.agent, "/session reveal", [])
+        result, _ = _call_handler(self.agent, rc.handle_session_reveal, [])
         self.assertTrue(result.success)
         path = Path(result.data["path"])
         self.assertTrue(path.exists())
@@ -123,7 +137,7 @@ class TestSessionManagement(unittest.TestCase):
         session = self.agent.conversations.active
         # Add a non-trivial history so the export has content.
         session.history.append({"role": "user", "content": "hello"})
-        result, _ = _dispatch(self.agent, "/session export", ["markdown"])
+        result, _ = _call_handler(self.agent, rc.handle_session_export, ["markdown"])
         self.assertTrue(result.success, result.message)
         exported = Path(result.data["path"])
         self.assertTrue(exported.exists())
@@ -139,7 +153,7 @@ class TestSessionManagement(unittest.TestCase):
         self.assertEqual(exported.parent, Path(self.tmp.storage) / "exports")
 
     def test_export_json_round_trips(self):
-        result, _ = _dispatch(self.agent, "/session export", ["json"])
+        result, _ = _call_handler(self.agent, rc.handle_session_export, ["json"])
         self.assertTrue(result.success)
         exported = Path(result.data["path"])
         with open(exported, "r", encoding="utf-8") as handle:
@@ -150,7 +164,7 @@ class TestSessionManagement(unittest.TestCase):
     def test_delete_protects_last_session(self):
         # Force to exactly one session to ensure last-session protection fires.
         self.agent.conversations.sessions = [self.agent.conversations.active]
-        result, _ = _dispatch(self.agent, "/session delete", ["0", "y"])
+        result, _ = _call_handler(self.agent, rc.handle_session_delete, ["0", "y"])
         self.assertFalse(result.success)
         self.assertIn("last session", result.message, result.message)
 
@@ -161,7 +175,7 @@ class TestSessionManagement(unittest.TestCase):
         target = sessions_before[0]
         active_id_before = self.agent.conversations.active_session_id
 
-        result, _ = _dispatch(self.agent, "/session delete", ["0", "y"])
+        result, _ = _call_handler(self.agent, rc.handle_session_delete, ["0", "y"])
         self.assertTrue(result.success, result.message)
         # Target removed; active session remains valid.
         self.assertNotIn(target, self.agent.conversations.sessions)

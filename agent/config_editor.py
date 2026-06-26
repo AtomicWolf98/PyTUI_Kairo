@@ -1,9 +1,9 @@
-"""Runtime configuration editing for Kairo 0.2.3.
+"""Runtime configuration editing for Kairo 0.2.5.
 
 ``ConfigDraft`` provides an in-memory mutable copy of the configuration that
-can be validated and committed back to disk atomically. Drafts never persist
-raw API keys borrowed from environment variables: only keys explicitly marked
-as ``file`` source (inline keys the user chose to save) flow back to disk.
+can be validated and committed back to disk atomically. 0.2.5 stores API keys
+inline in config.json by default; ``export_config`` redacts them unless the
+caller explicitly requests keys.
 
 The editor layer is intentionally UI-agnostic; plain prompts and Textual
 modals both build a draft, mutate it, and call :meth:`ConfigDraft.apply_to`.
@@ -11,11 +11,13 @@ modals both build a draft, mutate it, and call :meth:`ConfigDraft.apply_to`.
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from agent.config import Config
+from agent.profile_resolver import is_masked_key
 from agent.provider_registry import (
     get_model,
     get_provider,
@@ -28,6 +30,20 @@ from agent.provider_registry import (
 VALIDATION_OK = "ok"
 VALIDATION_WARNING = "warning"
 VALIDATION_ERROR = "error"
+
+
+class _ClearKeySentinel:
+    """Sentinel passed to ``update_profile``/``update_provider`` to explicitly
+    clear an inline API key. Distinct from ``None`` (leave untouched) and from
+    an empty string (blank input => keep the existing key)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<KEY_CLEAR>"
+
+
+KEY_CLEAR = _ClearKeySentinel()
 
 
 @dataclass
@@ -82,7 +98,20 @@ class ConfigDraft:
         self.authorization_level: str = source.authorization_level
         self.plan_mode: bool = source.plan_mode
         self.thinking_mode: bool = source.thinking_mode
+        self.model_roles: Dict[str, str] = copy.deepcopy(getattr(source, "model_roles", {}))
+        self.workspace_bookmarks: List[Dict[str, str]] = copy.deepcopy(getattr(source, "workspace_bookmarks", []))
         self.extra_fields: Dict[str, Any] = copy.deepcopy(source._extra_fields)
+        self._tag_original_keys()
+
+    def _tag_original_keys(self) -> None:
+        """Record each provider/profile's original inline key so we can tell
+        'keep existing' from 'new key' when applying. 0.2.6-beta: this is the
+        basis for refusing only *new* inline keys while preserving existing ones
+        when a provider is edited."""
+        for provider in self.llm.get("providers", []):
+            provider["_original_api_key"] = str(provider.get("api_key", ""))
+        for profile in self.llm.get("profiles", []):
+            profile["_original_api_key"] = str(profile.get("api_key", ""))
 
     # ---- snapshot ----------------------------------------------------------------
 
@@ -90,7 +119,250 @@ class ConfigDraft:
     def from_config(cls, source: Config) -> "ConfigDraft":
         return cls(source)
 
-    # ---- provider/model mutations -------------------------------------------------
+    # ---- profile-first mutations (0.2.5) ----------------------------------------
+
+    def _ensure_profiles(self) -> None:
+        """Convert legacy providers into profiles when operating in profile mode."""
+        if self.llm.get("profiles"):
+            return
+        profiles: List[Dict[str, Any]] = []
+        defaults = self.llm.get("defaults", {})
+        for provider in self.llm.get("providers", []):
+            pname = str(provider.get("name", "")).strip()
+            for model in provider.get("models", []):
+                mname = str(model.get("name", "")).strip()
+                pid = f"{pname}/{mname}" if pname and mname else (pname or mname)
+                profiles.append({
+                    "id": pid,
+                    "label": "",
+                    "provider": pname,
+                    "base_url": str(provider.get("base_url", "")).strip(),
+                    "api_key": str(provider.get("api_key", "")),
+                    "api_key_env": str(provider.get("api_key_env", "")).strip(),
+                    "model": mname,
+                    "temperature": float(model.get("temperature", defaults.get("temperature", 0.2))),
+                    "max_tokens": int(model.get("max_tokens", defaults.get("max_tokens", 4000))),
+                    "context_window": int(model.get("context_window", defaults.get("context_window", 128000))),
+                    "context_management": self._normalize_context_management(model.get("context_management")),
+                })
+        active_profile = ""
+        if self.llm.get("active_provider") and self.llm.get("active_model"):
+            active_profile = f"{self.llm['active_provider']}/{self.llm['active_model']}"
+        self.llm = {
+            "active_profile": active_profile,
+            "active_provider": "",
+            "active_model": "",
+            "defaults": dict(defaults),
+            "providers": [],
+            "profiles": profiles,
+        }
+
+    def _get_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
+        self._ensure_profiles()
+        for profile in self.llm.get("profiles", []):
+            if str(profile.get("id", "")).strip() == profile_id:
+                return profile
+        return None
+
+    def add_profile(
+        self,
+        *,
+        id: str,
+        label: str = "",
+        provider: str = "",
+        base_url: str,
+        api_key: str = "",
+        api_key_env: str = "",
+        model: str,
+        temperature: float = 0.2,
+        max_tokens: int = 4000,
+        context_window: int = 128000,
+        context_management: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        self._ensure_profiles()
+        pid = (id or "").strip()
+        if not pid or self._get_profile(pid):
+            return False
+        profile = {
+            "id": pid,
+            "label": (label or "").strip(),
+            "provider": (provider or "").strip(),
+            "base_url": base_url.strip(),
+            "api_key": api_key,
+            "api_key_env": api_key_env.strip(),
+            "model": (model or pid).strip(),
+            "temperature": float(temperature),
+            "max_tokens": int(max_tokens),
+            "context_window": int(context_window),
+            "context_management": self._normalize_context_management(context_management),
+        }
+        self.llm.setdefault("profiles", []).append(profile)
+        if not self.llm.get("active_profile"):
+            self.llm["active_profile"] = pid
+        return True
+
+    def update_profile(
+        self,
+        profile_id: str,
+        *,
+        label: Optional[str] = None,
+        provider: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_key_env: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        context_window: Optional[int] = None,
+        context_management: Optional[Dict[str, Any]] = None,
+        new_id: Optional[str] = None,
+    ) -> bool:
+        profile = self._get_profile(profile_id)
+        if not profile:
+            return False
+        if new_id is not None:
+            new_id = new_id.strip()
+            if new_id and new_id != profile_id and not self._get_profile(new_id):
+                profile["id"] = new_id
+                if self.llm.get("active_profile") == profile_id:
+                    self.llm["active_profile"] = new_id
+        if label is not None:
+            profile["label"] = label.strip()
+        if provider is not None:
+            profile["provider"] = provider.strip()
+        if base_url is not None:
+            profile["base_url"] = base_url.strip()
+        if api_key is KEY_CLEAR:
+            # Explicit clear: remove the inline key.
+            profile["api_key"] = ""
+            profile["_api_key_source"] = "env" if profile.get("api_key_env") else "none"
+        elif api_key:  # non-empty string -> replace
+            profile["api_key"] = api_key
+            profile["_api_key_source"] = "file"
+        # else: None or "" -> keep existing inline key (no-op); 0.2.6-beta blank-keeps-existing
+        if api_key_env is not None:
+            profile["api_key_env"] = api_key_env.strip()
+        if model is not None:
+            profile["model"] = (model or profile["id"]).strip()
+        if temperature is not None:
+            profile["temperature"] = float(temperature)
+        if max_tokens is not None:
+            profile["max_tokens"] = int(max_tokens)
+        if context_window is not None:
+            profile["context_window"] = int(context_window)
+        if context_management is not None:
+            profile["context_management"] = self._normalize_context_management(context_management)
+        return True
+
+    def remove_profile(self, profile_id: str) -> bool:
+        profile = self._get_profile(profile_id)
+        if not profile:
+            return False
+        self.llm["profiles"] = [p for p in self.llm.get("profiles", []) if str(p.get("id", "")).strip() != profile_id]
+        if self.llm.get("active_profile") == profile_id:
+            self.llm["active_profile"] = self.llm["profiles"][0]["id"] if self.llm["profiles"] else ""
+        # Clear role mappings that pointed to this profile.
+        self.model_roles = {k: v for k, v in self.model_roles.items() if v != profile_id}
+        return True
+
+    def copy_profile(self, source_id: str, new_id: str) -> bool:
+        source = self._get_profile(source_id)
+        if not source:
+            return False
+        new_id = (new_id or "").strip()
+        if not new_id or self._get_profile(new_id):
+            return False
+        profile = copy.deepcopy(source)
+        profile["id"] = new_id
+        profile["label"] = f"Copy of {source.get('label') or source_id}"
+        self.llm.setdefault("profiles", []).append(profile)
+        return True
+
+    def set_active_profile(self, profile_id: str) -> bool:
+        self._ensure_profiles()
+        if not self._get_profile(profile_id):
+            return False
+        self.llm["active_profile"] = profile_id
+        return True
+
+    # ---- key management ----------------------------------------------------------
+
+    def set_key(self, profile_id: str, key: str) -> bool:
+        return self.update_profile(profile_id, api_key=key)
+
+    def clear_key(self, profile_id: str) -> bool:
+        # 0.2.6-beta: empty string means "keep existing"; use the sentinel to
+        # actually clear the inline key.
+        return self.update_profile(profile_id, api_key=KEY_CLEAR)
+
+    def migrate_keys(self) -> List[str]:
+        """Migrate legacy provider inline keys into profile inline keys.
+
+        Returns a list of migrated profile ids.
+        """
+        self._ensure_profiles()
+        migrated: List[str] = []
+        legacy_providers = {p["name"]: p for p in self._source.llm.get("providers", [])}
+        for profile in self.llm.get("profiles", []):
+            provider_name = profile.get("provider") or (profile["id"].split("/", 1)[0] if "/" in profile["id"] else "")
+            provider = legacy_providers.get(provider_name)
+            if not provider:
+                continue
+            if profile.get("api_key"):
+                continue
+            legacy_key = str(provider.get("api_key", "")).strip()
+            if legacy_key:
+                profile["api_key"] = legacy_key
+                migrated.append(profile["id"])
+        return migrated
+
+    # ---- role management ---------------------------------------------------------
+
+    def set_role(self, role: str, profile_id: str) -> bool:
+        self._ensure_profiles()
+        if not self._get_profile(profile_id):
+            return False
+        self.model_roles[str(role).strip()] = str(profile_id).strip()
+        return True
+
+    def clear_role(self, role: str) -> bool:
+        role = str(role).strip()
+        if role not in self.model_roles:
+            return False
+        del self.model_roles[role]
+        return True
+
+    def list_roles(self) -> Dict[str, str]:
+        return dict(self.model_roles)
+
+    # ---- workspace bookmarks -----------------------------------------------------
+
+    def add_workspace_bookmark(self, name: str, path: str) -> bool:
+        name = (name or "").strip()
+        path = (path or "").strip()
+        if not name or not path:
+            return False
+        existing = {b["name"].lower(): b for b in self.workspace_bookmarks}
+        existing[name.lower()] = {"name": name, "path": path}
+        self.workspace_bookmarks = list(existing.values())
+        return True
+
+    def remove_workspace_bookmark(self, name: str) -> bool:
+        name = (name or "").strip().lower()
+        if not name:
+            return False
+        original = len(self.workspace_bookmarks)
+        self.workspace_bookmarks = [b for b in self.workspace_bookmarks if b["name"].lower() != name]
+        return len(self.workspace_bookmarks) < original
+
+    def get_workspace_bookmark(self, name: str) -> Optional[Dict[str, str]]:
+        name = (name or "").strip().lower()
+        for bookmark in self.workspace_bookmarks:
+            if bookmark["name"].lower() == name:
+                return dict(bookmark)
+        return None
+
+    # ---- provider/model mutations (legacy compatibility) -------------------------
 
     def add_provider(
         self,
@@ -101,6 +373,20 @@ class ConfigDraft:
         api_key_env: str = "",
         models: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
+        if self.llm.get("profiles"):
+            models = models or []
+            first_model = models[0]["name"] if models else name
+            return self.add_profile(
+                id=f"{name}/{first_model}",
+                provider=name,
+                base_url=base_url,
+                api_key=api_key,
+                api_key_env=api_key_env,
+                model=first_model,
+                temperature=models[0].get("temperature", self.llm["defaults"]["temperature"]) if models else self.llm["defaults"]["temperature"],
+                max_tokens=models[0].get("max_tokens", self.llm["defaults"]["max_tokens"]) if models else self.llm["defaults"]["max_tokens"],
+                context_window=models[0].get("context_window", self.llm["defaults"]["context_window"]) if models else self.llm["defaults"]["context_window"],
+            )
         clean = (name or "").strip()
         if not clean or get_provider(self.llm["providers"], clean):
             return False
@@ -115,7 +401,7 @@ class ConfigDraft:
         if not normalized or not normalized["models"]:
             return False
         self.llm["providers"].append(normalized)
-        self._ensure_active()
+        self._ensure_active_legacy()
         return True
 
     def update_provider(
@@ -123,22 +409,37 @@ class ConfigDraft:
         name: str,
         *,
         base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        api_key: Any = None,
         api_key_env: Optional[str] = None,
         rename: Optional[str] = None,
     ) -> bool:
+        if self.llm.get("profiles"):
+            for profile in self.llm["profiles"]:
+                if profile.get("provider") == name:
+                    self.update_profile(
+                        profile["id"],
+                        base_url=base_url,
+                        api_key=api_key,
+                        api_key_env=api_key_env,
+                        provider=rename if rename else None,
+                    )
+            return True
         provider = get_provider(self.llm["providers"], name)
         if not provider:
             return True  # no-op; caller decides if this is an error via validate
         if base_url is not None:
             provider["base_url"] = base_url.strip()
-        if api_key is not None:
+        if api_key is KEY_CLEAR:
+            provider["api_key"] = ""
+            provider["_api_key_source"] = "env" if provider.get("api_key_env") else "none"
+        elif api_key:  # non-empty string -> replace
             provider["api_key"] = api_key
-            provider["_api_key_source"] = "file" if api_key else ("env" if provider.get("api_key_env") else "none")
+            provider["_api_key_source"] = "file"
+        # else: None or "" -> keep existing inline key (no-op); 0.2.6-beta blank-keeps-existing
         if api_key_env is not None:
             env_value = api_key_env.strip()
             provider["api_key_env"] = env_value
-            if api_key is None:
+            if not provider.get("api_key"):
                 provider["_api_key_source"] = "env" if env_value else "none"
         if rename is not None:
             new_name = rename.strip()
@@ -149,12 +450,19 @@ class ConfigDraft:
         return True
 
     def remove_provider(self, name: str) -> bool:
+        if self.llm.get("profiles"):
+            removed = False
+            for profile in list(self.llm["profiles"]):
+                if profile.get("provider") == name:
+                    self.remove_profile(profile["id"])
+                    removed = True
+            return removed
         provider = get_provider(self.llm["providers"], name)
         if not provider:
             return False
         self.llm["providers"] = [p for p in self.llm["providers"] if p["name"] != name]
         if self.llm["active_provider"] == name:
-            self._ensure_active()
+            self._ensure_active_legacy()
         return True
 
     def add_model(
@@ -167,6 +475,17 @@ class ConfigDraft:
         context_window: Optional[int] = None,
         context_management: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        if self.llm.get("profiles"):
+            return self.add_profile(
+                id=f"{provider_name}/{name}",
+                provider=provider_name,
+                base_url="",
+                model=name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                context_window=context_window,
+                context_management=context_management,
+            )
         provider = get_provider(self.llm["providers"], provider_name)
         if not provider:
             return False
@@ -195,6 +514,24 @@ class ConfigDraft:
         context_management: Optional[Dict[str, Any]] = None,
         rename: Optional[str] = None,
     ) -> bool:
+        if self.llm.get("profiles"):
+            pid = f"{provider_name}/{model_name}"
+            profile = self._get_profile(pid)
+            if not profile:
+                return False
+            kwargs: Dict[str, Any] = {}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            if context_window is not None:
+                kwargs["context_window"] = context_window
+            if context_management is not None:
+                kwargs["context_management"] = context_management
+            if rename is not None:
+                kwargs["new_id"] = f"{provider_name}/{rename}"
+                kwargs["model"] = rename
+            return self.update_profile(pid, **kwargs)
         provider = get_provider(self.llm["providers"], provider_name)
         if not provider:
             return True
@@ -218,6 +555,8 @@ class ConfigDraft:
         return True
 
     def remove_model(self, provider_name: str, model_name: str) -> bool:
+        if self.llm.get("profiles"):
+            return self.remove_profile(f"{provider_name}/{model_name}")
         provider = get_provider(self.llm["providers"], provider_name)
         if not provider:
             return False
@@ -231,6 +570,8 @@ class ConfigDraft:
         return True
 
     def set_active_model(self, provider_name: str, model_name: str) -> bool:
+        if self.llm.get("profiles"):
+            return self.set_active_profile(f"{provider_name}/{model_name}")
         provider = get_provider(self.llm["providers"], provider_name)
         if not provider or not get_model(provider, model_name):
             return False
@@ -238,14 +579,139 @@ class ConfigDraft:
         self.llm["active_model"] = model_name
         return True
 
+    def _ensure_active_legacy(self) -> None:
+        if not self.llm["providers"]:
+            self.llm["active_provider"] = ""
+            self.llm["active_model"] = ""
+            return
+        if not self.llm["active_provider"] or not get_provider(self.llm["providers"], self.llm["active_provider"]):
+            self.llm["active_provider"] = self.llm["providers"][0]["name"]
+            self.llm["active_model"] = self.llm["providers"][0]["models"][0]["name"]
+        provider = get_provider(self.llm["providers"], self.llm["active_provider"])
+        if provider and not get_model(provider, self.llm["active_model"]):
+            self.llm["active_model"] = provider["models"][0]["name"]
+
     # ---- validation ---------------------------------------------------------------
 
     def validate(self) -> ValidationReport:
         report = ValidationReport()
+
+        # Profile-first validation.
+        if self.llm.get("profiles"):
+            self._validate_profiles(report)
+        else:
+            self._validate_legacy_providers(report)
+
+        # Role validation.
+        seen_roles: set = set()
+        profile_ids = {str(p.get("id", "")).strip() for p in self.llm.get("profiles", [])}
+        provider_model_labels = set(self._source.get_model_profile_names())
+        valid_targets = profile_ids | provider_model_labels
+        for role, target in self.model_roles.items():
+            if role in seen_roles:
+                report.add_error(f"Duplicate role mapping for '{role}'.")
+            seen_roles.add(role)
+            if target not in valid_targets:
+                report.add_warning(f"Role '{role}' maps to unknown profile '{target}'.")
+
+        # Workspace bookmarks validation.
+        seen_bookmarks: set = set()
+        for bookmark in self.workspace_bookmarks:
+            name = bookmark.get("name", "").strip()
+            path = bookmark.get("path", "").strip()
+            if not name:
+                report.add_error("A workspace bookmark is missing its name.")
+                continue
+            if not path:
+                report.add_error(f"Workspace bookmark '{name}' is missing its path.")
+                continue
+            if name.lower() in seen_bookmarks:
+                report.add_error(f"Duplicate workspace bookmark name: {name}")
+            seen_bookmarks.add(name.lower())
+
+        storage_dir = str(self.sessions.get("storage_dir", "")).strip()
+        if not storage_dir:
+            report.add_warning("sessions.storage_dir is empty; sessions may be disabled.")
+        try:
+            workspace_root = Path(self.workspace_root).expanduser()
+            if not workspace_root.exists():
+                report.add_warning(f"workspace_root does not exist: {workspace_root}")
+        except Exception as exc:
+            report.add_warning(f"workspace_root is invalid: {exc}")
+
+        return report
+
+    def _validate_profiles(self, report: ValidationReport) -> None:
+        profiles = self.llm.get("profiles", [])
+        if not profiles:
+            report.add_error("llm.profiles is empty; at least one profile is required.")
+            return
+
+        seen_ids: set = set()
+        for profile in profiles:
+            pid = str(profile.get("id", "")).strip()
+            if not pid:
+                report.add_error("A profile is missing its id field.")
+                continue
+            if pid in seen_ids:
+                report.add_error(f"Duplicate profile id: {pid}")
+            seen_ids.add(pid)
+
+            base_url = str(profile.get("base_url", "")).strip()
+            if not (base_url.startswith("http://") or base_url.startswith("https://")):
+                report.add_error(f"Profile '{pid}' base_url is not a valid http/https URL: {base_url!r}")
+
+            model = str(profile.get("model", "")).strip()
+            if not model:
+                report.add_error(f"Profile '{pid}' is missing its model field.")
+
+            try:
+                context_window = int(profile.get("context_window", self.llm["defaults"]["context_window"]))
+            except (TypeError, ValueError):
+                context_window = -1
+            if context_window <= 0:
+                report.add_error(f"Profile '{pid}' context_window must be > 0.")
+
+            try:
+                max_tokens = int(profile.get("max_tokens", self.llm["defaults"]["max_tokens"]))
+            except (TypeError, ValueError):
+                max_tokens = -1
+            if max_tokens <= 0:
+                report.add_error(f"Profile '{pid}' max_tokens must be > 0.")
+
+            if context_window > 0 and max_tokens > context_window:
+                report.add_error(
+                    f"Profile '{pid}' max_tokens ({max_tokens}) cannot exceed context_window ({context_window})."
+                )
+
+            try:
+                temperature = float(profile.get("temperature", self.llm["defaults"]["temperature"]))
+            except (TypeError, ValueError):
+                temperature = -1.0
+            if temperature < 0 or temperature > 2:
+                report.add_error(f"Profile '{pid}' temperature {temperature} must be between 0 and 2.")
+
+            api_key = str(profile.get("api_key", ""))
+            api_key_env = str(profile.get("api_key_env", "")).strip()
+            if api_key and api_key_env:
+                report.add_warning(
+                    f"Profile '{pid}' has both api_key (inline) and api_key_env set; "
+                    "inline key takes precedence at runtime."
+                )
+
+        active_profile = str(self.llm.get("active_profile", "")).strip()
+        if active_profile and active_profile not in seen_ids:
+            report.add_warning(f"active_profile '{active_profile}' not found in profiles list.")
+            if profiles:
+                self.llm["active_profile"] = profiles[0]["id"]
+        elif not active_profile and profiles:
+            self.llm["active_profile"] = profiles[0]["id"]
+
+    def _validate_legacy_providers(self, report: ValidationReport) -> None:
         providers = self.llm.get("providers", [])
         if not providers:
             report.add_error("llm.providers is empty; at least one provider is required.")
-            return report
+            return
 
         seen_providers: set = set()
         for provider in providers:
@@ -321,18 +787,6 @@ class ConfigDraft:
                 self.llm["active_provider"] = providers[0]["name"]
                 self.llm["active_model"] = providers[0]["models"][0]["name"]
 
-        storage_dir = str(self.sessions.get("storage_dir", "")).strip()
-        if not storage_dir:
-            report.add_warning("sessions.storage_dir is empty; sessions may be disabled.")
-        try:
-            workspace_root = Path(self.workspace_root).expanduser()
-            if not workspace_root.exists():
-                report.add_warning(f"workspace_root does not exist: {workspace_root}")
-        except Exception as exc:
-            report.add_warning(f"workspace_root is invalid: {exc}")
-
-        return report
-
     # ---- commit -------------------------------------------------------------------
 
     def apply_to(
@@ -340,18 +794,20 @@ class ConfigDraft:
         config: Config,
         *,
         backup: bool = True,
-        allow_inline_key: bool = False,
+        allow_inline_key: bool = True,
         allowed_inline_providers: Optional[Iterable[str]] = None,
     ) -> ValidationReport:
         """Commit the draft to *config* and persist.
 
         - Runs validation first; refused if there are errors.
         - When ``backup=True`` writes a timestamped backup before overwriting.
-        - ``allow_inline_key`` gates inline api_key persistence; if False,
-          inline keys are stripped from the draft before commit so environment
-          variables remain the source of truth. This is the safe default.
-        - ``allowed_inline_providers`` narrows inline-key persistence to the
-          providers the current UI flow explicitly authorized.
+        - 0.2.5 defaults ``allow_inline_key=True`` because plaintext keys in
+          config.json are the product default.
+        - 0.2.6-beta: ``allowed_inline_providers`` is deprecated and ignored.
+          Existing inline keys are always preserved; when
+          ``allow_inline_key=False`` only *new* inline keys (non-empty values
+          that differ from the original) are refused, so editing one provider
+          never clears another provider's key.
         - On save failure, the existing config file is restored from the backup
           and the in-memory ``Config`` state is reloaded from disk.
         """
@@ -359,18 +815,25 @@ class ConfigDraft:
         if not report.ok:
             return report
 
-        allowed_inline_names = (
-            {str(name).strip() for name in allowed_inline_providers if str(name).strip()}
-            if allowed_inline_providers is not None
-            else None
-        )
-        if not allow_inline_key or allowed_inline_names is not None:
-            for provider in self.llm["providers"]:
-                if allow_inline_key and allowed_inline_names is not None and provider.get("name") in allowed_inline_names:
-                    continue
-                # Strip inline keys entirely; only env references survive.
-                provider.pop("api_key", None)
-                provider["_api_key_source"] = "env" if provider.get("api_key_env") else "none"
+        # 0.2.6-beta: preserve existing inline keys; refuse only new ones when
+        # allow_inline_key=False. Never strip keys from unedited providers.
+        if not allow_inline_key:
+            for provider in self.llm.get("providers", []):
+                original = str(provider.get("_original_api_key", ""))
+                current = str(provider.get("api_key", ""))
+                if current and current != original:
+                    provider["api_key"] = original
+                    provider["_api_key_source"] = (
+                        "file" if original else ("env" if provider.get("api_key_env") else "none")
+                    )
+            for profile in self.llm.get("profiles", []):
+                original = str(profile.get("_original_api_key", ""))
+                current = str(profile.get("api_key", ""))
+                if current and current != original:
+                    profile["api_key"] = original
+                    profile["_api_key_source"] = (
+                        "file" if original else ("env" if profile.get("api_key_env") else "none")
+                    )
 
         # Take a snapshot of the live config so we can roll back in memory.
         previous_llm = copy.deepcopy(config.llm)
@@ -386,6 +849,8 @@ class ConfigDraft:
             "sessions": copy.deepcopy(config.sessions),
             "ui": copy.deepcopy(config.ui),
             "policy": copy.deepcopy(config.policy),
+            "model_roles": copy.deepcopy(getattr(config, "model_roles", {})),
+            "workspace_bookmarks": copy.deepcopy(getattr(config, "workspace_bookmarks", [])),
         }
 
         # Write backup of the on-disk file before mutating live Config.
@@ -405,6 +870,8 @@ class ConfigDraft:
         config.sessions = copy.deepcopy(self.sessions)
         config.ui = copy.deepcopy(self.ui)
         config.policy = copy.deepcopy(self.policy)
+        config.model_roles = copy.deepcopy(self.model_roles)
+        config.workspace_bookmarks = copy.deepcopy(self.workspace_bookmarks)
         config._sync_runtime_fields()
 
         try:
@@ -425,11 +892,93 @@ class ConfigDraft:
             config.sessions = previous_state["sessions"]
             config.ui = previous_state["ui"]
             config.policy = previous_state["policy"]
+            config.model_roles = previous_state["model_roles"]
+            config.workspace_bookmarks = previous_state["workspace_bookmarks"]
             config.load()
             config._sync_runtime_fields()
             report.add_error(f"Failed to save config: {exc}")
             return report
 
+        return report
+
+    # ---- import / export ---------------------------------------------------------
+
+    def export_config(self, *, with_keys: bool = False) -> Dict[str, Any]:
+        """Return a serializable copy of the draft, redacting keys by default."""
+        data = {
+            "llm": copy.deepcopy(self.llm),
+            "context_management": copy.deepcopy(self.context_management_defaults),
+            "ui": copy.deepcopy(self.ui),
+            "sessions": copy.deepcopy(self.sessions),
+            "workspace_root": self.workspace_root,
+            "skills_dir": self.skills_dir,
+            "shell_type": self.shell_type,
+            "authorization_level": self.authorization_level,
+            "plan_mode": self.plan_mode,
+            "thinking_mode": self.thinking_mode,
+            "policy": copy.deepcopy(self.policy),
+            "model_roles": copy.deepcopy(self.model_roles),
+            "workspace_bookmarks": copy.deepcopy(self.workspace_bookmarks),
+        }
+        for key, value in self.extra_fields.items():
+            if key not in data:
+                data[key] = copy.deepcopy(value)
+
+        if not with_keys:
+            if data["llm"].get("profiles"):
+                for profile in data["llm"]["profiles"]:
+                    if profile.get("api_key"):
+                        profile["api_key"] = ""
+            else:
+                for provider in data["llm"].get("providers", []):
+                    if provider.get("api_key"):
+                        provider["api_key"] = ""
+        return data
+
+    def import_config(self, path: str) -> ValidationReport:
+        """Load a config file into the draft, replacing current state.
+
+        The caller must call :meth:`apply_to` to persist.
+        """
+        report = ValidationReport()
+        source_path = Path(path).expanduser()
+        if not source_path.exists():
+            report.add_error(f"Import file not found: {path}")
+            return report
+        try:
+            with open(source_path, "r", encoding="utf-8") as handle:
+                data = json.load(handle) or {}
+        except Exception as exc:
+            report.add_error(f"Failed to parse import file: {exc}")
+            return report
+
+        if not isinstance(data, dict):
+            report.add_error("Import file must contain a JSON object.")
+            return report
+
+        # Refuse to import masked keys as real keys.
+        for profile in data.get("llm", {}).get("profiles", []):
+            key = str(profile.get("api_key", ""))
+            if key and is_masked_key(key):
+                report.add_error(
+                    f"Profile '{profile.get('id', '')}' contains a redacted key preview "
+                    f"({key}) from an export; cannot import. Use --with-keys export or clear the key."
+                )
+        for provider in data.get("llm", {}).get("providers", []):
+            key = str(provider.get("api_key", ""))
+            if key and is_masked_key(key):
+                report.add_error(
+                    f"Provider '{provider.get('name', '')}' contains a redacted key preview "
+                    f"({key}) from an export; cannot import. Use --with-keys export or clear the key."
+                )
+        if not report.ok:
+            return report
+
+        # Apply known fields into the draft.
+        temp_config = Config(config_path=str(source_path))
+        self._reset_from(temp_config)
+        self.extra_fields = copy.deepcopy(temp_config._extra_fields)
+        report = self.validate()
         return report
 
     # ---- helpers ------------------------------------------------------------------
@@ -448,13 +997,11 @@ class ConfigDraft:
         return settings
 
     def _ensure_active(self) -> None:
-        if not self.llm["providers"]:
-            self.llm["active_provider"] = ""
-            self.llm["active_model"] = ""
+        if self.llm.get("profiles"):
+            if not self.llm["profiles"]:
+                self.llm["active_profile"] = ""
+                return
+            if not self.llm.get("active_profile") or not self._get_profile(self.llm["active_profile"]):
+                self.llm["active_profile"] = self.llm["profiles"][0]["id"]
             return
-        if not self.llm["active_provider"] or not get_provider(self.llm["providers"], self.llm["active_provider"]):
-            self.llm["active_provider"] = self.llm["providers"][0]["name"]
-            self.llm["active_model"] = self.llm["providers"][0]["models"][0]["name"]
-        provider = get_provider(self.llm["providers"], self.llm["active_provider"])
-        if provider and not get_model(provider, self.llm["active_model"]):
-            self.llm["active_model"] = provider["models"][0]["name"]
+        self._ensure_active_legacy()

@@ -115,9 +115,9 @@ class Agent:
         """Backwards-compatible alias for tests and callers."""
         return self.runner.llm
 
-    def compress_context(self, manual: bool = False, tools=None):
+    def compress_context(self, manual: bool = False, tools=None, cancel_token=None):
         """Backwards-compatible delegate to the interaction runner."""
-        return self.runner.compress_context(manual=manual, tools=tools)
+        return self.runner.compress_context(manual=manual, tools=tools, cancel_token=cancel_token)
 
     def ensure_context_capacity(self, tools=None, emergency: bool = False) -> bool:
         """Backwards-compatible delegate to the interaction runner."""
@@ -140,14 +140,14 @@ class Agent:
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_move_failed", "root": str(target_path)},
+                data={"kind": "workspace_moved", "root": str(target_path)},
             )
         except Exception as exc:
             return CommandResult(
                 handled=True,
                 success=False,
                 message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_move_failed", "root": str(target_path)},
+                data={"kind": "workspace_moved", "root": str(target_path)},
             )
 
         new_root = str(target_path)
@@ -195,6 +195,48 @@ class Agent:
             data={"kind": "workspace_moved", "root": new_root},
         )
 
+    def switch_model_profile(self, profile_id: str, *, source: str = "command") -> CommandResult:
+        """Unified ``/model`` switch transaction used by plain and Textual UIs.
+
+        0.2.6-beta: forms a single closed transaction so Config runtime fields,
+        ConversationManager runtime state, sessions and the resolved chat
+        profile all stay consistent. Returns a CommandResult whose ``data``
+        carries the resolved profile id/label/model/base_url/context_window.
+        """
+        result = self.config.switch_active_profile(profile_id, update_roles=True)
+        if not result["ok"]:
+            return CommandResult(
+                handled=True,
+                success=False,
+                message=f"Could not switch to profile '{profile_id}'.",
+                data={"kind": "model_switch", "ok": False},
+            )
+        self.conversations.set_context_window(self.config.context_window)
+        self.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
+        self.conversations.save_all(reason="model_switch")
+        self.config.save()
+        role_note = " (model_roles.chat updated)" if result["role_updated"] else ""
+        label = result["label"] or result["profile_id"]
+        return CommandResult(
+            handled=True,
+            success=True,
+            message=(
+                f"Active chat profile changed to {label} "
+                f"(model: {result['model']}, context: {result['context_window']}){role_note} and config saved."
+            ),
+            refresh_ui=True,
+            data={
+                "kind": "model_switch",
+                "ok": True,
+                "profile_id": result["profile_id"],
+                "label": label,
+                "model": result["model"],
+                "base_url": result["base_url"],
+                "context_window": result["context_window"],
+                "role_updated": result["role_updated"],
+            },
+        )
+
     def shutdown(self):
         """Release persistent resources held by registered tools and save sessions."""
         self.conversations.save_all(reason="shutdown")
@@ -225,13 +267,19 @@ class Agent:
         welcome_text.append(f"Thinking Mode: {'ON' if self.config.thinking_mode else 'OFF'}\n", style="yellow" if self.config.thinking_mode else "gray")
         welcome_text.append("Type /help to see available commands.", style="dim")
 
-        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.4"))
+        self.console.print(Panel(welcome_text, border_style="cyan", title="Kairo", subtitle="v0.2.7"))
+
+    def _is_plain_console(self) -> bool:
+        """Return True when running in the plain console and not under Textual."""
+        return getattr(self.console, "__class__", object).__name__ != "EventConsole"
 
     def handle_command(self, user_input: str) -> bool:
         """
         Handles slash commands entered by the user.
         Returns True if a command was matched and handled, False otherwise.
         """
+        from agent import runtime_commands as rc
+
         dispatcher = CommandDispatcher(self)
         result = dispatcher.dispatch(user_input)
         if not result.handled:
@@ -246,7 +294,7 @@ class Agent:
             style = "bold green" if result.success else "bold yellow"
             self.console.print(f"[{style}]{result.message}[/{style}]")
 
-        if result.interactive:
+        if result.interactive and self._is_plain_console():
             kind = result.data.get("kind")
             if kind == "sessions":
                 options = result.data["options"]
@@ -264,26 +312,57 @@ class Agent:
                 idx = tui_widgets.select_menu("Select provider / model:", profiles, default_index=default_index)
                 if isinstance(idx, int) and 0 <= idx < len(profiles):
                     selected_profile = profiles[idx]
-                    self.config.apply_model_profile(selected_profile)
-                    self.conversations.set_context_window(self.config.context_window)
-                    self.conversations.update_runtime_state(model_profile=self.config.active_model_profile)
-                    self.conversations.save_all(reason="model_switch")
-                    self.config.save()
-                    self.console.print(
-                        f"Active target changed to [bold cyan]{selected_profile}[/bold cyan] "
-                        f"([bold]{self.config.model}[/bold]) and config saved."
-                    )
+                    switch = self.switch_model_profile(selected_profile, source="plain")
+                    style = "bold green" if switch.success else "bold yellow"
+                    if switch.message:
+                        self.console.print(f"[{style}]{switch.message}[/{style}]")
                 else:
                     self.console.print("[bold yellow]Model switch cancelled: invalid selection.[/bold yellow]")
+            elif kind == "setup":
+                setup_result = rc.handle_setup(self, user_input, [])
+                if setup_result.message:
+                    style = "bold green" if setup_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{setup_result.message}[/{style}]")
+            elif kind == "mode":
+                mode_result = rc.handle_mode(self, user_input, [])
+                if mode_result.message:
+                    style = "bold green" if mode_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{mode_result.message}[/{style}]")
+            elif kind == "find":
+                results = result.data.get("results", [])
+                if results:
+                    options = [f"[{r['index']}] {r['name']}" for r in results]
+                    idx = tui_widgets.select_menu("Open which session:", options)
+                    if isinstance(idx, int) and 0 <= idx < len(results):
+                        session_id = results[idx]["id"]
+                        self.conversations.switch_session(session_id)
+                        self.console.print(f"[bold green]Switched to conversation:[/bold green] {self.conversations.active.name}")
+                    else:
+                        self.console.print("[bold yellow]Session open cancelled: invalid selection.[/bold yellow]")
+            elif kind == "export":
+                export_result = rc.handle_export(self, user_input, [])
+                if export_result.message:
+                    style = "bold green" if export_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{export_result.message}[/{style}]")
+            elif kind == "settings":
+                settings_result = rc.handle_settings(self, user_input, [])
+                if settings_result.message:
+                    style = "bold green" if settings_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{settings_result.message}[/{style}]")
+            elif kind == "workspace":
+                workspace_result = rc.handle_workspace(self, user_input, [])
+                if workspace_result.message:
+                    style = "bold green" if workspace_result.success else "bold yellow"
+                    self.console.print(f"[{style}]{workspace_result.message}[/{style}]")
 
         return True
 
-    def run_interaction(self, user_input: str) -> None:
+    def run_interaction(self, user_input: str, cancel_token=None) -> None:
         """Executes the agent logic for a single user interaction in the local console."""
         if user_input.strip().startswith("/"):
             if self.handle_command(user_input):
                 return
-        self.runner.run_interaction(user_input)
+        self.runner.run_interaction(user_input, cancel_token=cancel_token)
 
     def run_interaction_events(
         self,
@@ -291,6 +370,9 @@ class Agent:
         emit: Callable[[str, Any], None],
         approve: Optional[Callable[[str, List[str], int], int]] = None,
         request_text: Optional[Callable[[str], str]] = None,
+        cancel_token=None,
     ) -> None:
         """Run one interaction without terminal rendering, emitting structured UI events."""
-        self.runner.run_interaction_events(user_input, emit, approve=approve, request_text=request_text)
+        self.runner.run_interaction_events(
+            user_input, emit, approve=approve, request_text=request_text, cancel_token=cancel_token
+        )

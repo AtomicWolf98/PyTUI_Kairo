@@ -1,5 +1,152 @@
 # Changelog / 更新记录
 
+## [0.2.7-beta]
+
+### Changed / 变更
+
+- Slash command surface reduced from 52 commands to 18 workflow-oriented commands.
+- Fine-grained provider/model/key/session/config commands were removed and moved into interactive panels (`/settings`, `/sessions`, `/workspace`).
+- New workflow commands added: `/setup`, `/mode`, `/status`, `/find`, `/export`.
+- Removed command categories and migration paths:
+  - `/manual`, `/auto`, `/yolo`, `/plan`, `/think` → use `/mode`.
+  - `/provider ...`, `/providers`, `/model add|edit|remove|test` → use `/settings`.
+  - `/keys`, `/key ...`, `/roles`, `/role ...` → use `/settings`.
+  - `/config validate|backup|restore|export|import` → use `/settings` or `/export`.
+  - `/session rename|delete|export|reveal|search|open` → use `/sessions`.
+  - `/workspace save`, `/workspaces`, `/workspace remove` → use `/workspace`.
+  - `/docs config`, `/docs providers`, `/docs sessions` → use `/docs`.
+- `/workspace move <path>` is now `/workspace <path-or-bookmark>`. The argument is interpreted as a path or bookmark name and switches workspace in the current process.
+
+### Added / 新增
+
+- `/setup`: first-run setup wizard for creating a provider/profile, setting base URL, model, API key, and parameters.
+- `/mode`: unified panel for Authorization (Manual/Auto/YOLO), Plan Mode, and Thinking Mode.
+- `/status`: read-only runtime status page showing version, active profile, masked key state, session info, context usage, workspace root, and modes.
+- `/find <keyword>`: unified search for current and persisted sessions.
+- `/export`: unified export panel for sessions (Markdown/JSON) and config (redacted or with keys after confirmation).
+
+- Slash 命令从 52 条收敛到 18 条工作流入口。
+- provider/model/key/session/config 的细粒度命令被删除，相关能力迁移到交互面板（`/settings`、`/sessions`、`/workspace`）。
+- 新增工作流命令：`/setup`、`/mode`、`/status`、`/find`、`/export`。
+- 已删除命令类别及迁移路径：
+  - `/manual`、`/auto`、`/yolo`、`/plan`、`/think` → 使用 `/mode`。
+  - `/provider ...`、`/providers`、`/model add|edit|remove|test` → 使用 `/settings`。
+  - `/keys`、`/key ...`、`/roles`、`/role ...` → 使用 `/settings`。
+  - `/config validate|backup|restore|export|import` → 使用 `/settings` 或 `/export`。
+  - `/session rename|delete|export|reveal|search|open` → 使用 `/sessions`。
+  - `/workspace save`、`/workspaces`、`/workspace remove` → 使用 `/workspace`。
+  - `/docs config`、`/docs providers`、`/docs sessions` → 使用 `/docs`。
+- `/workspace move <path>` 改为 `/workspace <path-or-bookmark>`，参数作为路径或书签名解析并热切换。
+
+### 新增
+
+- `/setup`：首次配置向导，创建 provider/profile、设置 base URL、model、API Key 与参数。
+- `/mode`：统一面板，管理 Authorization（Manual/Auto/YOLO）、Plan Mode、Thinking Mode。
+- `/status`：只读运行状态页，显示版本、当前 profile、脱敏 key 状态、会话信息、上下文占用、workspace root 与模式。
+- `/find <keyword>`：统一搜索当前会话与持久化会话。
+- `/export`：统一导出入口，支持会话（Markdown/JSON）与配置（默认脱敏；with-keys 需二次确认）导出。
+
+## [0.2.6-beta]
+
+### Added / 新增
+
+- Unified model switch transaction: `/model` now switches the chat profile through a single closed transaction (`Config.switch_active_profile` / `Agent.switch_model_profile`) that keeps `llm.active_profile`, `model_roles.chat`, `ConversationManager` runtime state, context window and all sessions consistent. The next chat request is guaranteed to use the selected profile.
+- Strict OpenAI-compatible message packing layer (`agent/message_packer.py`): all LLM request payloads are folded into a single leading `system` message (main prompt + `kairo_runtime_state` + `[Conversation Summary]`). Controlled by `llm.strict_message_packing` (default `true`). Internal history is left untouched; only the provider payload is affected.
+- Cooperative `Esc` stop generation in the Textual UI (`agent/cancellation.py` `CancellationToken`): pressing `Esc` while streaming or running tools stops the current output, saves the partial assistant response with a `[stopped]` marker, and restores composer focus. Plain mode still uses `Ctrl+C`. Controlled by `ui.esc_stops_generation` (default `true`) and `ui.stop_saves_partial_response` (default `true`).
+- Provider edit key semantics: blank API key input now keeps the existing key; an explicit "Clear stored API key" option (Textual modal) / `empty` mode (plain) only clears the target provider's key.
+- `ConversationManager.validate_provider_payload()` validates a packed payload against the strict OpenAI message ordering.
+- Defensive backstop in `LLMClient.stream_response`: refuses to send a payload with a `system` message after the leading slot when strict packing is enabled.
+- Session load warning when an old session contains a `system` message after the first user message (folded at request time, persisted history unchanged).
+
+### Fixed / 修复
+
+- `/model` no longer fails to switch when `model_roles.chat` is configured: the chat role is updated alongside `active_profile` so UI display and the actual request profile match.
+- Profile resolver legacy fallback: `llm.active_profile == ""` no longer masks the legacy `active_provider`/`active_model` selection; the resolver now falls through correctly for `llm.providers[]` configs.
+- Editing one provider/profile no longer clears other providers' inline API keys: the deprecated `allowed_inline_providers` global strip was removed from `ConfigDraft.apply_to`. Existing inline keys are always preserved; `allow_inline_key=False` now refuses only *new* inline keys.
+- `ConfigDraft.clear_key()` now uses an explicit `KEY_CLEAR` sentinel instead of an empty string (which now means "keep existing").
+
+### Changed / 变更
+
+- `pyproject.toml` version bumped to `0.2.6`. Brand header, welcome panel and dock now show `v0.2.6`.
+- `config.example.json` now documents `llm.strict_message_packing`, `ui.esc_stops_generation` and `ui.stop_saves_partial_response`.
+- `LLMClient.stream_response` accepts an optional `cancel_token` and yields `("stopped", None)` when cancelled.
+- `InteractionRunner` accepts `cancel_token` on `run_interaction` / `run_interaction_events` / `compress_context` and checks it before each LLM round and after each tool.
+
+### Tests / 测试
+
+- `tests/test_model_switching.py`: profile-mode and legacy-mode `/model` switching, `model_roles.chat` override, plan/compress role isolation, context window update, runtime state sync, request payload uses the new profile.
+- `tests/test_provider_key_preservation.py`: editing one provider preserves other inline keys, blank keeps existing, explicit clear only clears target, replace only replaces target, save+reload preserves keys (provider and profile structures).
+- `tests/test_message_packer.py`: system folding, summary/runtime fold, no system after index 0, tool pairing preserved, internal fields stripped, non-strict pass-through, runner integration.
+- `tests/test_stop_generation.py`: `CancellationToken`, Esc cancels streaming and saves partial, stop during tool prevents the next LLM round, history remains valid, next message works after stop.
+
+- 统一模型切换事务：`/model` 通过单一闭环事务（`Config.switch_active_profile` / `Agent.switch_model_profile`）切换 chat profile，保持 `llm.active_profile`、`model_roles.chat`、`ConversationManager` 运行时状态、context window 与所有 session 一致，下一次 chat 请求必定使用新 profile。
+- 严格 OpenAI-compatible 消息打包层（`agent/message_packer.py`）：所有 LLM 请求 payload 折叠为唯一首位 `system` 消息（主提示词 + `kairo_runtime_state` + `[Conversation Summary]`）。由 `llm.strict_message_packing`（默认 `true`）控制。内部 history 不变，仅影响 provider payload。
+- Textual 协作 `Esc` 停止输出（`agent/cancellation.py` `CancellationToken`）：流式输出/工具运行中按 `Esc` 停止当前输出，partial 回复以 `[stopped]` 标记保存并恢复 composer focus。plain 模式仍使用 `Ctrl+C`。由 `ui.esc_stops_generation`（默认 `true`）与 `ui.stop_saves_partial_response`（默认 `true`）控制。
+- Provider 编辑 key 语义：API key 留空保留原 key；显式 "Clear stored API key"（Textual modal）/ `empty` 模式（plain）只清空目标 provider 的 key。
+- `ConversationManager.validate_provider_payload()` 校验打包后的 payload 是否满足严格 OpenAI 消息顺序。
+- `LLMClient.stream_response` 防御性校验：strict 模式下发现首位之后存在 `system` 消息时拒绝发送。
+- 加载旧 session 时，若首位 user 之后存在 `system` 消息则记录 warning（请求时折叠，持久化 history 不变）。
+
+- 修复 `/model` 在 `model_roles.chat` 已配置时切换无效：chat role 与 `active_profile` 同步更新，UI 显示与实际请求 profile 一致。
+- 修复 profile resolver legacy 回退：`llm.active_profile == ""` 不再遮蔽 legacy `active_provider`/`active_model` 选择。
+- 修复编辑某个 provider 误清空其它 provider inline key：移除 `ConfigDraft.apply_to` 中已弃用的 `allowed_inline_providers` 全局剥离逻辑，始终保留既有 inline key；`allow_inline_key=False` 仅拒绝本次新输入的 key。
+- `ConfigDraft.clear_key()` 改用显式 `KEY_CLEAR` 哨兵，空字符串现在表示 "保留原 key"。
+
+- `pyproject.toml` 版本号升级至 `0.2.6`，品牌头、欢迎面板与 dock 显示 `v0.2.6`。
+- `config.example.json` 新增 `llm.strict_message_packing`、`ui.esc_stops_generation`、`ui.stop_saves_partial_response` 示例。
+- `LLMClient.stream_response` 接受可选 `cancel_token`，取消时 yield `("stopped", None)`。
+- `InteractionRunner` 的 `run_interaction` / `run_interaction_events` / `compress_context` 接受 `cancel_token`，在每轮 LLM 前和每个工具后检查。
+
+## [0.2.5-beta]
+
+### Added / 新增
+
+- Config-first model profiles (`llm.profiles[]`): each profile is an independent runtime unit with its own `base_url`, `api_key`, `model`, temperature, max tokens and context window.
+- Profile resolver (`agent/profile_resolver.py`): unifies `llm.profiles[]` and legacy `llm.providers[]` into a single `ResolvedProfile` runtime view.
+- Local config API key management: `/keys`, `/key set <profile>`, `/key clear <profile>`, `/key reveal <profile>`, `/key migrate`.
+  - Inline API keys are persisted in `config.json` by default (0.2.5 plaintext key policy).
+  - All UI output masks keys unless the user explicitly confirms reveal/export with keys.
+- Model roles (`model_roles`): `/roles`, `/role set <role> <profile>`, `/role clear <role>`; supported roles are `chat`, `plan`, `compress`, `fast`.
+- Workspace bookmarks: `/workspace save <name>`, `/workspaces`, `/workspace move <name-or-path>`, `/workspace remove <name>`.
+- Session search: `/session search <keyword>` and `/session open <id-or-index>` search session names and history content read-only.
+- Config import/export: `/config export`, `/config export --with-keys`, `/config import <path>`; export defaults to `.kairo/config_exports/config.export.YYYYMMDD-HHMMSS.json` with redacted keys.
+- Doctor health dashboard: `/doctor` checks config parse, duplicate profile ids, active profile, key presence, base URL scheme, workspace/session writability, git availability and provider reachability without leaking keys.
+- TUI modals for profile editor, key editor (password input), role editor, confirmation, search results and doctor dashboard.
+- `ConfigDraft` extended with profile/key/role/bookmark management and redacted config export.
+
+- 配置优先的模型 profile（`llm.profiles[]`）：每个 profile 是独立的运行单元，包含独立的 `base_url`、`api_key`、`model`、temperature、max tokens 与 context window。
+- Profile 解析层（`agent/profile_resolver.py`）：将 `llm.profiles[]` 与旧版 `llm.providers[]` 统一解析为 `ResolvedProfile` 运行时视图。
+- 本地配置 API Key 管理：`/keys`、`/key set <profile>`、`/key clear <profile>`、`/key reveal <profile>`、`/key migrate`。
+  - 默认将 inline API Key 明文写入 `config.json`（0.2.5 明文 key 策略）。
+  - 所有 UI 输出默认 mask key；仅在用户二次确认后才 reveal 或导出完整 key。
+- 模型角色（`model_roles`）：`/roles`、`/role set <role> <profile>`、`/role clear <role>`；支持 `chat`、`plan`、`compress`、`fast`。
+- Workspace 书签：`/workspace save <name>`、`/workspaces`、`/workspace move <name-or-path>`、`/workspace remove <name>`。
+- 会话搜索：`/session search <keyword>` 与 `/session open <id-or-index>` 只读搜索会话名称与历史内容。
+- 配置导入/导出：`/config export`、`/config export --with-keys`、`/config import <path>`；默认导出到 `.kairo/config_exports/config.export.YYYYMMDD-HHMMSS.json` 并脱敏。
+- Doctor 健康面板：`/doctor` 检查配置解析、profile id 重复、active profile、key 缺失、URL 协议、workspace/session 可写性、git 可用性与 provider 可达性，且不泄漏 key。
+- TUI modal：profile 编辑器、key 编辑器（密码输入）、role 编辑器、确认框、搜索结果与 doctor 面板。
+- `ConfigDraft` 扩展：支持 profile/key/role/bookmark 管理与脱敏配置导出。
+
+### Changed / 变更
+
+- `pyproject.toml` version bumped to `0.2.5`.
+- `config.example.json` now uses the new `llm.profiles[]` structure with empty `api_key` strings and optional `api_key_env` examples.
+- `/config` output is now profile-first and includes model roles and workspace bookmarks.
+- `/model` switches `llm.active_profile` when profiles are configured.
+- `LLMClient.stream_response()` supports `profile_role` and `profile_id` to route chat/plan/compress requests through different profiles.
+
+- `pyproject.toml` 版本号升级至 `0.2.5`。
+- `config.example.json` 已更新为新的 `llm.profiles[]` 结构，`api_key` 为空字符串，`api_key_env` 仅作兼容示例。
+- `/config` 输出改为 profile 优先，并展示 model roles 与 workspace bookmarks。
+- `/model` 在 profile 模式下切换 `llm.active_profile`。
+- `LLMClient.stream_response()` 支持 `profile_role` 与 `profile_id`，可将 chat/plan/compress 请求路由到不同 profile。
+
+### Tests / 测试
+
+- `tests/test_0_2_5_features.py`: profile resolver, config profiles, ConfigDraft profile/key/role/bookmark operations, runtime command handlers, dispatcher routing, key masking, doctor non-leakage, config export redaction.
+
+- `tests/test_0_2_5_features.py`：profile 解析器、config profiles、ConfigDraft 的 profile/key/role/bookmark 操作、运行时命令处理器、dispatcher 路由、key 掩码、doctor 防泄漏、配置导出脱敏。
+
 ## [0.2.4]
 
 ### Fixed / 修复

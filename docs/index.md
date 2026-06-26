@@ -1,6 +1,6 @@
 # Kairo Documentation / Kairo 文档
 
-Current version / 当前版本：**0.2.2**
+Current version / 当前版本：**0.2.7-beta**
 
 ## Chinese / 中文
 
@@ -12,13 +12,6 @@ Current version / 当前版本：**0.2.2**
 - [English Complete User Manual](en/user-manual.md)
 - [English Docs Index](en/index.md)
 
-## Development Docs / 开发文档
+Release packages contain user-facing docs only. Development docs stay in the main project `dev_doc/` folder.
 
-These files are kept in the main development project only and should not be included in the release-only folder:
-
-- [Architecture](architecture.md)
-- [Developer Guide](developer-guide.md)
-- [Project Status](project-status.md)
-- `dev_doc/`
-
-Release packages should contain user-facing docs only.
+发行目录只包含用户文档。开发文档保留在主项目的 `dev_doc/` 文件夹中。

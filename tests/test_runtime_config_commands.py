@@ -18,6 +18,7 @@ from unittest.mock import patch
 from agent.commands import CommandDispatcher
 from agent.config import Config
 from agent.context_manager import ConversationManager
+from agent import runtime_commands as rc
 from agent.session_store import SessionStore
 
 
@@ -118,8 +119,24 @@ class TestRuntimeConfigCommands(unittest.TestCase):
         self.last_buffer = buffer.getvalue()
         return result
 
+    def _call_with_input(self, handler, fake_input_lines: List[str], raw: str = "", parts: List[str] | None = None):
+        """Call a runtime handler directly while feeding fake_input_lines to builtins.input."""
+        buffer = io.StringIO()
+        responses = list(fake_input_lines)
+        parts = parts if parts is not None else [""]
+
+        def fake_input(prompt=""):
+            nonlocal responses
+            return responses.pop(0) if responses else ""
+
+        with redirect_stdout(buffer):
+            with patch("builtins.input", fake_input):
+                result = handler(self.agent, raw, parts)
+        self.last_buffer = buffer.getvalue()
+        return result
+
     def test_providers_lists_active_provider(self):
-        result = self._dispatch_with_input("/providers", [])
+        result = self._call_with_input(rc.handle_providers, [])
         self.assertTrue(result.handled)
         self.assertEqual(result.data.get("kind"), "providers")
         # Both seeded providers should appear in the printed output.
@@ -140,7 +157,7 @@ class TestRuntimeConfigCommands(unittest.TestCase):
             "n",                                  # test connection now? No.
             "y",                                  # save and switch? Yes.
         ]
-        result = self._dispatch_with_input("/provider add", lines)
+        result = self._call_with_input(rc.handle_provider_add, lines)
         self.assertTrue(result.handled)
         self.assertTrue(result.success, self.last_buffer)
         self.assertEqual(result.data.get("kind"), "provider_saved")
@@ -152,20 +169,20 @@ class TestRuntimeConfigCommands(unittest.TestCase):
         self.assertEqual(saved["llm"]["active_model"], "gamma-1")
 
     def test_provider_add_requires_name(self):
-        result = self._dispatch_with_input("/provider add", [""])
+        result = self._call_with_input(rc.handle_provider_add, [""])
         self.assertTrue(result.handled)
         self.assertFalse(result.success)
 
     def test_provider_remove_last_provider_refused(self):
         # Strip down to one provider first by dispatching remove twice with confirms.
         # alpha + beta: remove beta.
-        result = self._dispatch_with_input(
-            "/provider remove",
+        result = self._call_with_input(
+            rc.handle_provider_remove,
             ["0", "y"],  # select provider index 0 (alpha), confirm
         )
         self.assertTrue(result.success)
-        result = self._dispatch_with_input(
-            "/provider remove",
+        result = self._call_with_input(
+            rc.handle_provider_remove,
             ["y"],  # only one remains, attempt to remove it
         )
         self.assertFalse(result.success)
@@ -180,7 +197,7 @@ class TestRuntimeConfigCommands(unittest.TestCase):
             "0.4",          # temperature
             "y",            # save
         ]
-        result = self._dispatch_with_input("/model add", lines)
+        result = self._call_with_input(rc.handle_model_add, lines)
         self.assertTrue(result.success, self.last_buffer)
         with open(self.tmp.config_path, "r", encoding="utf-8") as handle:
             saved = json.load(handle)
@@ -190,24 +207,24 @@ class TestRuntimeConfigCommands(unittest.TestCase):
     def test_model_remove_protects_last_model(self):
         # beta has one model; trying to remove it should fail.
         lines = ["1", "0", "y"]  # provider=beta, model=index 0, confirm
-        result = self._dispatch_with_input("/model remove", lines)
+        result = self._call_with_input(rc.handle_model_remove, lines)
         self.assertFalse(result.success)
         self.assertIn("only one model", result.message)
 
     def test_config_validate_passes(self):
-        result = self._dispatch_with_input("/config validate", [])
+        result = self._call_with_input(rc.handle_config_validate, [])
         self.assertTrue(result.success)
         self.assertEqual(result.data.get("kind"), "config_validate")
 
     def test_config_backup_creates_file(self):
-        result = self._dispatch_with_input("/config backup", [])
+        result = self._call_with_input(rc.handle_config_backup, [])
         self.assertTrue(result.success)
         backups = Config.list_backups(self.tmp.config_path)
         self.assertGreaterEqual(len(backups), 1)
 
     def test_config_restore_round_trip(self):
         # Make a backup, then mutate config, then restore.
-        self._dispatch_with_input("/config backup", [])
+        self._call_with_input(rc.handle_config_backup, [])
         # Mutate config on disk to a different workspace.
         with open(self.tmp.config_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -217,7 +234,7 @@ class TestRuntimeConfigCommands(unittest.TestCase):
         backups = Config.list_backups(self.tmp.config_path)
         self.assertGreaterEqual(len(backups), 1)
         # Pick the newest backup (index 0).
-        result = self._dispatch_with_input("/config restore", ["0", "y"])
+        result = self._call_with_input(rc.handle_config_restore, ["0", "y"])
         self.assertTrue(result.success)
         with open(self.tmp.config_path, "r", encoding="utf-8") as handle:
             restored = json.load(handle)
@@ -231,18 +248,18 @@ class TestRuntimeConfigCommands(unittest.TestCase):
     def test_session_rename_updates_name(self):
         # Select nothing from selection (rename doesn't list), enter new name.
         lines = ["My Renamed"]
-        result = self._dispatch_with_input("/session rename", lines)
+        result = self._call_with_input(rc.handle_session_rename, lines)
         self.assertTrue(result.success, self.last_buffer)
         # Active session name on the in-memory session should match.
         self.assertEqual(self.agent.conversations.active.name, "My Renamed")
 
     def test_session_reveal_returns_path(self):
-        result = self._dispatch_with_input("/session reveal", [])
+        result = self._call_with_input(rc.handle_session_reveal, [])
         self.assertTrue(result.success)
         self.assertTrue(Path(result.data["path"]).exists())
 
     def test_session_export_writes_markdown(self):
-        result = self._dispatch_with_input("/session export", ["markdown"])
+        result = self._call_with_input(rc.handle_session_export, ["markdown"])
         self.assertTrue(result.success)
         exported_path = Path(result.data["path"])
         self.assertTrue(exported_path.exists())
@@ -253,7 +270,7 @@ class TestRuntimeConfigCommands(unittest.TestCase):
         # Force one active session only by deleting extra sessions quickly:
         # easier path: set conversations.sessions to a single entry.
         self.agent.conversations.sessions = [self.agent.conversations.active]
-        result = self._dispatch_with_input("/session delete", ["0", "y"])
+        result = self._call_with_input(rc.handle_session_delete, ["0", "y"])
         self.assertFalse(result.success)
 
 

@@ -310,6 +310,24 @@ class SessionStore:
             )
             history.insert(1, runtime_state)
 
+        # 0.2.6-beta: warn (do not mutate) if an old session has a system
+        # message after the first user message. The message packer will fold
+        # it into the leading system slot at request time, but the persisted
+        # history is left untouched for backward compatibility.
+        first_user_idx = -1
+        for i, msg in enumerate(history):
+            if msg.get("role") == "user":
+                first_user_idx = i
+                break
+        if first_user_idx != -1:
+            for i in range(first_user_idx, len(history)):
+                if history[i].get("role") == "system":
+                    self._warnings.append(
+                        f"Session '{data.get('name', path.stem)}' has a system message after the first "
+                        "user message; it will be folded at request time."
+                    )
+                    break
+
         token_usage = data.get("token_usage", {})
         context_window = int(token_usage.get("context_window", 128000))
         token_tracker = TokenTracker(context_window=context_window)

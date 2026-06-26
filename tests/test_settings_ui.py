@@ -21,6 +21,7 @@ if importlib.util.find_spec("textual") is None:
 from agent.config import Config
 from agent.ui.app import KairoApp
 from agent.ui.widgets import (
+    ChoiceModal,
     ConnectionTestModal,
     ModelEditorModal,
     ProviderEditorModal,
@@ -82,7 +83,13 @@ class TestSettingsModals(IsolatedAsyncioTestCase):
 
     async def test_provider_add_modal_form_dismisses_with_values(self):
         async with self.app.run_test(size=(120, 35)) as pilot:
-            await self.app.handle_command("/provider add")
+            await self.app.handle_command("/settings")
+            await pilot.pause()
+            self.assertIsInstance(self.app.screen, SettingsScreen)
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(self.app.screen, ChoiceModal)
+            await pilot.press("enter")
             await pilot.pause()
             self.assertIsInstance(self.app.screen, ProviderEditorModal)
             await pilot.press("enter")
@@ -91,7 +98,12 @@ class TestSettingsModals(IsolatedAsyncioTestCase):
 
     async def test_provider_edit_opens_list_then_modal(self):
         async with self.app.run_test(size=(120, 35)) as pilot:
-            await self.app.handle_command("/provider edit")
+            await self.app.handle_command("/settings")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(self.app.screen, ChoiceModal)
+            await pilot.press("down", "enter")
             await pilot.pause()
             self.assertIsInstance(self.app.screen, ProviderListModal)
             await pilot.press("enter")
@@ -112,7 +124,14 @@ class TestSettingsModals(IsolatedAsyncioTestCase):
 
     async def test_model_add_opens_provider_list_then_form(self):
         async with self.app.run_test(size=(120, 35)) as pilot:
-            await self.app.handle_command("/model add")
+            await self.app.handle_command("/settings")
+            await pilot.pause()
+            await pilot.press("down")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(self.app.screen, ChoiceModal)
+            await pilot.press("enter")
             await pilot.pause()
             self.assertIsInstance(self.app.screen, ProviderListModal)
             await pilot.press("enter")

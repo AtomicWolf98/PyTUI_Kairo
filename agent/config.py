@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.config_migration import build_llm_from_legacy
+from agent.profile_resolver import (
+    get_active_profile as _get_active_profile,
+    mask_key,
+)
 from agent.provider_registry import (
     LLM_DEFAULTS,
     get_model,
@@ -21,6 +25,7 @@ from agent.provider_registry import (
 
 ACTIVE_LLM_FIELDS = ("api_key", "base_url", "model", "temperature", "max_tokens", "context_window")
 BACKUP_GLOB_PREFIX = "config.backup."
+STRICT_MESSAGE_PACKING_DEFAULT = True
 SESSION_DEFAULTS = {
     "enabled": True,
     "storage_dir": ".kairo/sessions",
@@ -49,6 +54,8 @@ UI_DEFAULTS = {
     "workspace_refresh_seconds": 2.0,
     "workspace_max_files": 2000,
     "workspace_diff_max_bytes": 204800,
+    "esc_stops_generation": True,
+    "stop_saves_partial_response": True,
 }
 
 
@@ -84,11 +91,15 @@ class Config:
         self.authorization_level: str = "manual"
         self.plan_mode: bool = False
         self.thinking_mode: bool = False
+        self.model_roles: Dict[str, str] = {}
+        self.workspace_bookmarks: List[Dict[str, str]] = []
         self.llm: Dict[str, Any] = {
+            "active_profile": "",
             "active_provider": "",
             "active_model": "",
             "defaults": dict(LLM_DEFAULTS),
             "providers": [],
+            "profiles": [],
         }
         self.policy: Dict[str, Any] = {
             "workspace_path": {
@@ -132,6 +143,14 @@ class Config:
         """Backward-compatible setter: True -> 'auto', False -> 'manual'."""
         self.authorization_level = "auto" if value else "manual"
 
+    @property
+    def strict_message_packing(self) -> bool:
+        """Whether LLM requests are folded to a single leading system message.
+
+        0.2.6-beta: defaults to True for strict OpenAI-compatible providers.
+        """
+        return bool(self.llm.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT))
+
     def _format_profile_label(self, provider_name: str, model_name: str) -> str:
         return f"{provider_name} / {model_name}"
 
@@ -159,6 +178,22 @@ class Config:
         settings["preserve_recent_turns"] = max(0, int(settings["preserve_recent_turns"]))
         return settings
 
+    def _normalize_workspace_bookmarks(self, value: Any) -> List[Dict[str, str]]:
+        bookmarks: List[Dict[str, str]] = []
+        if not isinstance(value, list):
+            return bookmarks
+        seen: set = set()
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            path = str(item.get("path", "")).strip()
+            if not name or not path or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            bookmarks.append({"name": name, "path": path})
+        return bookmarks
+
     def _normalize_llm_defaults(self, value: Any) -> Dict[str, Any]:
         defaults = dict(LLM_DEFAULTS)
         if isinstance(value, dict):
@@ -180,23 +215,47 @@ class Config:
         return normalize_providers(value, self._normalize_context_management)
 
     def _build_llm_from_legacy(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        return build_llm_from_legacy(
+        llm = build_llm_from_legacy(
             data,
             self._normalize_context_management,
             self._normalize_llm_defaults,
             str(data.get("base_url", self.base_url)).strip(),
             self.model,
         )
+        llm.setdefault("active_profile", "")
+        llm.setdefault("profiles", [])
+        llm.setdefault("strict_message_packing", bool(data.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)))
+        return llm
 
     def _normalize_llm_config(self, value: Any, fallback_data: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(value, dict):
             return self._build_llm_from_legacy(fallback_data)
 
+        defaults = self._normalize_llm_defaults(value.get("defaults", fallback_data))
+
+        # New 0.2.5 profile-first structure takes precedence.
+        raw_profiles = value.get("profiles", [])
+        if isinstance(raw_profiles, list) and raw_profiles:
+            llm = {
+                "active_profile": str(value.get("active_profile", "")).strip(),
+                "active_provider": "",
+                "active_model": "",
+                "defaults": defaults,
+                "providers": [],
+                "profiles": list(raw_profiles),
+                "strict_message_packing": bool(value.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
+            }
+            return llm
+
+        # Legacy provider-centric structure.
         llm = {
+            "active_profile": "",
             "active_provider": str(value.get("active_provider", "")).strip(),
             "active_model": str(value.get("active_model", "")).strip(),
-            "defaults": self._normalize_llm_defaults(value.get("defaults", fallback_data)),
+            "defaults": defaults,
             "providers": self._normalize_providers(value.get("providers", [])),
+            "profiles": [],
+            "strict_message_packing": bool(value.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
         }
         if not llm["providers"]:
             return self._build_llm_from_legacy(fallback_data)
@@ -235,14 +294,43 @@ class Config:
         return [model["name"] for model in provider["models"]]
 
     def get_model_profile_names(self) -> List[str]:
+        if self.llm.get("profiles"):
+            return [p.get("label") or p.get("id") or p.get("name", "") for p in self.llm["profiles"]]
         names: List[str] = []
         for provider in self.llm["providers"]:
             for model in provider["models"]:
                 names.append(self._format_profile_label(provider["name"], model["name"]))
         return names
 
+    def get_profile_ids(self) -> List[str]:
+        """Return profile ids (new structure) or legacy provider/model labels."""
+        if self.llm.get("profiles"):
+            return [str(p.get("id", "")).strip() for p in self.llm["profiles"] if p.get("id")]
+        return self.get_model_profile_names()
+
     def _build_legacy_profiles(self) -> List[Dict[str, Any]]:
         profiles: List[Dict[str, Any]] = []
+        if self.llm.get("profiles"):
+            for profile in self.llm["profiles"]:
+                pid = str(profile.get("id", "")).strip()
+                provider = str(profile.get("provider", "")).strip() or (pid.split("/", 1)[0] if "/" in pid else pid)
+                model = str(profile.get("model", "")).strip() or (pid.split("/", 1)[1] if "/" in pid else pid)
+                entry = {
+                    "name": str(profile.get("label", "")).strip() or pid,
+                    "base_url": str(profile.get("base_url", "")),
+                    "model": model,
+                    "temperature": float(profile.get("temperature", self.llm["defaults"]["temperature"])),
+                    "max_tokens": int(profile.get("max_tokens", self.llm["defaults"]["max_tokens"])),
+                    "context_window": int(profile.get("context_window", self.llm["defaults"]["context_window"])),
+                }
+                if profile.get("api_key"):
+                    entry["api_key"] = profile["api_key"]
+                if profile.get("api_key_env"):
+                    entry["api_key_env"] = profile["api_key_env"]
+                if isinstance(profile.get("context_management"), dict):
+                    entry["context_management"] = dict(profile["context_management"])
+                profiles.append(entry)
+            return profiles
         for provider in self.llm["providers"]:
             for model in provider["models"]:
                 profile_name = str(model.get("legacy_profile_name") or self._format_profile_label(provider["name"], model["name"]))
@@ -263,11 +351,129 @@ class Config:
                 profiles.append(profile)
         return profiles
 
+    def apply_profile(self, profile_id: str) -> bool:
+        """Switch active profile by id (new structure) or legacy label.
+
+        Note: this only updates ``llm.active_profile`` and does NOT keep
+        ``model_roles.chat`` consistent, so a configured chat role can still
+        route requests back to the old profile. Prefer
+        :meth:`switch_active_profile` for ``/model`` transactions.
+        """
+        profile_id = (profile_id or "").strip()
+        if not profile_id:
+            return False
+        if self.llm.get("profiles"):
+            for profile in self.llm["profiles"]:
+                if str(profile.get("id", "")).strip() == profile_id:
+                    self.llm["active_profile"] = profile_id
+                    self._sync_runtime_fields()
+                    return True
+                label = str(profile.get("label", "")).strip()
+                if label and label == profile_id:
+                    self.llm["active_profile"] = str(profile.get("id", "")).strip()
+                    self._sync_runtime_fields()
+                    return True
+            return False
+        return self.apply_model_profile(profile_id)
+
+    def switch_active_profile(
+        self,
+        profile_id: str,
+        *,
+        update_roles: bool = True,
+    ) -> Dict[str, Any]:
+        """Unified transaction that switches the active chat profile.
+
+        0.2.6-beta: this is the single entry point for ``/model``. It keeps
+        ``model_roles.chat`` and ``llm.active_profile`` consistent so the next
+        chat request actually uses the selected profile (the resolver prefers
+        ``model_roles.chat`` over ``llm.active_profile``).
+
+        Semantics:
+        - New ``llm.profiles[]`` structure: when ``model_roles.chat`` is
+          configured and ``update_roles=True``, update it to the selected id;
+          otherwise update ``llm.active_profile``. Both are kept consistent
+          when both apply.
+        - Legacy ``llm.providers[]`` structure: delegates to
+          :meth:`apply_model_profile` and keeps ``model_roles.chat`` consistent
+          if it was set to a legacy label.
+
+        Returns a dict with the resolved profile info:
+        ``{ok, profile_id, label, model, base_url, context_window,
+        role_updated, active_updated}``.
+        """
+        profile_id = (profile_id or "").strip()
+        result: Dict[str, Any] = {
+            "ok": False,
+            "profile_id": profile_id,
+            "label": "",
+            "model": "",
+            "base_url": "",
+            "context_window": self.context_window,
+            "role_updated": False,
+            "active_updated": False,
+        }
+        if not profile_id:
+            return result
+
+        if self.llm.get("profiles"):
+            matched_id: Optional[str] = None
+            for profile in self.llm["profiles"]:
+                pid = str(profile.get("id", "")).strip()
+                label = str(profile.get("label", "")).strip()
+                if pid == profile_id or (label and label == profile_id):
+                    matched_id = pid
+                    break
+            if matched_id is None:
+                return result
+            chat_role = self.model_roles.get("chat")
+            if update_roles and chat_role:
+                if chat_role != matched_id:
+                    self.model_roles["chat"] = matched_id
+                    result["role_updated"] = True
+            else:
+                if self.llm.get("active_profile") != matched_id:
+                    self.llm["active_profile"] = matched_id
+                    result["active_updated"] = True
+            # Keep the fallback active_profile consistent with the chat route so
+            # UI surfaces (dock, /config, default index) all show the same profile.
+            if update_roles and chat_role and self.llm.get("active_profile") != matched_id:
+                self.llm["active_profile"] = matched_id
+                result["active_updated"] = True
+            self._sync_runtime_fields()
+            result["ok"] = True
+            resolved = _get_active_profile(self)
+            if resolved is not None:
+                result.update({
+                    "profile_id": resolved.id,
+                    "label": resolved.label,
+                    "model": resolved.model,
+                    "base_url": resolved.base_url,
+                    "context_window": int(resolved.context_window),
+                })
+            return result
+
+        # Legacy provider/model structure.
+        if not self.apply_model_profile(profile_id):
+            return result
+        if update_roles and self.model_roles.get("chat"):
+            if self.model_roles["chat"] != profile_id:
+                self.model_roles["chat"] = profile_id
+                result["role_updated"] = True
+        result["ok"] = True
+        result.update({
+            "profile_id": profile_id,
+            "label": self.active_model_profile,
+            "model": self.model,
+            "base_url": self.base_url,
+            "context_window": int(self.context_window),
+        })
+        return result
+
     def get_active_llm_settings(self) -> Dict[str, Any]:
-        provider = self._get_provider(self.llm["active_provider"])
-        if not provider and self.llm["providers"]:
-            provider = self.llm["providers"][0]
-        if not provider:
+        """Resolve runtime LLM settings using the profile-first resolver."""
+        profile = _get_active_profile(self)
+        if profile is None:
             return {
                 "provider_name": "",
                 "model_name": self.model,
@@ -279,49 +485,42 @@ class Config:
                 "context_management": dict(self.context_management_defaults),
             }
 
-        model = self._get_model(provider["name"], self.llm["active_model"])
-        if not model:
-            model = provider["models"][0]
-
-        context_management = dict(self.context_management_defaults)
-        if isinstance(model.get("context_management"), dict):
-            context_management.update(model["context_management"])
-        context_management = self._normalize_context_management(context_management)
-
-        api_key_env = str(provider.get("api_key_env", "")).strip()
-        api_key = ""
-        api_key_source = provider.get("_api_key_source", "none")
-        if api_key_env and os.environ.get(api_key_env):
-            api_key = os.environ[api_key_env]
-            api_key_source = "env"
-        elif self._global_api_key_override is not None:
+        base_url = self._base_url_override if self._base_url_override is not None else profile.base_url
+        api_key = profile.api_key
+        api_key_source = profile.api_key_source
+        if not api_key and self._global_api_key_override is not None:
             api_key = self._global_api_key_override
             api_key_source = "override"
-        else:
-            api_key = str(provider.get("api_key", ""))
+        model = self._model_override if self._model_override is not None else profile.model
+
+        provider_name = profile.provider
+        if not provider_name and "/" in profile.id:
+            provider_name = profile.id.split("/", 1)[0]
 
         return {
-            "provider_name": provider["name"],
-            "model_name": model["name"],
-            "base_url": self._base_url_override if self._base_url_override is not None else provider.get("base_url", self.base_url),
+            "provider_name": provider_name,
+            "model_name": profile.model,
+            "base_url": base_url,
             "api_key": api_key,
             "api_key_source": api_key_source,
-            "temperature": float(model.get("temperature", self.llm["defaults"]["temperature"])),
-            "max_tokens": int(model.get("max_tokens", self.llm["defaults"]["max_tokens"])),
+            "temperature": float(profile.temperature),
+            "max_tokens": int(profile.max_tokens),
             "context_window": int(
                 self._context_window_override
                 if self._context_window_override is not None
-                else model.get("context_window", self.llm["defaults"]["context_window"])
+                else profile.context_window
             ),
-            "context_management": context_management,
-            "runtime_model": self._model_override if self._model_override is not None else model["name"],
+            "context_management": dict(profile.context_management),
+            "runtime_model": model,
+            "profile_id": profile.id,
+            "profile_label": profile.label,
         }
 
     def _sync_runtime_fields(self):
         settings = self.get_active_llm_settings()
         self.active_provider = settings["provider_name"]
         self.active_model = settings["model_name"]
-        self.active_model_profile = self._format_profile_label(self.active_provider, self.active_model) if self.active_provider else ""
+        self.active_model_profile = self._format_profile_label(self.active_provider, self.active_model) if self.active_provider else settings.get("profile_label", settings["model_name"])
         self.api_key = str(settings["api_key"])
         self.base_url = str(settings["base_url"])
         self.model = str(settings["runtime_model"])
@@ -535,18 +734,15 @@ class Config:
 
     def describe_active_api_key(self) -> str:
         """Return a human description of the active API key provenance (no raw key)."""
-        settings = self.get_active_llm_settings()
-        provider = self._get_provider(self.llm["active_provider"])
-        env_name = str(provider.get("api_key_env", "")).strip() if provider else ""
-        source = str(settings.get("api_key_source") or "none")
-        if source == "env":
-            present = bool(env_name and os.environ.get(env_name))
-            state = "present" if present else "missing"
-            return f"API Key: env({env_name}) {state}"
-        if source == "override":
+        profile = _get_active_profile(self)
+        if profile is None:
+            return "API Key: missing"
+        if profile.api_key_source == "env":
+            return "API Key: env"
+        if profile.api_key_source == "override":
             return "API Key: runtime override (env OPENAI_API_KEY/OPENAI_BASE_URL)"
-        if source == "file":
-            return f"API Key: inline in config.json [warning] preview={self.redact_api_key(settings['api_key'])}"
+        if profile.api_key_source == "file":
+            return f"API Key: inline in config.json [warning] preview={mask_key(profile.api_key)}"
         return "API Key: missing"
 
     # ---- Backup helper ----------------------------------------------------------
@@ -593,13 +789,16 @@ class Config:
         known_keys = {
             "llm", "context_management", "ui", "sessions", "workspace_root",
             "skills_dir", "shell_type", "authorization_level", "auto_mode",
-            "plan_mode", "thinking_mode", "policy",
+            "plan_mode", "thinking_mode", "policy", "model_roles", "workspace_bookmarks",
             # Legacy fields consumed during migration; must not be written back.
             "api_key", "base_url", "model", "models", "active_provider",
             "active_model", "active_model_profile", "model_profiles",
             "profile_defaults", "temperature", "max_tokens", "context_window",
         }
         self._extra_fields = {key: value for key, value in data.items() if key not in known_keys}
+
+        self.model_roles = {str(k).strip(): str(v).strip() for k, v in data.get("model_roles", {}).items() if str(k).strip() and str(v).strip()}
+        self.workspace_bookmarks = self._normalize_workspace_bookmarks(data.get("workspace_bookmarks", []))
 
         self.workspace_root = str(data.get("workspace_root", self.workspace_root))
         self.skills_dir = str(data.get("skills_dir", self.skills_dir))
@@ -711,11 +910,24 @@ class Config:
             "plan_mode": self.plan_mode,
             "thinking_mode": self.thinking_mode,
             "policy": copy.deepcopy(self.policy),
+            "workspace_bookmarks": list(self.workspace_bookmarks),
         }
         # Restore user-defined extension fields so they are not silently dropped.
         for key, value in self._extra_fields.items():
             if key not in data:
                 data[key] = value
+
+        # 0.2.5: persist new profile-first structure when profiles are configured.
+        if self.llm.get("profiles"):
+            data["llm"] = {
+                "active_profile": self.llm.get("active_profile", ""),
+                "defaults": dict(self.llm["defaults"]),
+                "profiles": self._serialize_profiles(),
+                "strict_message_packing": bool(self.llm.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
+            }
+            data["model_roles"] = dict(self.model_roles)
+        else:
+            data["llm"] = self._serialize_legacy_llm()
 
         tmp_path = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
         try:
@@ -725,11 +937,11 @@ class Config:
                 os.fsync(handle.fileno())
             os.replace(tmp_path, self.config_path)
         except Exception as exc:
-            print(f"[Error] Failed to save config to {self.config_path}: {exc}")
             try:
                 tmp_path.unlink(missing_ok=True)
             except Exception:
                 pass
+            raise RuntimeError(f"Failed to save config to {self.config_path}: {exc}") from exc
 
     def __repr__(self) -> str:
         return (
@@ -737,6 +949,62 @@ class Config:
             f"context_window={self.context_window}, auto={self.auto_mode}, "
             f"plan={self.plan_mode}, think={self.thinking_mode})"
         )
+
+    # ---- Serialization helpers --------------------------------------------------
+
+    def _serialize_profiles(self) -> List[Dict[str, Any]]:
+        """Serialize llm.profiles for disk, preserving inline keys by default."""
+        profiles: List[Dict[str, Any]] = []
+        for profile in self.llm.get("profiles", []):
+            serialized: Dict[str, Any] = {
+                "id": str(profile.get("id", "")).strip(),
+                "label": str(profile.get("label", "")).strip(),
+                "provider": str(profile.get("provider", "")).strip(),
+                "base_url": str(profile.get("base_url", "")).strip(),
+                "model": str(profile.get("model", "")).strip(),
+                "api_key": str(profile.get("api_key", "")),
+                "api_key_env": str(profile.get("api_key_env", "")).strip(),
+                "temperature": float(profile.get("temperature", self.llm["defaults"]["temperature"])),
+                "max_tokens": int(profile.get("max_tokens", self.llm["defaults"]["max_tokens"])),
+                "context_window": int(profile.get("context_window", self.llm["defaults"]["context_window"])),
+            }
+            if isinstance(profile.get("context_management"), dict):
+                serialized["context_management"] = dict(profile["context_management"])
+            profiles.append(serialized)
+        return profiles
+
+    def _serialize_legacy_llm(self) -> Dict[str, Any]:
+        """Serialize the legacy provider-centric llm structure."""
+        providers: List[Dict[str, Any]] = []
+        for provider in self.llm["providers"]:
+            serialized_provider = {
+                "name": provider["name"],
+                "base_url": provider.get("base_url", ""),
+                "models": [],
+            }
+            key_source = provider.get("_api_key_source", "none")
+            if provider.get("api_key") and key_source == "file":
+                serialized_provider["api_key"] = provider["api_key"]
+            if provider.get("api_key_env"):
+                serialized_provider["api_key_env"] = provider["api_key_env"]
+            for model in provider["models"]:
+                serialized_model = {
+                    "name": model["name"],
+                    "temperature": float(model.get("temperature", self.llm["defaults"]["temperature"])),
+                    "max_tokens": int(model.get("max_tokens", self.llm["defaults"]["max_tokens"])),
+                    "context_window": int(model.get("context_window", self.llm["defaults"]["context_window"])),
+                }
+                if isinstance(model.get("context_management"), dict):
+                    serialized_model["context_management"] = dict(model["context_management"])
+                serialized_provider["models"].append(serialized_model)
+            providers.append(serialized_provider)
+        return {
+            "active_provider": self.llm["active_provider"],
+            "active_model": self.llm["active_model"],
+            "defaults": dict(self.llm["defaults"]),
+            "providers": providers,
+            "strict_message_packing": bool(self.llm.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)),
+        }
 
     # ---- Backup machinery --------------------------------------------------------
 

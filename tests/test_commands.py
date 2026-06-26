@@ -146,11 +146,12 @@ class TestAgentCommands(unittest.TestCase):
         self.assertIn("keep in first", str(self.agent.history))
 
     def test_workspace_command_is_handled_in_plain_mode(self):
-        with patch.object(self.agent.console, "print") as mock_print:
-            self.assertTrue(self.agent.handle_command("/workspace"))
+        # Selecting option 0 opens the "Show current workspace" panel entry.
+        with patch("builtins.input", return_value="0"):
+            with patch.object(self.agent.console, "print") as mock_print:
+                self.assertTrue(self.agent.handle_command("/workspace"))
         output = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("Current workspace", output)
-        self.assertIn("/workspace move", output)
 
     @patch('agent.tui_widgets.select_menu', return_value=1) # mock select local profile (index 1)
     @patch('agent.config.Config.save')
