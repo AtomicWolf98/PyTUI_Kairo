@@ -980,7 +980,7 @@ class KairoApp(App):
         self.refresh_dock()
         self.main_query("#composer", Composer).focus()
 
-    def on_app_exit(self):
+    def on_unmount(self):
         self.agent.shutdown()
 
     def request_workspace_refresh(self, selected_file: str = ""):

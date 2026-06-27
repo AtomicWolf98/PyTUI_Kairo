@@ -2,6 +2,16 @@
 
 ## [0.2.7-beta]
 
+### Fixed / 修复
+
+- Fixed Textual shutdown cleanup by moving agent shutdown to the supported `on_unmount` lifecycle hook.
+- Hardened provider health checks with URL policy validation on real requests, test-safe opener injection, and explicit 5xx server-error classification.
+- Unified package metadata with the 0.2.7-beta release line.
+
+- 将 agent 清理移动到 Textual 支持的 `on_unmount` 生命周期钩子，修复退出清理不执行的问题。
+- 加固 provider 健康检查：真实请求执行 URL 策略校验，注入 opener 的测试保持纯 mock，并显式分类 5xx 服务端错误。
+- 将包元数据统一到 0.2.7-beta 发布线。
+
 ### Changed / 变更
 
 - Slash command surface reduced from 52 commands to 18 workflow-oriented commands.

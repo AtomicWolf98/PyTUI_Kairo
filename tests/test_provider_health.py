@@ -10,6 +10,7 @@ from agent.provider_health import (
     STATUS_AUTH_ERROR,
     STATUS_MODEL_ERROR,
     STATUS_RATE_LIMIT,
+    STATUS_SERVER_ERROR,
     STATUS_SUCCESS,
     STATUS_URL_ERROR,
     STATUS_UNKNOWN,
@@ -167,6 +168,17 @@ class TestProviderHealth(unittest.TestCase):
             opener=opener,
         )
         self.assertEqual(result.status, STATUS_UNKNOWN)
+
+    def test_server_error_for_5xx(self):
+        opener = MagicMock()
+        opener.open.side_effect = _http_error(500, b'{"error":{"message":"upstream failed"}}')
+        result = probe(
+            base_url="https://api.example.com/v1",
+            api_key="k",
+            model="m",
+            opener=opener,
+        )
+        self.assertEqual(result.status, STATUS_SERVER_ERROR)
 
 
 if __name__ == "__main__":

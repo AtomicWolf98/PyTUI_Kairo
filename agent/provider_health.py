@@ -30,6 +30,7 @@ STATUS_AUTH_ERROR = "auth_error"
 STATUS_MODEL_ERROR = "model_error"
 STATUS_URL_ERROR = "url_error"
 STATUS_RATE_LIMIT = "rate_limit"
+STATUS_SERVER_ERROR = "server_error"
 STATUS_UNKNOWN = "unknown"
 
 
@@ -52,6 +53,7 @@ class ProviderTestResult:
             STATUS_MODEL_ERROR: "Model Error",
             STATUS_URL_ERROR: "URL Error",
             STATUS_RATE_LIMIT: "Rate Limit",
+            STATUS_SERVER_ERROR: "Server Error",
             STATUS_UNKNOWN: "Unknown",
         }.get(self.status, self.status)
         detail = self.provider_message.strip() or "no additional detail"
@@ -76,10 +78,12 @@ def _classify(http_status: int, error_message: str) -> str:
         return STATUS_MODEL_ERROR
     if http_status == 429:
         return STATUS_RATE_LIMIT
-    if http_status >= 400 and http_status < 500:
+    if 400 <= http_status < 500:
         # 400 with model markers also falls through to MODEL_ERROR above;
         # remaining 4xx become auth/client classification.
         return STATUS_AUTH_ERROR if http_status in (401, 403) else STATUS_UNKNOWN
+    if http_status >= 500:
+        return STATUS_SERVER_ERROR
     return STATUS_UNKNOWN
 
 
@@ -101,6 +105,7 @@ def test_connection(
     model: str,
     timeout: float = 10.0,
     opener: Optional[urllib.request.OpenerDirector] = None,
+    network_policy: Any = None,
 ) -> ProviderTestResult:
     """Send a minimal chat-completions probe and classify the response.
 
@@ -112,6 +117,18 @@ def test_connection(
         return ProviderTestResult(status=STATUS_URL_ERROR, provider_message=f"Invalid base_url: {base_url!r}")
     if not url.endswith("/chat/completions"):
         url = f"{url}/chat/completions"
+
+    if network_policy is not False:
+        from tools.policy import NetworkPolicy, SecurityError
+
+        policy = network_policy
+        if policy is None and opener is None:
+            policy = NetworkPolicy()
+        if policy is not None:
+            try:
+                policy.validate_url(url)
+            except SecurityError as exc:
+                return ProviderTestResult(status=STATUS_URL_ERROR, provider_message=f"URL blocked by policy: {exc}")
 
     payload: Dict[str, Any] = {
         "model": model,
