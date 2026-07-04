@@ -4,7 +4,21 @@ Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain t
 
 Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时配置面板，以及本地配置优先的 key 管理。
 
-Current version / 当前版本：**0.2.7-beta**
+Current version / 当前版本：**0.3.0-preview**
+
+## WebUI Preview / WebUI 预览
+
+Kairo 0.3.0-preview adds an optional local browser interface:
+
+```powershell
+kairo --web
+kairo --web --port 8765
+kairo --web --no-browser
+```
+
+The WebUI is local-only by default (`127.0.0.1`) and uses a temporary auth token in the browser URL. It exposes the same runtime through a UI-neutral Kairo kernel: chat streaming, stop generation, tool approval, settings, sessions, workspace review, skills and doctor checks. `--tui` and `--plain` remain supported.
+
+Kairo 0.3.0-preview 新增可选本地浏览器界面。默认只监听 `127.0.0.1`，并在浏览器 URL 中使用临时 token。WebUI 通过 UI-neutral Kairo runtime 调用聊天流式输出、停止生成、工具审批、设置、会话、工作区审查、技能和 doctor 检查。`--tui` 与 `--plain` 继续保留。
 
 ## Documentation / 文档
 

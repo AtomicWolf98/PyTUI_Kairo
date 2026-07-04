@@ -1,6 +1,6 @@
 # Kairo 完整用户手册
 
-版本：**0.2.7-beta**
+版本：**0.3.0-preview**
 
 Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
 
@@ -35,6 +35,10 @@ kairo
 | 参数 | 作用 |
 | --- | --- |
 | `--config <path>` | 指定配置文件 |
+| `--web` | 启动本地浏览器 WebUI |
+| `--host <host>` / `--web-host <host>` | 指定 WebUI host，默认 `127.0.0.1` |
+| `--port <port>` / `--web-port <port>` | 指定 WebUI 端口，默认 `8765`；使用 `0` 自动选择空闲端口 |
+| `--no-browser` | 启动 WebUI 但不自动打开浏览器 |
 | `--plain` | 使用兼容的非全屏输出 |
 | `--tui` | 即使在非标准环境中也强制使用 Textual TUI |
 | `--no-animation` | 关闭动画 |
@@ -43,6 +47,16 @@ kairo
 | `--auto` | 快捷进入 `auto` 授权 |
 | `--plan` | 启动时开启 Plan Mode |
 | `--think` | 启动时开启 Thinking Mode |
+
+### WebUI 预览
+
+Kairo 0.3.0-preview 新增本地 WebUI：
+
+```powershell
+kairo --web
+```
+
+默认只监听 `127.0.0.1`，自动打开浏览器，并在 URL 中使用临时本地 token 保护 API。WebUI 与 TUI/plain 共用同一个 Kairo runtime，支持流式聊天、停止生成、工具审批、workspace 快照、session 管理、settings、skills 和 doctor 检查。
 
 ## 2. 首次配置
 

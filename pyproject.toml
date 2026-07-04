@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kairo-agent"
-version = "0.2.7-beta"
+version = "0.3.0-preview"
 description = "Kairo, an animated terminal-native coding agent"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "rich>=14.2.0",
     "textual>=8.2.7",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.scripts]

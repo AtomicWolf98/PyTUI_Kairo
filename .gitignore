@@ -1,4 +1,8 @@
 __pycache__/
+node_modules/
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
 *.py[cod]
 *.egg-info/
 .pytest_cache/

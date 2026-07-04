@@ -57,6 +57,15 @@ UI_DEFAULTS = {
     "esc_stops_generation": True,
     "stop_saves_partial_response": True,
 }
+WEB_DEFAULTS = {
+    "enabled": True,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "open_browser": True,
+    "theme": "system",
+    "local_auth_token": True,
+    "max_event_buffer": 1000,
+}
 
 
 class Config:
@@ -84,6 +93,7 @@ class Config:
         self.context_management_defaults: Dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
         self.context_management: Dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
         self.ui: Dict[str, Any] = dict(UI_DEFAULTS)
+        self.web: Dict[str, Any] = dict(WEB_DEFAULTS)
         self.sessions: Dict[str, Any] = dict(SESSION_DEFAULTS)
         self.workspace_root: str = "."
         self.skills_dir: str = "./skills"
@@ -193,6 +203,24 @@ class Config:
             seen.add(name.lower())
             bookmarks.append({"name": name, "path": path})
         return bookmarks
+
+    def _normalize_web(self, value: Any) -> Dict[str, Any]:
+        settings = dict(WEB_DEFAULTS)
+        if isinstance(value, dict):
+            settings.update({key: value[key] for key in settings if key in value})
+        settings["enabled"] = bool(settings["enabled"])
+        settings["host"] = str(settings["host"]).strip() or "127.0.0.1"
+        settings["port"] = max(0, min(65535, int(settings["port"])))
+        settings["open_browser"] = bool(settings["open_browser"])
+        settings["theme"] = str(settings["theme"]).strip() or "system"
+        settings["local_auth_token"] = bool(settings["local_auth_token"])
+        settings["max_event_buffer"] = max(100, int(settings["max_event_buffer"]))
+        return settings
+
+    def update_web(self, values: Dict[str, Any]) -> None:
+        merged = dict(self.web)
+        merged.update(values or {})
+        self.web = self._normalize_web(merged)
 
     def _normalize_llm_defaults(self, value: Any) -> Dict[str, Any]:
         defaults = dict(LLM_DEFAULTS)
@@ -788,7 +816,7 @@ class Config:
         # intentionally excluded from extra preservation.
         known_keys = {
             "llm", "context_management", "ui", "sessions", "workspace_root",
-            "skills_dir", "shell_type", "authorization_level", "auto_mode",
+            "skills_dir", "shell_type", "authorization_level", "auto_mode", "web",
             "plan_mode", "thinking_mode", "policy", "model_roles", "workspace_bookmarks",
             # Legacy fields consumed during migration; must not be written back.
             "api_key", "base_url", "model", "models", "active_provider",
@@ -816,6 +844,7 @@ class Config:
             data.get("context_management", self.context_management_defaults)
         )
         self.sessions = self._normalize_sessions(data.get("sessions", self.sessions))
+        self.web = self._normalize_web(data.get("web", self.web))
 
         configured_ui = data.get("ui", {})
         if isinstance(configured_ui, dict):
@@ -903,6 +932,7 @@ class Config:
             "context_management": dict(self.context_management_defaults),
             "ui": dict(self.ui),
             "sessions": dict(self.sessions),
+            "web": dict(self.web),
             "workspace_root": self.workspace_root,
             "skills_dir": self.skills_dir,
             "shell_type": self.shell_type,

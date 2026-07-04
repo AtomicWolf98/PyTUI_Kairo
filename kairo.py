@@ -163,6 +163,10 @@ def main():
     parser.add_argument("--think", action="store_true", help="Start directly in Thinking Mode (display reasoning).")
     parser.add_argument("--plain", action="store_true", help="Use the compatible non-Textual interface.")
     parser.add_argument("--tui", action="store_true", help="Force the Textual interface even in non-TTY environments.")
+    parser.add_argument("--web", action="store_true", help="Start the local browser WebUI.")
+    parser.add_argument("--web-host", "--host", dest="web_host", default=None, help="Host for --web (default: config web.host / 127.0.0.1).")
+    parser.add_argument("--web-port", "--port", dest="web_port", type=int, default=None, help="Port for --web (default: config web.port / 8765; 0 picks a free port).")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open a browser when starting --web.")
     parser.add_argument("--no-animation", action="store_true", help="Disable Kai and transition animations.")
     parser.add_argument("--reduced-motion", action="store_true", help="Use static, reduced-motion UI states.")
     parser.add_argument("--theme", default=None, help="Textual theme name (default: kairo-dark).")
@@ -184,7 +188,16 @@ def main():
     reduced_motion = args.reduced_motion or bool(config.ui.get("reduced_motion"))
     animation = not args.no_animation and config.ui.get("animation") != "none"
 
-    if should_use_textual(args, config):
+    if args.web:
+        from agent.web import run_web
+
+        run_web(
+            config,
+            host=args.web_host,
+            port=args.web_port,
+            open_browser=not args.no_browser,
+        )
+    elif should_use_textual(args, config):
         try:
             from agent.ui import KairoApp
         except ImportError as exc:

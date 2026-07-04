@@ -1,6 +1,8 @@
 # Kairo English Docs
 
-Current version: **0.2.7-beta**
+Current version: **0.3.0-preview**
+
+WebUI preview: run `kairo --web`.
 
 Start here:
 

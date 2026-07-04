@@ -91,6 +91,15 @@
     "esc_stops_generation": true,
     "stop_saves_partial_response": true
   },
+  "web": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8765,
+    "open_browser": true,
+    "theme": "system",
+    "local_auth_token": true,
+    "max_event_buffer": 1000
+  },
   "policy": {
     "workspace_path": {
       "allow_absolute_outside": false

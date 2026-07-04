@@ -91,6 +91,7 @@ class ConfigDraft:
         self.context_management_defaults: Dict[str, Any] = copy.deepcopy(source.context_management_defaults)
         self.sessions: Dict[str, Any] = copy.deepcopy(source.sessions)
         self.ui: Dict[str, Any] = copy.deepcopy(source.ui)
+        self.web: Dict[str, Any] = copy.deepcopy(getattr(source, "web", {}))
         self.policy: Dict[str, Any] = copy.deepcopy(source.policy)
         self.workspace_root: str = source.workspace_root
         self.skills_dir: str = source.skills_dir
@@ -848,6 +849,7 @@ class ConfigDraft:
             "context_management_defaults": copy.deepcopy(config.context_management_defaults),
             "sessions": copy.deepcopy(config.sessions),
             "ui": copy.deepcopy(config.ui),
+            "web": copy.deepcopy(getattr(config, "web", {})),
             "policy": copy.deepcopy(config.policy),
             "model_roles": copy.deepcopy(getattr(config, "model_roles", {})),
             "workspace_bookmarks": copy.deepcopy(getattr(config, "workspace_bookmarks", [])),
@@ -869,6 +871,7 @@ class ConfigDraft:
         config.context_management_defaults = copy.deepcopy(self.context_management_defaults)
         config.sessions = copy.deepcopy(self.sessions)
         config.ui = copy.deepcopy(self.ui)
+        config.web = config._normalize_web(copy.deepcopy(self.web))
         config.policy = copy.deepcopy(self.policy)
         config.model_roles = copy.deepcopy(self.model_roles)
         config.workspace_bookmarks = copy.deepcopy(self.workspace_bookmarks)
@@ -891,6 +894,7 @@ class ConfigDraft:
             config.context_management_defaults = previous_state["context_management_defaults"]
             config.sessions = previous_state["sessions"]
             config.ui = previous_state["ui"]
+            config.web = previous_state["web"]
             config.policy = previous_state["policy"]
             config.model_roles = previous_state["model_roles"]
             config.workspace_bookmarks = previous_state["workspace_bookmarks"]
@@ -909,6 +913,7 @@ class ConfigDraft:
             "llm": copy.deepcopy(self.llm),
             "context_management": copy.deepcopy(self.context_management_defaults),
             "ui": copy.deepcopy(self.ui),
+            "web": copy.deepcopy(self.web),
             "sessions": copy.deepcopy(self.sessions),
             "workspace_root": self.workspace_root,
             "skills_dir": self.skills_dir,
@@ -933,6 +938,14 @@ class ConfigDraft:
                 for provider in data["llm"].get("providers", []):
                     if provider.get("api_key"):
                         provider["api_key"] = ""
+        for profile in data["llm"].get("profiles", []):
+            for key in list(profile):
+                if str(key).startswith("_"):
+                    profile.pop(key, None)
+        for provider in data["llm"].get("providers", []):
+            for key in list(provider):
+                if str(key).startswith("_"):
+                    provider.pop(key, None)
         return data
 
     def import_config(self, path: str) -> ValidationReport:
