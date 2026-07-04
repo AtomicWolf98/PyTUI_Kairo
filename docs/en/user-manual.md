@@ -9,6 +9,15 @@ Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by
 ### Windows
 
 ```powershell
+.\install.bat
+kairo
+```
+
+`install.bat` installs Kairo into `.venv`, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat`, and adds that directory to the current user's PATH. Open a new PowerShell window after installation.
+
+Quick run without installing the user-level command:
+
+```powershell
 .\run.bat
 ```
 

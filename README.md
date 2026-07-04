@@ -53,6 +53,15 @@ Kairo 0.3.0-preview 新增可选本地浏览器界面。默认只监听 `127.0.0
 ### Windows
 
 ```powershell
+.\install.bat
+kairo
+```
+
+`install.bat` creates `.venv`, installs Kairo, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat`, and adds that folder to the current user's PATH. Open a new PowerShell window after installation.
+
+Quick run without installing the user-level command:
+
+```powershell
 .\run.bat
 ```
 

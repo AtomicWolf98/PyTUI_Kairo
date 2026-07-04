@@ -5,6 +5,7 @@
 ### Added / New
 
 - Added optional local WebUI startup with `kairo --web`.
+- Added `install.bat` one-click Windows installer that creates a user-level `kairo` command without administrator rights.
 - Added UI-neutral runtime/service layer for shared plain, Textual and Web execution paths.
 - Added FastAPI backend under `agent/web/` with local token protection, WebSocket runtime events and REST APIs for status, config, workspace, sessions, chat, approvals, skills and doctor checks.
 - Added React/Vite WebUI project under `web/`, plus a no-build preview fallback served by the Python backend.
