@@ -143,6 +143,11 @@ export type ProviderSetting = {
 
 export type SettingsViewModel = {
   version: string;
+  diagnostics?: {
+    backend_version: string;
+    static_version: string;
+    version_match: boolean;
+  };
   general: {
     language: string;
     shell_type: string;

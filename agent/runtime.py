@@ -256,8 +256,15 @@ class ConfigService:
         assistant_extra = config._extra_fields.get("assistant", {}) if isinstance(config._extra_fields.get("assistant"), dict) else {}
         user_extra = config._extra_fields.get("user", {}) if isinstance(config._extra_fields.get("user"), dict) else {}
         appearance_extra = config._extra_fields.get("appearance", {}) if isinstance(config._extra_fields.get("appearance"), dict) else {}
+        backend_version = _package_version()
+        static_version = _web_static_version()
         return {
-            "version": _package_version(),
+            "version": backend_version,
+            "diagnostics": {
+                "backend_version": backend_version,
+                "static_version": static_version,
+                "version_match": not static_version or static_version == backend_version,
+            },
             "general": {
                 "language": appearance_extra.get("language", "system"),
                 "shell_type": config.shell_type,
@@ -971,6 +978,18 @@ def _package_version() -> str:
         return version("kairo-agent")
     except Exception:
         return "0.3.2-preview"
+
+
+def _web_static_version() -> str:
+    package_json = Path(__file__).resolve().parents[1] / "web" / "package.json"
+    try:
+        import json
+
+        with open(package_json, "r", encoding="utf-8-sig") as handle:
+            value = json.load(handle)
+        return str(value.get("version", ""))
+    except Exception:
+        return ""
 
 
 def _language_hint(path: str) -> str:

@@ -1684,3 +1684,246 @@ textarea:focus {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 0.3.2 layout-fix: keep these overrides at EOF so legacy page rules cannot win. */
+
+.desktop-shell {
+  grid-template-columns: 58px minmax(220px, 300px) minmax(560px, 1fr) clamp(300px, 21vw, 430px);
+  min-width: 0;
+}
+
+.main-workbench,
+.page-canvas,
+.page,
+.chat-page,
+.settings-stage,
+.settings-dialog,
+.settings-content,
+.chat-stream,
+.workspace-grid,
+.right-inspector {
+  min-width: 0;
+  min-height: 0;
+}
+
+.page-canvas {
+  overflow: hidden;
+}
+
+.chat-page {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 12px;
+}
+
+.chat-stream {
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.message-card {
+  width: min(100%, 980px);
+  max-width: 980px;
+}
+
+.message-user,
+.message-assistant,
+.message-plan {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.message-user {
+  justify-self: end;
+  width: min(82%, 820px);
+}
+
+.message-assistant,
+.message-plan,
+.message-error,
+.message-notice {
+  justify-self: start;
+}
+
+.message-content,
+.notice-text,
+.tool-card pre,
+.thought-block pre,
+.code-block {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.composer-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.composer-panel textarea {
+  width: 100%;
+  min-height: 86px;
+  max-height: 240px;
+}
+
+.composer-bottom {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-modes {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.composer-modes .badge {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.right-inspector {
+  overflow: hidden;
+}
+
+.file-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mini-file-tree {
+  min-height: 0;
+}
+
+.runtime-panel {
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.toasts {
+  right: clamp(12px, 1.2vw, 18px);
+  bottom: clamp(12px, 1.2vw, 18px);
+  max-height: min(42vh, 360px);
+  overflow: auto;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+}
+
+.settings-stage {
+  align-items: stretch;
+  justify-items: center;
+  padding: clamp(14px, 2.2vw, 28px);
+}
+
+.settings-dialog {
+  width: min(100%, 1180px);
+  height: min(100%, 820px);
+  max-height: calc(100vh - clamp(28px, 4.4vw, 56px));
+}
+
+.settings-content {
+  overflow: auto;
+}
+
+.settings-state {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.error-panel {
+  width: min(680px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 22px;
+  background: rgba(17, 24, 33, 0.86);
+  border: 1px solid rgba(237, 135, 150, 0.55);
+}
+
+.error-panel h2 {
+  margin: 0;
+}
+
+.error-panel p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.version-warning {
+  margin-bottom: 14px;
+}
+
+@media (max-width: 1500px) {
+  .desktop-shell {
+    grid-template-columns: 54px minmax(210px, 286px) minmax(0, 1fr);
+  }
+
+  .right-inspector {
+    display: none;
+  }
+}
+
+@media (max-width: 980px) {
+  .desktop-shell {
+    grid-template-columns: 50px minmax(0, 1fr);
+  }
+
+  .project-rail {
+    display: none;
+  }
+
+  .message-user {
+    width: min(100%, 760px);
+  }
+}
+
+@media (max-width: 720px) {
+  body {
+    overflow: hidden;
+  }
+
+  .desktop-titlebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .search-pill {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .settings-dialog {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .settings-sidebar {
+    grid-template-rows: auto auto;
+    gap: 10px;
+  }
+
+  .settings-sidebar nav {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .settings-content {
+    padding: 18px;
+  }
+
+  .composer-bottom {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

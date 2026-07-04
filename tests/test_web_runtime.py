@@ -146,6 +146,9 @@ class TestWebRuntime(unittest.TestCase):
         payload = view.json()
         self.assertIn("general", payload)
         self.assertIn("providers", payload)
+        self.assertEqual(payload["diagnostics"]["backend_version"], "0.3.2-preview")
+        self.assertEqual(payload["diagnostics"]["static_version"], "0.3.2-preview")
+        self.assertTrue(payload["diagnostics"]["version_match"])
         self.assertNotIn("secret-key", json.dumps(payload))
 
         general = self.client.patch(

@@ -76,6 +76,15 @@ const tabs: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ 
 export function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>("general");
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const pushToast = useRuntimeStore(state => state.pushToast);
+
+  useEffect(() => {
+    if (settings.isError) {
+      pushToast({ tone: "error", text: `Settings failed to load: ${formatError(settings.error)}` });
+    }
+  }, [pushToast, settings.error, settings.isError]);
+
+  const versionLabel = settings.data?.version || "0.3.2-preview";
 
   return (
     <div className="settings-stage">
@@ -84,7 +93,7 @@ export function SettingsPage() {
           <div className="settings-sidebar-title">
             <span className="section-kicker">Kairo Desktop</span>
             <strong>Settings</strong>
-            <small>{settings.data?.version || "0.3.2-preview"}</small>
+            <small>{versionLabel}</small>
           </div>
           <nav>
             {tabs.map(item => {
@@ -99,24 +108,80 @@ export function SettingsPage() {
           </nav>
         </aside>
         <main className="settings-content">
-          {!settings.data ? <EmptyState title="Loading settings" /> : <SettingsTabView tab={tab} settings={settings.data} />}
+          {settings.isLoading ? <SettingsLoading /> : null}
+          {settings.isError ? <SettingsError error={settings.error} onRetry={() => settings.refetch()} /> : null}
+          {settings.data ? <SettingsTabView tab={tab} settings={settings.data} /> : null}
         </main>
       </section>
     </div>
   );
 }
 
+function SettingsLoading() {
+  return (
+    <div className="settings-state">
+      <EmptyState
+        title="Loading settings"
+        detail="Requesting /api/settings/view from the local Kairo runtime..."
+      />
+    </div>
+  );
+}
+
+function SettingsError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const message = formatError(error);
+  const oldBackend = message.includes("404") || message.toLowerCase().includes("not found");
+  return (
+    <div className="settings-state">
+      <div className="error-panel">
+        <span className="section-kicker">Settings request failed</span>
+        <h2>Unable to load settings</h2>
+        <p>{message}</p>
+        <p>
+          {oldBackend
+            ? "This usually means the browser is connected to an older Kairo backend. Restart Kairo or reinstall the current dev build."
+            : "Check the local server token, backend logs, and whether the current dev server is still running."}
+        </p>
+        <div className="toolbar">
+          <button className="primary-button" onClick={onRetry}>Retry</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsTabView({ tab, settings }: { tab: SettingsTab; settings: SettingsViewModel }) {
-  if (tab === "providers") return <ProvidersPanel settings={settings} />;
-  if (tab === "models") return <ModelsPanel settings={settings} />;
-  if (tab === "roles") return <RolesPanel settings={settings} />;
-  if (tab === "assistant") return <AssistantPanel settings={settings} />;
-  if (tab === "me") return <MePanel settings={settings} />;
-  if (tab === "workbench") return <WorkbenchPanel settings={settings} />;
-  if (tab === "skills") return <SkillsPanel settings={settings} />;
-  if (tab === "appearance") return <AppearancePanel settings={settings} />;
-  if (tab === "export") return <ImportExportPanel settings={settings} />;
-  return <GeneralPanel settings={settings} />;
+  let panel: React.ReactNode;
+  if (tab === "providers") panel = <ProvidersPanel settings={settings} />;
+  else if (tab === "models") panel = <ModelsPanel settings={settings} />;
+  else if (tab === "roles") panel = <RolesPanel settings={settings} />;
+  else if (tab === "assistant") panel = <AssistantPanel settings={settings} />;
+  else if (tab === "me") panel = <MePanel settings={settings} />;
+  else if (tab === "workbench") panel = <WorkbenchPanel settings={settings} />;
+  else if (tab === "skills") panel = <SkillsPanel settings={settings} />;
+  else if (tab === "appearance") panel = <AppearancePanel settings={settings} />;
+  else if (tab === "export") panel = <ImportExportPanel settings={settings} />;
+  else panel = <GeneralPanel settings={settings} />;
+  return (
+    <>
+      {settings.diagnostics && !settings.diagnostics.version_match ? (
+        <div className="warning-box version-warning">
+          Frontend/backend version mismatch: backend {settings.diagnostics.backend_version || "unknown"}, static build {settings.diagnostics.static_version || "unknown"}. Rebuild WebUI or restart Kairo.
+        </div>
+      ) : null}
+      {panel}
+    </>
+  );
+}
+
+function formatError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Unknown error";
+  }
 }
 
 function useSaveSection(section: string) {
