@@ -139,3 +139,113 @@ class TestWebRuntime(unittest.TestCase):
         )
         self.assertEqual(with_keys.status_code, 200)
         self.assertIn("secret-key", json.dumps(with_keys.json()))
+
+    def test_graphical_settings_api_masks_keys_and_updates_sections(self):
+        view = self.client.get("/api/settings/view?token=test-token")
+        self.assertEqual(view.status_code, 200)
+        payload = view.json()
+        self.assertIn("general", payload)
+        self.assertIn("providers", payload)
+        self.assertNotIn("secret-key", json.dumps(payload))
+
+        general = self.client.patch(
+            "/api/settings/general?token=test-token",
+            json={"language": "zh-CN", "shell_type": "powershell", "authorization_level": "auto", "plan_mode": True},
+        )
+        self.assertEqual(general.status_code, 200)
+        self.assertEqual(self.config.shell_type, "powershell")
+        self.assertEqual(self.config.authorization_level, "auto")
+        self.assertTrue(self.config.plan_mode)
+        self.assertEqual(self.config._extra_fields["appearance"]["language"], "zh-CN")
+
+        user = self.client.patch(
+            "/api/settings/user?token=test-token",
+            json={"name": "Tester", "timezone": "Asia/Shanghai", "preferences": "quiet UI"},
+        )
+        self.assertEqual(user.status_code, 200)
+        self.assertEqual(self.config._extra_fields["user"]["name"], "Tester")
+
+        assistant = self.client.patch(
+            "/api/settings/assistant?token=test-token",
+            json={"name": "Kai", "thinking_mode": True, "context_management": {"trigger_percent": 80}},
+        )
+        self.assertEqual(assistant.status_code, 200)
+        self.assertTrue(self.config.thinking_mode)
+        self.assertEqual(self.config.context_management_defaults["trigger_percent"], 80)
+
+        roles = self.client.patch(
+            "/api/settings/roles?token=test-token",
+            json={"chat": "test/test-model", "fast": "test/test-model"},
+        )
+        self.assertEqual(roles.status_code, 200)
+        self.assertEqual(self.config.model_roles["fast"], "test/test-model")
+
+    def test_provider_and_profile_settings_api(self):
+        created_provider = self.client.post(
+            "/api/settings/provider?token=test-token",
+            json={
+                "id": "extra",
+                "base_url": "https://extra.test/v1",
+                "model": "extra-model",
+                "api_key": "extra-secret",
+                "context_window": 64000,
+            },
+        )
+        self.assertEqual(created_provider.status_code, 200)
+        self.assertNotIn("extra-secret", json.dumps(created_provider.json()))
+        self.assertTrue(any(profile.get("provider") == "extra" for profile in self.config.llm["profiles"]))
+
+        tested = self.client.post("/api/settings/provider/extra/test?token=test-token")
+        self.assertEqual(tested.status_code, 200)
+        self.assertTrue(tested.json()["ok"])
+
+        updated_provider = self.client.patch(
+            "/api/settings/provider/extra?token=test-token",
+            json={"base_url": "https://extra2.test/v1", "api_key": "", "api_key_env": "EXTRA_KEY"},
+        )
+        self.assertEqual(updated_provider.status_code, 200)
+        extra_profile = next(profile for profile in self.config.llm["profiles"] if profile.get("provider") == "extra")
+        self.assertEqual(extra_profile["base_url"], "https://extra2.test/v1")
+        self.assertEqual(extra_profile["api_key"], "extra-secret")
+        self.assertEqual(extra_profile["api_key_env"], "EXTRA_KEY")
+
+        created_profile = self.client.post(
+            "/api/settings/profile?token=test-token",
+            json={
+                "id": "test/second",
+                "label": "Second",
+                "provider": "test",
+                "base_url": "https://example.test/v1",
+                "model": "second",
+                "temperature": 0.1,
+                "max_tokens": 123,
+                "context_window": 456,
+            },
+        )
+        self.assertEqual(created_profile.status_code, 200)
+        self.assertTrue(any(profile.get("id") == "test/second" for profile in self.config.llm["profiles"]))
+
+        updated_profile = self.client.patch(
+            "/api/settings/profile/test%2Fsecond?token=test-token",
+            json={
+                "label": "Second Updated",
+                "provider": "test",
+                "base_url": "https://example.test/v1",
+                "model": "second",
+                "temperature": 0.3,
+                "max_tokens": 321,
+                "context_window": 654,
+            },
+        )
+        self.assertEqual(updated_profile.status_code, 200)
+        second = next(profile for profile in self.config.llm["profiles"] if profile.get("id") == "test/second")
+        self.assertEqual(second["label"], "Second Updated")
+        self.assertEqual(second["max_tokens"], 321)
+
+        deleted_profile = self.client.delete("/api/settings/profile/test%2Fsecond?token=test-token")
+        self.assertEqual(deleted_profile.status_code, 200)
+        self.assertFalse(any(profile.get("id") == "test/second" for profile in self.config.llm["profiles"]))
+
+        deleted_provider = self.client.delete("/api/settings/provider/extra?token=test-token")
+        self.assertEqual(deleted_provider.status_code, 200)
+        self.assertFalse(any(profile.get("provider") == "extra" for profile in self.config.llm["profiles"]))

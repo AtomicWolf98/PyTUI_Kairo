@@ -1,277 +1,611 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { EyeOff, KeyRound, RotateCw, Save } from "lucide-react";
-import { exportConfig, getConfig, getSkills, importConfig, patchConfig, reloadSkills, switchProfile } from "../api";
-import { Badge, EmptyState, Field, Modal, safeJson } from "../components";
+import {
+  Bot,
+  Download,
+  EyeOff,
+  KeyRound,
+  MonitorCog,
+  Plus,
+  RotateCw,
+  Save,
+  Settings2,
+  Sparkles,
+  Trash2,
+  UserRound,
+  Wrench
+} from "lucide-react";
+import {
+  createProfile,
+  createProvider,
+  deleteProfile,
+  deleteProvider,
+  exportConfig,
+  getSettings,
+  getSkills,
+  importConfig,
+  patchProfile,
+  patchProvider,
+  patchSettings,
+  reloadSkills,
+  switchProfile,
+  testProvider
+} from "../api";
+import {
+  Badge,
+  ConfirmDialog,
+  EmptyState,
+  Field,
+  Modal,
+  NumberField,
+  PasswordField,
+  SelectField,
+  SwitchField,
+  TextareaField,
+  TextField,
+  safeJson
+} from "../components";
 import { useRuntimeStore } from "../stores";
-import type { ConfigProfile, ConfigViewModel } from "../types";
+import type { ConfigProfile, ProviderSetting, SettingsViewModel, WorkspaceBookmark } from "../types";
 
-type SettingsTab = "profiles" | "keys" | "roles" | "appearance" | "assistant" | "workbench" | "skills" | "export";
+type SettingsTab =
+  | "general"
+  | "providers"
+  | "models"
+  | "roles"
+  | "assistant"
+  | "me"
+  | "workbench"
+  | "skills"
+  | "appearance"
+  | "export";
 
-const tabs: Array<{ id: SettingsTab; label: string }> = [
-  { id: "profiles", label: "Providers & Models" },
-  { id: "keys", label: "Keys" },
-  { id: "roles", label: "Roles" },
-  { id: "appearance", label: "Appearance" },
-  { id: "assistant", label: "Assistant" },
-  { id: "workbench", label: "Workbench" },
-  { id: "skills", label: "Skills" },
-  { id: "export", label: "Import / Export" }
+const tabs: Array<{ id: SettingsTab; label: string; icon: React.ComponentType<{ size?: number }> }> = [
+  { id: "general", label: "General", icon: Settings2 },
+  { id: "providers", label: "Providers", icon: KeyRound },
+  { id: "models", label: "Models", icon: Sparkles },
+  { id: "roles", label: "Roles", icon: Bot },
+  { id: "assistant", label: "Assistant", icon: Bot },
+  { id: "me", label: "Me", icon: UserRound },
+  { id: "workbench", label: "Workbench", icon: MonitorCog },
+  { id: "skills", label: "Skills", icon: Wrench },
+  { id: "appearance", label: "Appearance", icon: Sparkles },
+  { id: "export", label: "Import / Export", icon: Download }
 ];
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<SettingsTab>("profiles");
-  const config = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const [tab, setTab] = useState<SettingsTab>("general");
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
 
   return (
-    <div className="page settings-page">
-      <header className="page-header">
-        <div>
-          <span className="section-kicker">Settings</span>
-          <h2>Runtime Control Center</h2>
-        </div>
-        <Badge tone="info">{config.data?.llm.active_profile || "profile"}</Badge>
-      </header>
-
-      <div className="settings-layout">
-        <nav className="settings-tabs">
-          {tabs.map(item => (
-            <button className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}>
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        <section className="settings-panel">
-          {!config.data ? <EmptyState title="Loading settings" /> : <SettingsTabView tab={tab} config={config.data} />}
-        </section>
-      </div>
+    <div className="settings-stage">
+      <section className="settings-dialog">
+        <aside className="settings-sidebar">
+          <div className="settings-sidebar-title">
+            <span className="section-kicker">Kairo Desktop</span>
+            <strong>Settings</strong>
+            <small>{settings.data?.version || "0.3.2-preview"}</small>
+          </div>
+          <nav>
+            {tabs.map(item => {
+              const Icon = item.icon;
+              return (
+                <button className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}>
+                  <Icon size={17} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+        <main className="settings-content">
+          {!settings.data ? <EmptyState title="Loading settings" /> : <SettingsTabView tab={tab} settings={settings.data} />}
+        </main>
+      </section>
     </div>
   );
 }
 
-function SettingsTabView({ tab, config }: { tab: SettingsTab; config: ConfigViewModel }) {
-  if (tab === "keys") return <KeysPanel config={config} />;
-  if (tab === "roles") return <RolesPanel config={config} />;
-  if (tab === "appearance") return <AppearancePanel config={config} />;
-  if (tab === "assistant") return <AssistantPanel config={config} />;
-  if (tab === "workbench") return <WorkbenchPanel config={config} />;
-  if (tab === "skills") return <SkillsPanel />;
-  if (tab === "export") return <ImportExportPanel />;
-  return <ProfilesPanel config={config} />;
+function SettingsTabView({ tab, settings }: { tab: SettingsTab; settings: SettingsViewModel }) {
+  if (tab === "providers") return <ProvidersPanel settings={settings} />;
+  if (tab === "models") return <ModelsPanel settings={settings} />;
+  if (tab === "roles") return <RolesPanel settings={settings} />;
+  if (tab === "assistant") return <AssistantPanel settings={settings} />;
+  if (tab === "me") return <MePanel settings={settings} />;
+  if (tab === "workbench") return <WorkbenchPanel settings={settings} />;
+  if (tab === "skills") return <SkillsPanel settings={settings} />;
+  if (tab === "appearance") return <AppearancePanel settings={settings} />;
+  if (tab === "export") return <ImportExportPanel settings={settings} />;
+  return <GeneralPanel settings={settings} />;
 }
 
-function ProfilesPanel({ config }: { config: ConfigViewModel }) {
-  const [profiles, setProfiles] = useState<ConfigProfile[]>(config.llm.profiles || []);
+function useSaveSection(section: string) {
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
-
-  useEffect(() => setProfiles(config.llm.profiles || []), [config.llm.profiles]);
-
-  const save = useMutation({
-    mutationFn: () => patchConfig("llm", { active_profile: config.llm.active_profile, profiles }),
+  return useMutation({
+    mutationFn: (payload: Record<string, unknown>) => patchSettings(section, payload),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["config"] });
-      pushToast({ tone: "success", text: "Profiles saved." });
+      client.invalidateQueries();
+      pushToast({ tone: "success", text: "Settings saved." });
     },
     onError: error => pushToast({ tone: "error", text: String((error as Error).message || error) })
   });
+}
 
-  async function activate(id: string) {
+function GeneralPanel({ settings }: { settings: SettingsViewModel }) {
+  const [draft, setDraft] = useState(settings.general);
+  const save = useSaveSection("general");
+  useEffect(() => setDraft(settings.general), [settings.general]);
+  return (
+    <Panel title="General" kicker="Desktop behavior" action={<SaveButton onClick={() => save.mutate(draft)} />}>
+      <div className="form-grid">
+        <SelectField label="Language" value={draft.language} onChange={language => setDraft({ ...draft, language })} options={[
+          { value: "system", label: "System" },
+          { value: "zh-CN", label: "Simplified Chinese" },
+          { value: "en-US", label: "English" }
+        ]} />
+        <SelectField label="Shell" value={draft.shell_type} onChange={shell_type => setDraft({ ...draft, shell_type })} options={[
+          { value: "powershell", label: "PowerShell" },
+          { value: "cmd", label: "cmd.exe" },
+          { value: "bash", label: "Bash" }
+        ]} />
+        <SelectField label="Authorization" value={draft.authorization_level} onChange={authorization_level => setDraft({ ...draft, authorization_level })} options={[
+          { value: "manual", label: "Manual approvals" },
+          { value: "auto", label: "Auto approve safe tools" },
+          { value: "yolo", label: "YOLO" }
+        ]} />
+      </div>
+      <div className="settings-card-grid">
+        <SwitchField label="Plan mode" checked={draft.plan_mode} onChange={plan_mode => setDraft({ ...draft, plan_mode })} />
+        <SwitchField label="Thinking mode" checked={draft.thinking_mode} onChange={thinking_mode => setDraft({ ...draft, thinking_mode })} />
+        <SwitchField label="Open browser on launch" checked={draft.open_browser} onChange={open_browser => setDraft({ ...draft, open_browser })} />
+        <SwitchField label="Show thinking summaries" checked={draft.show_thinking} onChange={show_thinking => setDraft({ ...draft, show_thinking })} />
+        <SwitchField label="Expand tool output" checked={draft.expand_tools} onChange={expand_tools => setDraft({ ...draft, expand_tools })} />
+      </div>
+    </Panel>
+  );
+}
+
+function ProvidersPanel({ settings }: { settings: SettingsViewModel }) {
+  const [selected, setSelected] = useState(settings.providers[0]?.id || "");
+  const [creating, setCreating] = useState(false);
+  const provider = settings.providers.find(item => item.id === selected) || settings.providers[0];
+  useEffect(() => {
+    if (!selected && settings.providers[0]) setSelected(settings.providers[0].id);
+  }, [selected, settings.providers]);
+  return (
+    <Panel title="Providers" kicker="Base URLs and local keys" action={<button className="primary-button" onClick={() => setCreating(true)}><Plus size={16} /> Add provider</button>}>
+      <div className="split-editor">
+        <div className="list-panel">
+          {settings.providers.map(item => (
+            <button className={item.id === provider?.id ? "list-row active" : "list-row"} key={item.id} onClick={() => setSelected(item.id)}>
+              <strong>{item.name}</strong>
+              <span>{item.model_count} models · {item.api_key_source}</span>
+            </button>
+          ))}
+        </div>
+        {provider ? <ProviderEditor provider={provider} /> : <EmptyState title="No providers configured" />}
+      </div>
+      {creating ? <ProviderModal onClose={() => setCreating(false)} /> : null}
+    </Panel>
+  );
+}
+
+function ProviderEditor({ provider }: { provider: ProviderSetting }) {
+  const [draft, setDraft] = useState({ ...provider, api_key_input: "", api_key_env: "" });
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const client = useQueryClient();
+  const pushToast = useRuntimeStore(state => state.pushToast);
+  useEffect(() => setDraft({ ...provider, api_key_input: "", api_key_env: "" }), [provider]);
+
+  async function save(clear_key = false) {
     try {
-      const result = await switchProfile(id);
-      pushToast({ tone: result.ok ? "success" : "error", text: result.message });
+      await patchProvider(provider.id, {
+        name: draft.name,
+        base_url: draft.base_url,
+        api_key: clear_key ? "" : draft.api_key_input,
+        api_key_env: draft.api_key_env,
+        clear_key
+      });
       client.invalidateQueries();
+      pushToast({ tone: "success", text: clear_key ? "Provider key cleared." : "Provider saved." });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
+
+  async function test() {
+    try {
+      const result = await testProvider(provider.id);
+      pushToast({ tone: result.ok ? "success" : "warn", text: result.message });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
+
+  async function remove() {
+    try {
+      await deleteProvider(provider.id);
+      client.invalidateQueries();
+      pushToast({ tone: "success", text: "Provider removed." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
     }
   }
 
   return (
-    <div className="settings-stack">
+    <div className="editor-panel">
       <div className="surface-header">
-        <strong>OpenAI-compatible profiles</strong>
-        <button className="primary-button" onClick={() => save.mutate()}><Save size={16} /> Save profiles</button>
+        <div>
+          <strong>{provider.name}</strong>
+          <p>{provider.profiles.join(", ")}</p>
+        </div>
+        <Badge tone={provider.api_key_source.includes("missing") ? "warn" : "good"}>{provider.api_key_source}</Badge>
       </div>
-      {profiles.map((profile, index) => (
-        <ProfileEditor
-          key={profile.id}
-          profile={profile}
-          active={profile.id === config.llm.active_profile}
-          onActivate={() => activate(profile.id)}
-          onChange={next => setProfiles(profiles.map((item, i) => i === index ? next : item))}
+      <TextField label="Provider name" value={draft.name} onChange={name => setDraft({ ...draft, name })} />
+      <TextField label="Base URL" value={draft.base_url} onChange={base_url => setDraft({ ...draft, base_url })} />
+      <PasswordField label="New API key" value={draft.api_key_input} onChange={api_key_input => setDraft({ ...draft, api_key_input })} placeholder="Leave blank to keep existing key" hint={`Current key: ${provider.api_key || "missing"}`} />
+      <TextField label="API key env" value={draft.api_key_env} onChange={api_key_env => setDraft({ ...draft, api_key_env })} placeholder="KAIRO_PROVIDER_API_KEY" />
+      <div className="toolbar">
+        <button className="primary-button" onClick={() => save()}><Save size={16} /> Save</button>
+        <button className="secondary-button" onClick={test}>Test config</button>
+        <button className="secondary-button danger" onClick={() => save(true)}>Clear key</button>
+        <button className="icon-button danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /></button>
+      </div>
+      {confirmDelete ? (
+        <ConfirmDialog
+          title="Delete provider?"
+          detail="This removes every profile attached to this provider."
+          confirmLabel="Delete provider"
+          danger
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            setConfirmDelete(false);
+            void remove();
+          }}
         />
-      ))}
+      ) : null}
     </div>
   );
 }
 
-function ProfileEditor({
-  profile,
-  active,
-  onChange,
-  onActivate
-}: {
-  profile: ConfigProfile;
-  active: boolean;
-  onChange: (profile: ConfigProfile) => void;
-  onActivate: () => void;
-}) {
+function ProviderModal({ onClose }: { onClose: () => void }) {
+  const [draft, setDraft] = useState({
+    id: "",
+    base_url: "",
+    model: "",
+    label: "",
+    api_key: "",
+    context_window: 128000,
+    max_tokens: 4000,
+    temperature: 0.2
+  });
+  const client = useQueryClient();
+  const pushToast = useRuntimeStore(state => state.pushToast);
+  async function save() {
+    try {
+      await createProvider(draft);
+      client.invalidateQueries();
+      pushToast({ tone: "success", text: "Provider created." });
+      onClose();
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
   return (
-    <article className="profile-editor">
-      <div className="profile-editor-title">
+    <Modal title="Add provider" onClose={onClose}>
+      <div className="form-grid">
+        <TextField label="Provider id" value={draft.id} onChange={id => setDraft({ ...draft, id })} placeholder="openai" />
+        <TextField label="Base URL" value={draft.base_url} onChange={base_url => setDraft({ ...draft, base_url })} placeholder="https://api.openai.com/v1" />
+        <TextField label="Model" value={draft.model} onChange={model => setDraft({ ...draft, model })} placeholder="gpt-4.1" />
+        <TextField label="Label" value={draft.label} onChange={label => setDraft({ ...draft, label })} />
+        <PasswordField label="API key" value={draft.api_key} onChange={api_key => setDraft({ ...draft, api_key })} />
+        <NumberField label="Context window" value={draft.context_window} onChange={context_window => setDraft({ ...draft, context_window })} />
+        <NumberField label="Max tokens" value={draft.max_tokens} onChange={max_tokens => setDraft({ ...draft, max_tokens })} />
+        <NumberField label="Temperature" value={draft.temperature} step={0.1} onChange={temperature => setDraft({ ...draft, temperature })} />
+      </div>
+      <div className="toolbar modal-actions">
+        <button className="secondary-button" onClick={onClose}>Cancel</button>
+        <button className="primary-button" onClick={save} disabled={!draft.id.trim() || !draft.model.trim()}>Create provider</button>
+      </div>
+    </Modal>
+  );
+}
+
+function ModelsPanel({ settings }: { settings: SettingsViewModel }) {
+  const [selected, setSelected] = useState(settings.profiles[0]?.id || "");
+  const [creating, setCreating] = useState(false);
+  const profile = settings.profiles.find(item => item.id === selected) || settings.profiles[0];
+  useEffect(() => {
+    if (!selected && settings.profiles[0]) setSelected(settings.profiles[0].id);
+  }, [selected, settings.profiles]);
+  return (
+    <Panel title="Models" kicker="Profiles, budgets and model routes" action={<button className="primary-button" onClick={() => setCreating(true)}><Plus size={16} /> Add model</button>}>
+      <div className="split-editor">
+        <div className="list-panel">
+          {settings.profiles.map(item => (
+            <button className={item.id === profile?.id ? "list-row active" : "list-row"} key={item.id} onClick={() => setSelected(item.id)}>
+              <strong>{item.label || item.id}</strong>
+              <span>{item.provider} · {item.model}</span>
+            </button>
+          ))}
+        </div>
+        {profile ? <ModelProfileEditor profile={profile} active={profile.id === settings.raw.llm.active_profile} /> : <EmptyState title="No model profiles" />}
+      </div>
+      {creating ? <ProfileModal settings={settings} onClose={() => setCreating(false)} /> : null}
+    </Panel>
+  );
+}
+
+function ModelProfileEditor({ profile, active }: { profile: ConfigProfile; active: boolean }) {
+  const [draft, setDraft] = useState({ ...profile, api_key: "" });
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const client = useQueryClient();
+  const pushToast = useRuntimeStore(state => state.pushToast);
+  useEffect(() => setDraft({ ...profile, api_key: "" }), [profile]);
+
+  async function save() {
+    try {
+      await patchProfile(profile.id, draft);
+      client.invalidateQueries();
+      pushToast({ tone: "success", text: "Model profile saved." });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
+
+  async function activate() {
+    try {
+      const result = await switchProfile(profile.id);
+      client.invalidateQueries();
+      pushToast({ tone: result.ok ? "success" : "error", text: result.message });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
+
+  async function remove() {
+    try {
+      await deleteProfile(profile.id);
+      client.invalidateQueries();
+      pushToast({ tone: "success", text: "Profile deleted." });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
+
+  return (
+    <div className="editor-panel">
+      <div className="surface-header">
         <div>
           <strong>{profile.label || profile.id}</strong>
-          <p>{profile.provider} · {profile.model}</p>
+          <p>{profile.base_url}</p>
         </div>
-        <button className={active ? "secondary-button active" : "secondary-button"} onClick={onActivate}>
-          {active ? "Active" : "Use"}
-        </button>
+        <button className={active ? "secondary-button active" : "secondary-button"} onClick={activate}>{active ? "Active" : "Use"}</button>
       </div>
       <div className="form-grid">
-        <Field label="Label"><input value={profile.label || ""} onChange={event => onChange({ ...profile, label: event.target.value })} /></Field>
-        <Field label="Provider"><input value={profile.provider} onChange={event => onChange({ ...profile, provider: event.target.value })} /></Field>
-        <Field label="Base URL"><input value={profile.base_url} onChange={event => onChange({ ...profile, base_url: event.target.value })} /></Field>
-        <Field label="Model"><input value={profile.model} onChange={event => onChange({ ...profile, model: event.target.value })} /></Field>
-        <Field label="Temperature"><input type="number" step="0.1" value={profile.temperature} onChange={event => onChange({ ...profile, temperature: Number(event.target.value) })} /></Field>
-        <Field label="Max tokens"><input type="number" value={profile.max_tokens} onChange={event => onChange({ ...profile, max_tokens: Number(event.target.value) })} /></Field>
-        <Field label="Context window"><input type="number" value={profile.context_window} onChange={event => onChange({ ...profile, context_window: Number(event.target.value) })} /></Field>
-        <Field label="API key env"><input value={profile.api_key_env || ""} onChange={event => onChange({ ...profile, api_key_env: event.target.value })} /></Field>
+        <TextField label="Label" value={draft.label || ""} onChange={label => setDraft({ ...draft, label })} />
+        <TextField label="Provider" value={draft.provider} onChange={provider => setDraft({ ...draft, provider })} />
+        <TextField label="Base URL" value={draft.base_url} onChange={base_url => setDraft({ ...draft, base_url })} />
+        <TextField label="Model" value={draft.model} onChange={model => setDraft({ ...draft, model })} />
+        <NumberField label="Temperature" value={draft.temperature} step={0.1} onChange={temperature => setDraft({ ...draft, temperature })} />
+        <NumberField label="Max tokens" value={draft.max_tokens} onChange={max_tokens => setDraft({ ...draft, max_tokens })} />
+        <NumberField label="Context window" value={draft.context_window} onChange={context_window => setDraft({ ...draft, context_window })} />
+        <TextField label="API key env" value={draft.api_key_env || ""} onChange={api_key_env => setDraft({ ...draft, api_key_env })} />
+        <PasswordField label="Profile API key" value={draft.api_key || ""} onChange={api_key => setDraft({ ...draft, api_key })} placeholder="Leave blank to keep existing key" />
       </div>
-    </article>
-  );
-}
-
-function KeysPanel({ config }: { config: ConfigViewModel }) {
-  const [profileId, setProfileId] = useState(config.llm.active_profile || config.llm.profiles?.[0]?.id || "");
-  const [key, setKey] = useState("");
-  const client = useQueryClient();
-  const pushToast = useRuntimeStore(state => state.pushToast);
-  const profiles = config.profiles_summary || config.llm.profiles || [];
-
-  async function saveKey(action: "set" | "clear") {
-    if (action === "set" && !window.confirm("Write this API key to local config.json?")) return;
-    try {
-      await patchConfig("key", { profile_id: profileId, action, api_key: action === "set" ? key : "" });
-      setKey("");
-      client.invalidateQueries({ queryKey: ["config"] });
-      pushToast({ tone: "success", text: action === "set" ? "Key saved." : "Key cleared." });
-    } catch (error) {
-      pushToast({ tone: "error", text: String((error as Error).message || error) });
-    }
-  }
-
-  return (
-    <div className="settings-stack">
-      <div className="warning-box"><EyeOff size={16} /> Keys are masked everywhere except the local file you explicitly write.</div>
-      <Field label="Profile">
-        <select value={profileId} onChange={event => setProfileId(event.target.value)}>
-          {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.label || profile.id}</option>)}
-        </select>
-      </Field>
-      <Field label="New API key">
-        <input type="password" value={key} onChange={event => setKey(event.target.value)} placeholder="sk-..." />
-      </Field>
       <div className="toolbar">
-        <button className="primary-button" onClick={() => saveKey("set")} disabled={!profileId || !key}>
-          <KeyRound size={16} /> Save key
-        </button>
-        <button className="secondary-button danger" onClick={() => saveKey("clear")} disabled={!profileId}>Clear key</button>
+        <button className="primary-button" onClick={save}><Save size={16} /> Save profile</button>
+        <button className="icon-button danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /></button>
       </div>
-      <pre className="code-block">{safeJson(profiles.map(profile => ({ id: profile.id, key: profile.api_key, source: profile.api_key_source })))}</pre>
+      {confirmDelete ? (
+        <ConfirmDialog
+          title="Delete profile?"
+          detail="This removes the model profile and any role routes pointing at it."
+          confirmLabel="Delete profile"
+          danger
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            setConfirmDelete(false);
+            void remove();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-function RolesPanel({ config }: { config: ConfigViewModel }) {
-  const profiles = config.llm.profiles || [];
-  const [roles, setRoles] = useState<Record<string, string>>(config.model_roles || {});
-  const pushToast = useRuntimeStore(state => state.pushToast);
+function ProfileModal({ settings, onClose }: { settings: SettingsViewModel; onClose: () => void }) {
+  const provider = settings.providers[0]?.id || "";
+  const [draft, setDraft] = useState({
+    id: provider ? `${provider}/new-model` : "",
+    label: "",
+    provider,
+    base_url: settings.providers[0]?.base_url || "",
+    model: "",
+    api_key: "",
+    api_key_env: "",
+    temperature: 0.2,
+    max_tokens: 4000,
+    context_window: 128000
+  });
   const client = useQueryClient();
-  const names = ["chat", "plan", "compress", "fast"];
-
+  const pushToast = useRuntimeStore(state => state.pushToast);
   async function save() {
     try {
-      await patchConfig("roles", roles);
-      client.invalidateQueries({ queryKey: ["config"] });
-      pushToast({ tone: "success", text: "Roles saved." });
+      await createProfile(draft);
+      client.invalidateQueries();
+      pushToast({ tone: "success", text: "Profile created." });
+      onClose();
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
     }
   }
-
   return (
-    <div className="settings-stack">
-      {names.map(role => (
-        <Field label={role} key={role}>
-          <select value={roles[role] || ""} onChange={event => setRoles({ ...roles, [role]: event.target.value })}>
-            <option value="">Default</option>
-            {profiles.map(profile => <option value={profile.id} key={profile.id}>{profile.label || profile.id}</option>)}
-          </select>
-        </Field>
-      ))}
-      <button className="primary-button" onClick={save}><Save size={16} /> Save roles</button>
-    </div>
-  );
-}
-
-function AppearancePanel({ config }: { config: ConfigViewModel }) {
-  return <JsonSection section="ui" initial={config.ui || {}} title="Appearance and TUI behavior" />;
-}
-
-function AssistantPanel({ config }: { config: ConfigViewModel }) {
-  const initial = {
-    authorization_level: config.authorization_level || "manual",
-    plan_mode: Boolean(config.plan_mode),
-    thinking_mode: Boolean(config.thinking_mode),
-    context_management: config.context_management || {}
-  };
-  return <JsonSection section="assistant" initial={initial} title="Assistant behavior" />;
-}
-
-function WorkbenchPanel({ config }: { config: ConfigViewModel }) {
-  const initial = {
-    workspace_root: config.workspace_root || ".",
-    skills_dir: config.skills_dir || "./skills",
-    shell_type: config.shell_type || "cmd",
-    workspace_bookmarks: config.workspace_bookmarks || []
-  };
-  return <JsonSection section="workbench" initial={initial} title="Workbench" />;
-}
-
-function JsonSection({ section, initial, title }: { section: string; initial: Record<string, unknown>; title: string }) {
-  const [text, setText] = useState(() => safeJson(initial));
-  const pushToast = useRuntimeStore(state => state.pushToast);
-  const client = useQueryClient();
-
-  useEffect(() => setText(safeJson(initial)), [initial]);
-
-  async function save() {
-    try {
-      const payload = JSON.parse(text) as Record<string, unknown>;
-      await patchConfig(section, payload);
-      client.invalidateQueries({ queryKey: ["config"] });
-      pushToast({ tone: "success", text: `${title} saved.` });
-    } catch (error) {
-      pushToast({ tone: "error", text: String((error as Error).message || error) });
-    }
-  }
-
-  return (
-    <div className="settings-stack">
-      <div className="surface-header">
-        <strong>{title}</strong>
-        <button className="primary-button" onClick={save}><Save size={16} /> Save</button>
+    <Modal title="Add model profile" onClose={onClose}>
+      <div className="form-grid">
+        <TextField label="Profile id" value={draft.id} onChange={id => setDraft({ ...draft, id })} />
+        <TextField label="Label" value={draft.label} onChange={label => setDraft({ ...draft, label })} />
+        <SelectField label="Provider" value={draft.provider} onChange={nextProvider => {
+          const matched = settings.providers.find(item => item.id === nextProvider);
+          setDraft({ ...draft, provider: nextProvider, base_url: matched?.base_url || draft.base_url });
+        }} options={settings.providers.map(item => ({ value: item.id, label: item.name }))} />
+        <TextField label="Base URL" value={draft.base_url} onChange={base_url => setDraft({ ...draft, base_url })} />
+        <TextField label="Model" value={draft.model} onChange={model => setDraft({ ...draft, model })} />
+        <PasswordField label="API key" value={draft.api_key} onChange={api_key => setDraft({ ...draft, api_key })} />
+        <NumberField label="Context window" value={draft.context_window} onChange={context_window => setDraft({ ...draft, context_window })} />
+        <NumberField label="Max tokens" value={draft.max_tokens} onChange={max_tokens => setDraft({ ...draft, max_tokens })} />
       </div>
-      <textarea className="json-editor" value={text} onChange={event => setText(event.target.value)} />
+      <div className="toolbar modal-actions">
+        <button className="secondary-button" onClick={onClose}>Cancel</button>
+        <button className="primary-button" onClick={save} disabled={!draft.id.trim() || !draft.model.trim()}>Create profile</button>
+      </div>
+    </Modal>
+  );
+}
+
+function RolesPanel({ settings }: { settings: SettingsViewModel }) {
+  const [roles, setRoles] = useState<Record<string, string>>(settings.roles || {});
+  const save = useSaveSection("roles");
+  useEffect(() => setRoles(settings.roles || {}), [settings.roles]);
+  const roleNames = ["chat", "plan", "compress", "fast"];
+  return (
+    <Panel title="Roles" kicker="Route internal tasks to dedicated profiles" action={<SaveButton onClick={() => save.mutate(roles)} />}>
+      <div className="role-grid">
+        {roleNames.map(role => (
+          <SelectField
+            key={role}
+            label={role}
+            value={roles[role] || ""}
+            onChange={value => setRoles({ ...roles, [role]: value })}
+            options={[{ value: "", label: "Default chat profile" }, ...settings.profiles.map(profile => ({ value: profile.id, label: profile.label || profile.id }))]}
+          />
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function AssistantPanel({ settings }: { settings: SettingsViewModel }) {
+  const [draft, setDraft] = useState(settings.assistant);
+  const save = useSaveSection("assistant");
+  useEffect(() => setDraft(settings.assistant), [settings.assistant]);
+  return (
+    <Panel title="Assistant" kicker="Kai identity, behavior and context policy" action={<SaveButton onClick={() => save.mutate(draft)} />}>
+      <div className="assistant-hero">
+        <div className="avatar-stack"><span>K</span><span>A</span><span>I</span></div>
+        <TextField label="Assistant name" value={draft.name} onChange={name => setDraft({ ...draft, name })} />
+      </div>
+      <TextareaField label="System prompt notes" value={draft.system_prompt} onChange={system_prompt => setDraft({ ...draft, system_prompt })} hint="Stored in config for future prompt customization; strict providers still receive the main system message first." />
+      <div className="form-grid">
+        <SelectField label="Default mode" value={draft.default_mode} onChange={default_mode => setDraft({ ...draft, default_mode })} options={[
+          { value: "chat", label: "Chat" },
+          { value: "plan", label: "Plan" },
+          { value: "build", label: "Build" }
+        ]} />
+        <SelectField label="Authorization" value={draft.authorization_level} onChange={authorization_level => setDraft({ ...draft, authorization_level })} options={[
+          { value: "manual", label: "Manual" },
+          { value: "auto", label: "Auto" },
+          { value: "yolo", label: "YOLO" }
+        ]} />
+      </div>
+      <div className="settings-card-grid">
+        <SwitchField label="Plan mode" checked={draft.plan_mode} onChange={plan_mode => setDraft({ ...draft, plan_mode })} />
+        <SwitchField label="Thinking mode" checked={draft.thinking_mode} onChange={thinking_mode => setDraft({ ...draft, thinking_mode })} />
+      </div>
+      <ContextPolicyEditor value={draft.context_management} onChange={context_management => setDraft({ ...draft, context_management })} />
+    </Panel>
+  );
+}
+
+function ContextPolicyEditor({ value, onChange }: { value: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void }) {
+  const v = {
+    enabled: Boolean(value.enabled ?? true),
+    auto_compress: Boolean(value.auto_compress ?? true),
+    trigger_percent: Number(value.trigger_percent ?? 85),
+    target_percent: Number(value.target_percent ?? 60),
+    preserve_recent_turns: Number(value.preserve_recent_turns ?? 4)
+  };
+  return (
+    <div className="surface subtle">
+      <div className="surface-header"><strong>Context management</strong></div>
+      <div className="settings-card-grid">
+        <SwitchField label="Enabled" checked={v.enabled} onChange={enabled => onChange({ ...v, enabled })} />
+        <SwitchField label="Auto compress" checked={v.auto_compress} onChange={auto_compress => onChange({ ...v, auto_compress })} />
+      </div>
+      <div className="form-grid">
+        <NumberField label="Trigger percent" value={v.trigger_percent} onChange={trigger_percent => onChange({ ...v, trigger_percent })} />
+        <NumberField label="Target percent" value={v.target_percent} onChange={target_percent => onChange({ ...v, target_percent })} />
+        <NumberField label="Preserve turns" value={v.preserve_recent_turns} onChange={preserve_recent_turns => onChange({ ...v, preserve_recent_turns })} />
+      </div>
     </div>
   );
 }
 
-function SkillsPanel() {
+function MePanel({ settings }: { settings: SettingsViewModel }) {
+  const [draft, setDraft] = useState(settings.user);
+  const save = useSaveSection("user");
+  useEffect(() => setDraft(settings.user), [settings.user]);
+  return (
+    <Panel title="Me" kicker="Local identity and preferences" action={<SaveButton onClick={() => save.mutate(draft)} />}>
+      <div className="form-grid">
+        <TextField label="Your name" value={draft.name} onChange={name => setDraft({ ...draft, name })} />
+        <TextField label="Timezone" value={draft.timezone} onChange={timezone => setDraft({ ...draft, timezone })} placeholder="Asia/Shanghai" />
+      </div>
+      <TextareaField label="Preferences" value={draft.preferences} onChange={preferences => setDraft({ ...draft, preferences })} />
+      <TextareaField label="Default instruction" value={draft.default_instruction} onChange={default_instruction => setDraft({ ...draft, default_instruction })} />
+    </Panel>
+  );
+}
+
+function WorkbenchPanel({ settings }: { settings: SettingsViewModel }) {
+  const [draft, setDraft] = useState(settings.workbench);
+  const save = useSaveSection("workbench");
+  useEffect(() => setDraft(settings.workbench), [settings.workbench]);
+  function setBookmark(index: number, patch: Partial<WorkspaceBookmark>) {
+    setDraft({
+      ...draft,
+      workspace_bookmarks: draft.workspace_bookmarks.map((item, i) => i === index ? { ...item, ...patch } : item)
+    });
+  }
+  return (
+    <Panel title="Workbench" kicker="Project roots, scans and file review" action={<SaveButton onClick={() => save.mutate(draft)} />}>
+      <div className="form-grid">
+        <TextField label="Workspace root" value={draft.workspace_root} onChange={workspace_root => setDraft({ ...draft, workspace_root })} />
+        <TextField label="Skills directory" value={draft.skills_dir} onChange={skills_dir => setDraft({ ...draft, skills_dir })} />
+        <SelectField label="Shell" value={draft.shell_type} onChange={shell_type => setDraft({ ...draft, shell_type })} options={[
+          { value: "powershell", label: "PowerShell" },
+          { value: "cmd", label: "cmd.exe" },
+          { value: "bash", label: "Bash" }
+        ]} />
+        <NumberField label="Max files" value={draft.workspace_max_files} onChange={workspace_max_files => setDraft({ ...draft, workspace_max_files })} />
+        <NumberField label="Diff max bytes" value={draft.workspace_diff_max_bytes} onChange={workspace_diff_max_bytes => setDraft({ ...draft, workspace_diff_max_bytes })} />
+        <NumberField label="Refresh seconds" value={draft.workspace_refresh_seconds} step={0.5} onChange={workspace_refresh_seconds => setDraft({ ...draft, workspace_refresh_seconds })} />
+      </div>
+      <div className="surface subtle">
+        <div className="surface-header">
+          <strong>Bookmarks</strong>
+          <button className="secondary-button" onClick={() => setDraft({ ...draft, workspace_bookmarks: [...draft.workspace_bookmarks, { name: "New", path: "." }] })}><Plus size={14} /> Add</button>
+        </div>
+        {draft.workspace_bookmarks.map((bookmark, index) => (
+          <div className="bookmark-row" key={`${bookmark.name}-${index}`}>
+            <input value={bookmark.name} onChange={event => setBookmark(index, { name: event.target.value })} />
+            <input value={bookmark.path} onChange={event => setBookmark(index, { path: event.target.value })} />
+            <button className="icon-button danger" onClick={() => setDraft({ ...draft, workspace_bookmarks: draft.workspace_bookmarks.filter((_, i) => i !== index) })}><Trash2 size={15} /></button>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function SkillsPanel({ settings }: { settings: SettingsViewModel }) {
+  const [draft, setDraft] = useState(settings.skills);
   const skills = useQuery({ queryKey: ["skills"], queryFn: getSkills });
+  const save = useSaveSection("skills");
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
-
+  useEffect(() => setDraft(settings.skills), [settings.skills]);
   async function reload() {
     try {
       await reloadSkills();
@@ -281,10 +615,12 @@ function SkillsPanel() {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
     }
   }
-
   return (
-    <div className="settings-stack">
-      <button className="secondary-button" onClick={reload}><RotateCw size={16} /> Reload skills</button>
+    <Panel title="Skills" kicker="Installed tools and skill policy" action={<><button className="secondary-button" onClick={reload}><RotateCw size={16} /> Reload</button><SaveButton onClick={() => save.mutate(draft)} /></>}>
+      <div className="form-grid">
+        <TextField label="Skills directory" value={draft.skills_dir} onChange={skills_dir => setDraft({ ...draft, skills_dir })} />
+        <SwitchField label="Require skill hash" checked={draft.require_hash} onChange={require_hash => setDraft({ ...draft, require_hash })} />
+      </div>
       <div className="skills-grid">
         {(skills.data?.tools || []).map(tool => (
           <article className="skill-card" key={tool.name}>
@@ -294,21 +630,59 @@ function SkillsPanel() {
           </article>
         ))}
       </div>
-    </div>
+    </Panel>
   );
 }
 
-function ImportExportPanel() {
+function AppearancePanel({ settings }: { settings: SettingsViewModel }) {
+  const [draft, setDraft] = useState(settings.appearance);
+  const save = useSaveSection("appearance");
+  useEffect(() => setDraft(settings.appearance), [settings.appearance]);
+  return (
+    <Panel title="Appearance" kicker="Theme, density and animation" action={<SaveButton onClick={() => save.mutate(draft)} />}>
+      <div className="theme-preview">
+        <div className="kai-preview">K</div>
+        <div>
+          <strong>Kairo Graphical Workbench</strong>
+          <p>Dense enough for engineering, quiet enough for long sessions.</p>
+        </div>
+      </div>
+      <div className="form-grid">
+        <SelectField label="Web theme" value={draft.theme} onChange={theme => setDraft({ ...draft, theme })} options={[
+          { value: "system", label: "System" },
+          { value: "kairo-dark", label: "Kairo dark" },
+          { value: "kairo-light", label: "Kairo light" }
+        ]} />
+        <SelectField label="Density" value={draft.density} onChange={density => setDraft({ ...draft, density })} options={[
+          { value: "comfortable", label: "Comfortable" },
+          { value: "compact", label: "Compact" },
+          { value: "spacious", label: "Spacious" }
+        ]} />
+        <NumberField label="Font size" value={draft.font_size} onChange={font_size => setDraft({ ...draft, font_size })} />
+        <SelectField label="Animation" value={draft.animation} onChange={animation => setDraft({ ...draft, animation })} options={[
+          { value: "full", label: "Full" },
+          { value: "reduced", label: "Reduced" },
+          { value: "off", label: "Off" }
+        ]} />
+      </div>
+      <div className="settings-card-grid">
+        <SwitchField label="Kai mascot" checked={draft.mascot} onChange={mascot => setDraft({ ...draft, mascot })} />
+        <SwitchField label="Reduced motion" checked={draft.reduced_motion} onChange={reduced_motion => setDraft({ ...draft, reduced_motion })} />
+      </div>
+    </Panel>
+  );
+}
+
+function ImportExportPanel({ settings }: { settings: SettingsViewModel }) {
   const [exported, setExported] = useState("");
   const [importPath, setImportPath] = useState("");
   const [confirmKeys, setConfirmKeys] = useState(false);
-  const [showKeysModal, setShowKeysModal] = useState(false);
   const pushToast = useRuntimeStore(state => state.pushToast);
   const client = useQueryClient();
 
   async function doExport(withKeys: boolean) {
     if (withKeys && !confirmKeys) {
-      setShowKeysModal(true);
+      pushToast({ tone: "warn", text: "Enable the confirmation checkbox before exporting keys." });
       return;
     }
     try {
@@ -320,10 +694,9 @@ function ImportExportPanel() {
   }
 
   async function doImport() {
-    if (!window.confirm("Import this config file and create a backup of the current config?")) return;
     try {
       await importConfig(importPath);
-      client.invalidateQueries({ queryKey: ["config"] });
+      client.invalidateQueries();
       pushToast({ tone: "success", text: "Config imported." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -331,9 +704,11 @@ function ImportExportPanel() {
   }
 
   return (
-    <div className="settings-stack">
+    <Panel title="Import / Export" kicker="Redacted by default" action={<button className="secondary-button" onClick={() => setExported(safeJson(settings.raw))}>Show current redacted config</button>}>
+      <div className="warning-box"><EyeOff size={16} /> Exports are redacted unless you explicitly confirm secret export.</div>
       <div className="toolbar">
         <button className="secondary-button" onClick={() => doExport(false)}>Export redacted</button>
+        <label className="checkbox-row"><input type="checkbox" checked={confirmKeys} onChange={event => setConfirmKeys(event.target.checked)} /> I understand this includes API keys.</label>
         <button className="secondary-button danger" onClick={() => doExport(true)}>Export with keys</button>
       </div>
       <Field label="Import path">
@@ -342,22 +717,26 @@ function ImportExportPanel() {
           <button className="primary-button" onClick={doImport} disabled={!importPath.trim()}>Import</button>
         </div>
       </Field>
-      {exported ? <textarea className="json-editor" value={exported} onChange={event => setExported(event.target.value)} /> : null}
-      {showKeysModal ? (
-        <Modal title="Export secrets?" onClose={() => setShowKeysModal(false)}>
-          <div className="settings-stack">
-            <p>This export will include inline API keys. Keep it local and do not commit it.</p>
-            <label className="checkbox-row">
-              <input type="checkbox" checked={confirmKeys} onChange={event => setConfirmKeys(event.target.checked)} />
-              I understand this includes secrets.
-            </label>
-            <button className="primary-button danger" disabled={!confirmKeys} onClick={() => {
-              setShowKeysModal(false);
-              void doExport(true);
-            }}>Export with keys</button>
-          </div>
-        </Modal>
-      ) : null}
-    </div>
+      {exported ? <textarea className="json-editor advanced" readOnly value={exported} /> : null}
+    </Panel>
   );
+}
+
+function Panel({ title, kicker, action, children }: { title: string; kicker: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="settings-section">
+      <header className="page-header">
+        <div>
+          <span className="section-kicker">{kicker}</span>
+          <h2>{title}</h2>
+        </div>
+        <div className="toolbar">{action}</div>
+      </header>
+      <div className="settings-stack">{children}</div>
+    </section>
+  );
+}
+
+function SaveButton({ onClick }: { onClick: () => void }) {
+  return <button className="primary-button" onClick={onClick}><Save size={16} /> Save</button>;
 }

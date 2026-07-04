@@ -1,6 +1,6 @@
 ﻿# Kairo Documentation / Kairo 文档
 
-Current version / 当前版本：**0.3.1-preview**
+Current version / 当前版本：**0.3.2-preview**
 
 WebUI preview / WebUI 预览：`kairo --web`
 

@@ -49,6 +49,160 @@ export function Field({
   );
 }
 
+export function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <input value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
+export function PasswordField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <input type="password" value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
+export function TextareaField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <textarea value={value} placeholder={placeholder} onChange={event => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
+export function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  step = 1,
+  hint
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  step?: number;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <input type="number" value={value} min={min} step={step} onChange={event => onChange(Number(event.target.value))} />
+    </Field>
+  );
+}
+
+export function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+  hint
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <select value={value} onChange={event => onChange(event.target.value)}>
+        {options.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+      </select>
+    </Field>
+  );
+}
+
+export function SwitchField({
+  label,
+  checked,
+  onChange,
+  hint
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  hint?: string;
+}) {
+  return (
+    <label className="switch-field">
+      <span>
+        <strong>{label}</strong>
+        {hint ? <small>{hint}</small> : null}
+      </span>
+      <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} />
+    </label>
+  );
+}
+
+export function ConfirmDialog({
+  title,
+  detail,
+  confirmLabel = "Confirm",
+  danger = false,
+  onConfirm,
+  onClose
+}: {
+  title: string;
+  detail: string;
+  confirmLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="settings-stack">
+        <p>{detail}</p>
+        <div className="toolbar">
+          <button className="secondary-button" onClick={onClose}>Cancel</button>
+          <button className={danger ? "primary-button danger" : "primary-button"} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Modal({
   title,
   children,

@@ -3,6 +3,7 @@ import type {
   DoctorResult,
   RuntimeStatus,
   SessionsResponse,
+  SettingsViewModel,
   SkillList,
   WorkspaceBookmark,
   WorkspaceFilePreview,
@@ -42,6 +43,63 @@ export function getStatus() {
 
 export function getConfig() {
   return request<ConfigViewModel>("/api/config");
+}
+
+export function getSettings() {
+  return request<SettingsViewModel>("/api/settings/view");
+}
+
+export function patchSettings(section: string, payload: JsonValue) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>(`/api/settings/${encodeURIComponent(section)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function createProvider(payload: JsonValue) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>("/api/settings/provider", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function patchProvider(providerId: string, payload: JsonValue) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>(`/api/settings/provider/${encodeURIComponent(providerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteProvider(providerId: string) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>(`/api/settings/provider/${encodeURIComponent(providerId)}`, {
+    method: "DELETE"
+  });
+}
+
+export function testProvider(providerId: string) {
+  return request<{ ok: boolean; status: string; message: string }>(`/api/settings/provider/${encodeURIComponent(providerId)}/test`, {
+    method: "POST"
+  });
+}
+
+export function createProfile(payload: JsonValue) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>("/api/settings/profile", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function patchProfile(profileId: string, payload: JsonValue) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>(`/api/settings/profile/${encodeURIComponent(profileId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteProfile(profileId: string) {
+  return request<{ ok: boolean; settings: SettingsViewModel }>(`/api/settings/profile/${encodeURIComponent(profileId)}`, {
+    method: "DELETE"
+  });
 }
 
 export function patchConfig(section: string, payload: JsonValue) {

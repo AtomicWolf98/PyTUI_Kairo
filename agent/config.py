@@ -814,7 +814,7 @@ class Config:
         self._load_error = None
         if self.config_path.exists():
             try:
-                with open(self.config_path, "r", encoding="utf-8") as handle:
+                with open(self.config_path, "r", encoding="utf-8-sig") as handle:
                     data = json.load(handle) or {}
             except Exception as exc:
                 self._load_error = exc

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { ChatMessageView, RuntimeEvent, RuntimeStatus, ToolApproval, ToolRunView } from "./types";
 
-type Toast = { id: string; tone: "info" | "success" | "error"; text: string };
+type Toast = { id: string; tone: "info" | "success" | "warn" | "error"; text: string };
 
 type RuntimeState = {
   status: RuntimeStatus | null;

@@ -1,4 +1,4 @@
-"""UI-neutral runtime and service layer for Kairo 0.3.1-preview."""
+"""UI-neutral runtime and service layer for Kairo 0.3.2-preview."""
 from __future__ import annotations
 
 import copy
@@ -225,6 +225,92 @@ class ConfigService:
         ]
         return data
 
+    def settings_view(self) -> Dict[str, Any]:
+        config = self.runtime.config
+        redacted = self.redacted()
+        profiles = redacted.get("profiles_summary", [])
+        provider_map: Dict[str, Dict[str, Any]] = {}
+        for profile in profiles:
+            provider_id = str(profile.get("provider") or profile.get("id", "").split("/", 1)[0]).strip()
+            if not provider_id:
+                provider_id = str(profile.get("id", "provider")).strip()
+            entry = provider_map.setdefault(
+                provider_id,
+                {
+                    "id": provider_id,
+                    "name": provider_id,
+                    "base_url": profile.get("base_url", ""),
+                    "api_key": profile.get("api_key", ""),
+                    "api_key_source": profile.get("api_key_source", "missing"),
+                    "model_count": 0,
+                    "profiles": [],
+                },
+            )
+            entry["model_count"] += 1
+            entry["profiles"].append(profile.get("id", ""))
+            if not entry.get("base_url") and profile.get("base_url"):
+                entry["base_url"] = profile.get("base_url", "")
+            if entry.get("api_key_source") in ("missing", "none") and profile.get("api_key_source"):
+                entry["api_key"] = profile.get("api_key", "")
+                entry["api_key_source"] = profile.get("api_key_source", "")
+        assistant_extra = config._extra_fields.get("assistant", {}) if isinstance(config._extra_fields.get("assistant"), dict) else {}
+        user_extra = config._extra_fields.get("user", {}) if isinstance(config._extra_fields.get("user"), dict) else {}
+        appearance_extra = config._extra_fields.get("appearance", {}) if isinstance(config._extra_fields.get("appearance"), dict) else {}
+        return {
+            "version": _package_version(),
+            "general": {
+                "language": appearance_extra.get("language", "system"),
+                "shell_type": config.shell_type,
+                "authorization_level": config.authorization_level,
+                "plan_mode": config.plan_mode,
+                "thinking_mode": config.thinking_mode,
+                "open_browser": bool(config.web.get("open_browser", True)),
+                "show_thinking": bool(assistant_extra.get("show_thinking", config.thinking_mode)),
+                "expand_tools": bool(assistant_extra.get("expand_tools", False)),
+            },
+            "providers": list(provider_map.values()),
+            "profiles": profiles,
+            "roles": dict(config.model_roles),
+            "assistant": {
+                "name": assistant_extra.get("name", "Kai"),
+                "system_prompt": assistant_extra.get("system_prompt", ""),
+                "default_mode": assistant_extra.get("default_mode", "chat"),
+                "authorization_level": config.authorization_level,
+                "plan_mode": config.plan_mode,
+                "thinking_mode": config.thinking_mode,
+                "context_management": copy.deepcopy(config.context_management_defaults),
+            },
+            "user": {
+                "name": user_extra.get("name", ""),
+                "timezone": user_extra.get("timezone", ""),
+                "preferences": user_extra.get("preferences", ""),
+                "default_instruction": user_extra.get("default_instruction", ""),
+            },
+            "workbench": {
+                "workspace_root": config.workspace_root,
+                "skills_dir": config.skills_dir,
+                "shell_type": config.shell_type,
+                "workspace_bookmarks": list(config.workspace_bookmarks),
+                "workspace_max_files": config.ui.get("workspace_max_files", 2000),
+                "workspace_diff_max_bytes": config.ui.get("workspace_diff_max_bytes", 204800),
+                "workspace_refresh_seconds": config.ui.get("workspace_refresh_seconds", 2.0),
+            },
+            "appearance": {
+                "theme": config.web.get("theme", config.ui.get("theme", "kairo-dark")),
+                "tui_theme": config.ui.get("theme", "kairo-dark"),
+                "density": appearance_extra.get("density", "comfortable"),
+                "font_size": int(appearance_extra.get("font_size", 14)),
+                "animation": config.ui.get("animation", "full"),
+                "mascot": bool(config.ui.get("mascot", True)),
+                "reduced_motion": bool(config.ui.get("reduced_motion", False)),
+            },
+            "skills": {
+                "skills_dir": config.skills_dir,
+                "require_hash": bool(config.policy.get("skills", {}).get("require_hash", False)),
+            },
+            "raw": redacted,
+        }
+
     def update(self, section: str, values: Dict[str, Any]) -> Dict[str, Any]:
         config = self.runtime.config
         draft = ConfigDraft.from_config(config)
@@ -326,6 +412,177 @@ class ConfigService:
         self.runtime.events.emit("config_updated", {"section": section})
         return {"ok": True, "config": self.redacted()}
 
+    def update_settings(self, section: str, values: Dict[str, Any]) -> Dict[str, Any]:
+        section = (section or "").strip().lower()
+        values = values or {}
+        draft = ConfigDraft.from_config(self.runtime.config)
+        if section == "general":
+            if "language" in values:
+                appearance = dict(draft.extra_fields.get("appearance", {}))
+                appearance["language"] = str(values.get("language") or "system")
+                draft.extra_fields["appearance"] = appearance
+            if "shell_type" in values:
+                draft.shell_type = str(values["shell_type"])
+            if "authorization_level" in values:
+                draft.authorization_level = str(values["authorization_level"])
+            if "plan_mode" in values:
+                draft.plan_mode = bool(values["plan_mode"])
+            if "thinking_mode" in values:
+                draft.thinking_mode = bool(values["thinking_mode"])
+            if "open_browser" in values:
+                draft.web["open_browser"] = bool(values["open_browser"])
+            assistant = dict(draft.extra_fields.get("assistant", {}))
+            if "show_thinking" in values:
+                assistant["show_thinking"] = bool(values["show_thinking"])
+            if "expand_tools" in values:
+                assistant["expand_tools"] = bool(values["expand_tools"])
+            if assistant:
+                draft.extra_fields["assistant"] = assistant
+        elif section == "roles":
+            draft.model_roles = {str(k): str(v) for k, v in values.items() if str(k).strip() and str(v).strip()}
+        elif section == "assistant":
+            assistant = dict(draft.extra_fields.get("assistant", {}))
+            for key in ("name", "system_prompt", "default_mode"):
+                if key in values:
+                    assistant[key] = str(values.get(key, ""))
+            if "authorization_level" in values:
+                draft.authorization_level = str(values["authorization_level"])
+            if "plan_mode" in values:
+                draft.plan_mode = bool(values["plan_mode"])
+            if "thinking_mode" in values:
+                draft.thinking_mode = bool(values["thinking_mode"])
+            if isinstance(values.get("context_management"), dict):
+                draft.context_management_defaults.update(values["context_management"])
+            draft.extra_fields["assistant"] = assistant
+        elif section == "user":
+            draft.extra_fields["user"] = {
+                "name": str(values.get("name", "")),
+                "timezone": str(values.get("timezone", "")),
+                "preferences": str(values.get("preferences", "")),
+                "default_instruction": str(values.get("default_instruction", "")),
+            }
+        elif section == "workbench":
+            if "workspace_root" in values:
+                draft.workspace_root = str(values["workspace_root"])
+            if "skills_dir" in values:
+                draft.skills_dir = str(values["skills_dir"])
+            if "shell_type" in values:
+                draft.shell_type = str(values["shell_type"])
+            if isinstance(values.get("workspace_bookmarks"), list):
+                draft.workspace_bookmarks = list(values["workspace_bookmarks"])
+            for key in ("workspace_max_files", "workspace_diff_max_bytes"):
+                if key in values:
+                    draft.ui[key] = int(values[key])
+            if "workspace_refresh_seconds" in values:
+                draft.ui["workspace_refresh_seconds"] = float(values["workspace_refresh_seconds"])
+        elif section == "appearance":
+            appearance = dict(draft.extra_fields.get("appearance", {}))
+            if "theme" in values:
+                draft.web["theme"] = str(values["theme"])
+            if "tui_theme" in values:
+                draft.ui["theme"] = str(values["tui_theme"])
+            for key in ("density", "font_size"):
+                if key in values:
+                    appearance[key] = values[key]
+            if "animation" in values:
+                draft.ui["animation"] = str(values["animation"])
+            if "mascot" in values:
+                draft.ui["mascot"] = bool(values["mascot"])
+            if "reduced_motion" in values:
+                draft.ui["reduced_motion"] = bool(values["reduced_motion"])
+            draft.extra_fields["appearance"] = appearance
+        elif section == "skills":
+            if "skills_dir" in values:
+                draft.skills_dir = str(values["skills_dir"])
+            if "require_hash" in values:
+                draft.policy.setdefault("skills", {})["require_hash"] = bool(values["require_hash"])
+        else:
+            return {"ok": False, "error": f"Unsupported settings section: {section}"}
+        return self._commit_draft(draft, f"settings:{section}", view=True)
+
+    def save_provider(self, provider_id: str, values: Dict[str, Any], *, create: bool = False) -> Dict[str, Any]:
+        provider_id = (provider_id or values.get("id") or values.get("name") or "").strip()
+        if not provider_id:
+            return {"ok": False, "error": "Provider id is required."}
+        draft = ConfigDraft.from_config(self.runtime.config)
+        api_key = values.get("api_key")
+        if isinstance(api_key, str) and (not api_key.strip() or is_masked_key(api_key)):
+            api_key = None
+        if values.get("clear_key"):
+            api_key = KEY_CLEAR
+        if create:
+            model_name = str(values.get("model") or f"{provider_id}-model").strip()
+            ok = draft.add_profile(
+                id=str(values.get("profile_id") or f"{provider_id}/{model_name}"),
+                label=str(values.get("label") or model_name),
+                provider=provider_id,
+                base_url=str(values.get("base_url", "")),
+                api_key=api_key if isinstance(api_key, str) else "",
+                api_key_env=str(values.get("api_key_env", "")),
+                model=model_name,
+                temperature=float(values.get("temperature", draft.llm.get("defaults", {}).get("temperature", 0.2))),
+                max_tokens=int(values.get("max_tokens", draft.llm.get("defaults", {}).get("max_tokens", 4000))),
+                context_window=int(values.get("context_window", draft.llm.get("defaults", {}).get("context_window", 128000))),
+            )
+            if not ok:
+                return {"ok": False, "error": f"Provider/profile '{provider_id}' already exists or is invalid."}
+        else:
+            ok = draft.update_provider(
+                provider_id,
+                base_url=str(values["base_url"]) if "base_url" in values else None,
+                api_key=api_key,
+                api_key_env=str(values["api_key_env"]) if "api_key_env" in values else None,
+                rename=str(values["name"]) if "name" in values else None,
+            )
+            if not ok:
+                return {"ok": False, "error": f"Provider '{provider_id}' not found."}
+        return self._commit_draft(draft, f"provider:{provider_id}", view=True)
+
+    def delete_provider(self, provider_id: str) -> Dict[str, Any]:
+        draft = ConfigDraft.from_config(self.runtime.config)
+        if not draft.remove_provider(provider_id):
+            return {"ok": False, "error": f"Provider '{provider_id}' not found."}
+        return self._commit_draft(draft, f"provider-delete:{provider_id}", view=True)
+
+    def test_provider(self, provider_id: str) -> Dict[str, Any]:
+        view = self.settings_view()
+        provider = next((item for item in view["providers"] if item["id"] == provider_id), None)
+        if not provider:
+            return {"ok": False, "status": "missing", "message": f"Provider '{provider_id}' was not found."}
+        base_url = str(provider.get("base_url", "")).strip()
+        key_source = str(provider.get("api_key_source", "")).lower()
+        issues = []
+        if not (base_url.startswith("http://") or base_url.startswith("https://")):
+            issues.append("Base URL must start with http:// or https://.")
+        if "missing" in key_source or key_source in ("", "none"):
+            issues.append("API key is missing.")
+        if issues:
+            return {"ok": False, "status": "warning", "message": " ".join(issues), "provider": provider}
+        return {"ok": True, "status": "ready", "message": "Local provider configuration looks ready.", "provider": provider}
+
+    def save_profile(self, profile_id: str, values: Dict[str, Any], *, create: bool = False) -> Dict[str, Any]:
+        profile_id = (profile_id or values.get("id") or "").strip()
+        if not profile_id:
+            return {"ok": False, "error": "Profile id is required."}
+        draft = ConfigDraft.from_config(self.runtime.config)
+        payload = self._profile_payload(values)
+        if create:
+            ok = draft.add_profile(id=profile_id, **payload)
+        else:
+            ok = draft.update_profile(profile_id, **payload, new_id=str(values["new_id"]) if values.get("new_id") else None)
+        if not ok:
+            return {"ok": False, "error": f"Profile '{profile_id}' could not be saved."}
+        active = str(values.get("active_profile", "")).strip()
+        if active:
+            draft.set_active_profile(active)
+        return self._commit_draft(draft, f"profile:{profile_id}", view=True)
+
+    def delete_profile(self, profile_id: str) -> Dict[str, Any]:
+        draft = ConfigDraft.from_config(self.runtime.config)
+        if not draft.remove_profile(profile_id):
+            return {"ok": False, "error": f"Profile '{profile_id}' not found."}
+        return self._commit_draft(draft, f"profile-delete:{profile_id}", view=True)
+
     def switch_profile(self, profile_id: str) -> Dict[str, Any]:
         result = self.runtime.agent.switch_model_profile(profile_id, source="web")
         self.runtime.events.emit("config_updated", {"section": "model", "result": result.data})
@@ -358,6 +615,42 @@ class ConfigService:
         self.runtime.agent.conversations.save_all(reason="web_config_import")
         self.runtime.events.emit("config_updated", {"section": "import"})
         return {"ok": True, "config": self.redacted()}
+
+    def _profile_payload(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        api_key = values.get("api_key")
+        if isinstance(api_key, str) and (not api_key.strip() or is_masked_key(api_key)):
+            api_key = None
+        if values.get("clear_key"):
+            api_key = KEY_CLEAR
+        payload: Dict[str, Any] = {
+            "label": str(values.get("label", "")),
+            "provider": str(values.get("provider", "")),
+            "base_url": str(values.get("base_url", "")),
+            "api_key_env": str(values.get("api_key_env", "")),
+            "model": str(values.get("model", "")),
+            "temperature": float(values.get("temperature", 0.2)),
+            "max_tokens": int(values.get("max_tokens", 4000)),
+            "context_window": int(values.get("context_window", 128000)),
+        }
+        if api_key is not None:
+            payload["api_key"] = api_key
+        if isinstance(values.get("context_management"), dict):
+            payload["context_management"] = values["context_management"]
+        return payload
+
+    def _commit_draft(self, draft: ConfigDraft, section: str, *, view: bool = False) -> Dict[str, Any]:
+        report = draft.apply_to(self.runtime.config, backup=True)
+        if not report.ok:
+            return {"ok": False, "error": report.to_text()}
+        self.runtime.config._sync_runtime_fields()
+        self.runtime.agent.conversations.set_context_window(self.runtime.config.context_window)
+        self.runtime.agent.conversations.update_runtime_state(
+            model_profile=self.runtime.config.active_model_profile,
+            authorization_level=self.runtime.config.authorization_level,
+        )
+        self.runtime.agent.conversations.save_all(reason="web_settings_update")
+        self.runtime.events.emit("config_updated", {"section": section})
+        return {"ok": True, "settings": self.settings_view() if view else None, "config": self.redacted()}
 
 
 class SessionService:
@@ -677,7 +970,7 @@ def _package_version() -> str:
 
         return version("kairo-agent")
     except Exception:
-        return "0.3.1-preview"
+        return "0.3.2-preview"
 
 
 def _language_hint(path: str) -> str:

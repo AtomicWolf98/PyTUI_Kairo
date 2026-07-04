@@ -18,7 +18,7 @@ from agent.runtime import DoctorService, KairoRuntime, event_to_dict
 
 def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> FastAPI:
     """Create the local-only Kairo WebUI application."""
-    app = FastAPI(title="Kairo WebUI", version="0.3.1-preview")
+    app = FastAPI(title="Kairo WebUI", version="0.3.2-preview")
     auth_token = token if token is not None else secrets.token_urlsafe(24)
     app.state.kairo_runtime = runtime
     app.state.kairo_token = auth_token
@@ -43,6 +43,71 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
     @app.get("/api/config")
     def api_config():
         return runtime.config_service.redacted()
+
+    @app.get("/api/settings/view")
+    def api_settings_view():
+        return runtime.config_service.settings_view()
+
+    @app.patch("/api/settings/{section}")
+    async def api_settings_update(section: str, request: Request):
+        payload = await request.json()
+        result = runtime.config_service.update_settings(section, payload)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Settings update failed."))
+        return result
+
+    @app.post("/api/settings/provider")
+    async def api_settings_provider_create(request: Request):
+        payload = await request.json()
+        result = runtime.config_service.save_provider("", payload, create=True)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Provider create failed."))
+        return result
+
+    @app.patch("/api/settings/provider/{provider_id}")
+    async def api_settings_provider_update(provider_id: str, request: Request):
+        payload = await request.json()
+        result = runtime.config_service.save_provider(provider_id, payload)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Provider update failed."))
+        return result
+
+    @app.delete("/api/settings/provider/{provider_id}")
+    def api_settings_provider_delete(provider_id: str):
+        result = runtime.config_service.delete_provider(provider_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Provider delete failed."))
+        return result
+
+    @app.post("/api/settings/provider/{provider_id}/test")
+    def api_settings_provider_test(provider_id: str):
+        result = runtime.config_service.test_provider(provider_id)
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=200)
+        return result
+
+    @app.post("/api/settings/profile")
+    async def api_settings_profile_create(request: Request):
+        payload = await request.json()
+        result = runtime.config_service.save_profile("", payload, create=True)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Profile create failed."))
+        return result
+
+    @app.patch("/api/settings/profile/{profile_id:path}")
+    async def api_settings_profile_update(profile_id: str, request: Request):
+        payload = await request.json()
+        result = runtime.config_service.save_profile(profile_id, payload)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Profile update failed."))
+        return result
+
+    @app.delete("/api/settings/profile/{profile_id:path}")
+    def api_settings_profile_delete(profile_id: str):
+        result = runtime.config_service.delete_profile(profile_id)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Profile delete failed."))
+        return result
 
     @app.post("/api/config/export")
     async def api_config_export(request: Request):

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookmarkPlus, FolderOpen, GitBranch, RefreshCw, Star, Trash2 } from "lucide-react";
+import { BookmarkPlus, ChevronDown, ChevronRight, FolderOpen, GitBranch, RefreshCw, Search, Star, Trash2 } from "lucide-react";
 import {
   addWorkspaceBookmark,
   getWorkspaceBookmarks,
@@ -16,6 +16,8 @@ export function WorkspacePage() {
   const [selected, setSelected] = useState("");
   const [target, setTarget] = useState("");
   const [bookmarkName, setBookmarkName] = useState("");
+  const [filter, setFilter] = useState("");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
   const snapshot = useQuery({ queryKey: ["workspace", selected], queryFn: () => getWorkspaceSnapshot(selected) });
@@ -45,9 +47,38 @@ export function WorkspacePage() {
     onError: error => pushToast({ tone: "error", text: String((error as Error).message || error) })
   });
 
-  const tree = useMemo(() => snapshot.data?.files.slice(0, 600) || [], [snapshot.data?.files]);
+  const tree = useMemo(() => {
+    const files = snapshot.data?.files.slice(0, 900) || [];
+    const q = filter.trim().toLowerCase();
+    return files.filter(path => {
+      if (q && !path.toLowerCase().includes(q)) return false;
+      const parts = path.split("/");
+      for (let index = 1; index < parts.length; index += 1) {
+        const dir = parts.slice(0, index).join("/");
+        if (collapsed[dir]) return false;
+      }
+      return true;
+    });
+  }, [collapsed, filter, snapshot.data?.files]);
   const changes = snapshot.data?.changes || [];
+  const groupedChanges = useMemo(() => {
+    return {
+      session: changes.filter(change => change.session_touched),
+      untracked: changes.filter(change => change.untracked && !change.session_touched),
+      other: changes.filter(change => !change.untracked && !change.session_touched)
+    };
+  }, [changes]);
   const activeFile = selected || snapshot.data?.selected_file || "";
+  const folders = useMemo(() => {
+    const names = new Set<string>();
+    for (const file of snapshot.data?.files || []) {
+      const parts = file.split("/");
+      for (let index = 1; index < parts.length; index += 1) {
+        names.add(parts.slice(0, index).join("/"));
+      }
+    }
+    return names;
+  }, [snapshot.data?.files]);
 
   return (
     <div className="page workspace-page">
@@ -89,11 +120,33 @@ export function WorkspacePage() {
             <strong>Files</strong>
             <Badge>{tree.length}</Badge>
           </div>
-          {tree.length ? tree.map(path => (
-            <button className={path === activeFile ? "tree-row active" : "tree-row"} key={path} onClick={() => setSelected(path)}>
-              <span style={{ paddingLeft: `${Math.min(path.split("/").length - 1, 6) * 10}px` }}>{path}</span>
-            </button>
-          )) : <EmptyState title="No files found" />}
+          <div className="file-search">
+            <Search size={15} />
+            <input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search files" />
+          </div>
+          {tree.length ? tree.map(path => {
+            const parent = path.split("/").slice(0, -1).join("/");
+            const isFolderLike = folders.has(path);
+            const toggleTarget = isFolderLike ? path : parent;
+            return (
+              <button className={path === activeFile ? "tree-row active" : "tree-row"} key={path} onClick={() => setSelected(path)}>
+                <span style={{ paddingLeft: `${Math.min(path.split("/").length - 1, 6) * 10}px` }}>
+                  {toggleTarget && folders.has(toggleTarget) ? (
+                    <span
+                      className="tree-toggle"
+                      onClick={event => {
+                        event.stopPropagation();
+                        setCollapsed({ ...collapsed, [toggleTarget]: !collapsed[toggleTarget] });
+                      }}
+                    >
+                      {collapsed[toggleTarget] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                    </span>
+                  ) : null}
+                  {path}
+                </span>
+              </button>
+            );
+          }) : <EmptyState title="No files found" />}
         </section>
 
         <section className="surface changes-list">
@@ -101,12 +154,13 @@ export function WorkspacePage() {
             <strong>Changes</strong>
             <Badge tone={changes.length ? "warn" : "good"}>{changes.length}</Badge>
           </div>
-          {changes.length ? changes.map(change => (
-            <button className={change.path === activeFile ? "change-row active" : "change-row"} key={change.path} onClick={() => setSelected(change.path)}>
-              <Badge tone={change.session_touched ? "info" : change.untracked ? "warn" : "neutral"}>{change.status}</Badge>
-              <span>{change.path}</span>
-            </button>
-          )) : <EmptyState title="No working tree changes" detail="Session-touched files and Git changes will appear here." />}
+          {changes.length ? (
+            <>
+              <ChangeGroup title="Session touched" items={groupedChanges.session} activeFile={activeFile} onSelect={setSelected} />
+              <ChangeGroup title="Untracked" items={groupedChanges.untracked} activeFile={activeFile} onSelect={setSelected} />
+              <ChangeGroup title="Other changes" items={groupedChanges.other} activeFile={activeFile} onSelect={setSelected} />
+            </>
+          ) : <EmptyState title="No working tree changes" detail="Session-touched files and Git changes will appear here." />}
 
           <div className="bookmarks-block">
             <div className="surface-header">
@@ -147,6 +201,31 @@ export function WorkspacePage() {
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function ChangeGroup({
+  title,
+  items,
+  activeFile,
+  onSelect
+}: {
+  title: string;
+  items: Array<{ path: string; status: string; session_touched: boolean; untracked: boolean }>;
+  activeFile: string;
+  onSelect: (path: string) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className="change-group">
+      <span className="section-kicker">{title}</span>
+      {items.map(change => (
+        <button className={change.path === activeFile ? "change-row active" : "change-row"} key={change.path} onClick={() => onSelect(change.path)}>
+          <Badge tone={change.session_touched ? "info" : change.untracked ? "warn" : "neutral"}>{change.status}</Badge>
+          <span>{change.path}</span>
+        </button>
+      ))}
     </div>
   );
 }

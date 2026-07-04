@@ -1,6 +1,6 @@
 ﻿# Kairo Complete User Manual
 
-Version: **0.3.1-preview**
+Version: **0.3.2-preview**
 
 Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, custom skills, and runtime provider/model configuration.
 
@@ -59,13 +59,15 @@ kairo
 
 ### WebUI Preview
 
-Kairo 0.3.1-preview upgrades the local WebUI into a graphical desktop-style workbench:
+Kairo 0.3.2-preview upgrades the local WebUI into a fuller graphical desktop-style workbench:
 
 ```powershell
 kairo --web
 ```
 
-By default it listens on `127.0.0.1`, opens the browser automatically, and protects the API with a temporary local token in the URL. The WebUI uses the same Kairo runtime as the TUI and plain modes, and now provides a graphical chat timeline, folded thinking, tool approval cards, workspace tree/diff review, session management, settings panels, skills and doctor checks.
+By default it listens on `127.0.0.1`, opens the browser automatically, and protects the API with a temporary local token in the URL. The WebUI uses the same Kairo runtime as the TUI and plain modes, and now provides a project/session rail, graphical chat timeline, folded thinking, tool approval cards, workspace tree/diff review, session management, full-form settings, skills and doctor checks.
+
+Open **Settings** in the left activity bar to edit `config.json` without touching raw JSON. The graphical settings center covers General, Providers, Models, Roles, Assistant, Me, Workbench, Skills, Appearance, and Import/Export. API keys are always masked in the UI; saving a new key writes it to the local config only after an explicit action.
 
 ## 2. First Configuration
 
@@ -109,7 +111,7 @@ Profile example:
 }
 ```
 
-Prefer `api_key_env` so secrets are not written back to disk. You can also use inline `api_key` for local-only use; manage keys safely from `/settings` > Keys.
+Prefer `api_key_env` so secrets are not written back to disk in shared projects. For local-only use, you can save inline `api_key` values from WebUI Settings > Providers or Settings > Models.
 
 Legacy `llm.providers[]` configs continue to work and are converted to profiles automatically.
 

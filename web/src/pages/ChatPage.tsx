@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PauseCircle, Play, SendHorizontal, ShieldCheck, Wrench } from "lucide-react";
+import { FolderGit2, PauseCircle, Play, SendHorizontal, ShieldCheck, Sparkles, Wrench } from "lucide-react";
 import { approveTool, sendChat, stopChat } from "../api";
 import { Badge, EmptyState } from "../components";
 import { useRuntimeStore } from "../stores";
@@ -55,7 +55,7 @@ export function ChatPage() {
 
       <div className="chat-stream" ref={scrollRef}>
         {messages.length === 0 ? (
-          <EmptyState title="Start a working conversation" detail="Ask Kairo to inspect, edit, explain, plan, or run tools in the current workspace." />
+          <WelcomeBoard />
         ) : messages.map(message => <MessageCard key={message.id} message={message} />)}
       </div>
 
@@ -74,11 +74,39 @@ export function ChatPage() {
           placeholder="Ask Kairo to build, inspect, explain, or operate on the workspace..."
           rows={Math.min(8, Math.max(3, draft.split("\n").length))}
         />
-        <button className="primary-button" onClick={submit} disabled={!draft.trim() || Boolean(status?.task.busy)}>
-          <SendHorizontal size={17} /> Send
-        </button>
+        <div className="composer-bottom">
+          <div className="composer-modes">
+            <Badge tone="info">{status?.profile || "No profile"}</Badge>
+            <Badge>{status?.modes.authorization || "manual"}</Badge>
+            <Badge tone={status?.modes.plan ? "warn" : "neutral"}>Plan {status?.modes.plan ? "ON" : "OFF"}</Badge>
+            <Badge tone={status?.modes.thinking ? "warn" : "neutral"}>Think {status?.modes.thinking ? "ON" : "OFF"}</Badge>
+          </div>
+          <button className="primary-button" onClick={submit} disabled={!draft.trim() || Boolean(status?.task.busy)}>
+            <SendHorizontal size={17} /> Send
+          </button>
+        </div>
       </footer>
     </div>
+  );
+}
+
+function WelcomeBoard() {
+  const status = useRuntimeStore(state => state.status);
+  return (
+    <section className="welcome-board">
+      <div className="welcome-mark"><Sparkles size={30} /></div>
+      <div>
+        <span className="section-kicker">Kairo Workbench</span>
+        <h2>Build anything in this project</h2>
+        <p>{status?.workspace_root || "Select a workspace, configure a model, then start a conversation."}</p>
+      </div>
+      <div className="welcome-grid">
+        <div><FolderGit2 size={17} /><strong>Inspect</strong><span>Read files, diffs and project structure.</span></div>
+        <div><Wrench size={17} /><strong>Operate</strong><span>Run tools with approval and clear output.</span></div>
+        <div><Sparkles size={17} /><strong>Configure</strong><span>Use Settings for providers, models and skills.</span></div>
+      </div>
+      <EmptyState title="Try a task" detail="Ask: review this project, add tests, explain this file, or implement a focused change." />
+    </section>
   );
 }
 

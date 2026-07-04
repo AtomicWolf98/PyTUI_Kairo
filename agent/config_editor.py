@@ -959,7 +959,7 @@ class ConfigDraft:
             report.add_error(f"Import file not found: {path}")
             return report
         try:
-            with open(source_path, "r", encoding="utf-8") as handle:
+            with open(source_path, "r", encoding="utf-8-sig") as handle:
                 data = json.load(handle) or {}
         except Exception as exc:
             report.add_error(f"Failed to parse import file: {exc}")

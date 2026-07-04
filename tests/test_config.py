@@ -108,6 +108,13 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.ui["workspace_max_files"], 2000)
         self.assertEqual(config.ui["workspace_diff_max_bytes"], 204800)
 
+    def test_load_config_with_utf8_bom(self):
+        payload = json.dumps(self.default_data).encode("utf-8")
+        self.config_path.write_bytes(b"\xef\xbb\xbf" + payload)
+        config = Config(config_path=str(self.config_path))
+        self.assertEqual(config.active_model, "other_model")
+        self.assertEqual(config.base_url, "https://other.api.com")
+
     def test_env_overrides(self):
         os.environ["OPENAI_API_KEY"] = "env_key"
         os.environ["OPENAI_BASE_URL"] = "https://env.api.com"

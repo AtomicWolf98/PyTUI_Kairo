@@ -1,5 +1,23 @@
 ﻿# Changelog / 更新记录
 
+## [0.3.2-preview]
+
+### Added / New
+
+- Upgraded the WebUI into a more complete desktop-style graphical workbench inspired by local agent desktops.
+- Added a three-column Web layout with project/session rail, central work area, and right-side workspace/runtime inspector.
+- Added granular `/api/settings/*` endpoints for settings view, provider/profile create-edit-delete, provider config checks, roles, assistant, user, workbench, appearance and skills sections.
+- Replaced the main Settings JSON editor with graphical forms for General, Providers, Models, Roles, Assistant, Me, Workbench, Skills, Appearance and Import/Export.
+- Added provider and model profile editors with masked key handling, clear-key actions, local config test, role routing and active model switching.
+- Added Chat welcome board, composer model/mode status bar, improved stop affordance and stronger project-first empty state.
+- Added Workspace file search, folder collapse controls, grouped changes and code-like diff/file preview styling.
+
+### Changed
+
+- Package version moved to `0.3.2-preview`.
+- WebUI now treats `config.json` as editable through forms first; raw JSON is only an advanced export/reference path.
+- Existing `kairo --web`, `--tui` and `--plain` launch paths remain supported.
+
 ## [0.3.1-preview]
 
 ### Added / New

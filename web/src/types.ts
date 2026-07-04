@@ -131,6 +131,71 @@ export type ConfigViewModel = {
   active?: RuntimeStatus;
 };
 
+export type ProviderSetting = {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key: string;
+  api_key_source: string;
+  model_count: number;
+  profiles: string[];
+};
+
+export type SettingsViewModel = {
+  version: string;
+  general: {
+    language: string;
+    shell_type: string;
+    authorization_level: string;
+    plan_mode: boolean;
+    thinking_mode: boolean;
+    open_browser: boolean;
+    show_thinking: boolean;
+    expand_tools: boolean;
+  };
+  providers: ProviderSetting[];
+  profiles: ConfigProfile[];
+  roles: Record<string, string>;
+  assistant: {
+    name: string;
+    system_prompt: string;
+    default_mode: string;
+    authorization_level: string;
+    plan_mode: boolean;
+    thinking_mode: boolean;
+    context_management: Record<string, unknown>;
+  };
+  user: {
+    name: string;
+    timezone: string;
+    preferences: string;
+    default_instruction: string;
+  };
+  workbench: {
+    workspace_root: string;
+    skills_dir: string;
+    shell_type: string;
+    workspace_bookmarks: WorkspaceBookmark[];
+    workspace_max_files: number;
+    workspace_diff_max_bytes: number;
+    workspace_refresh_seconds: number;
+  };
+  appearance: {
+    theme: string;
+    tui_theme: string;
+    density: string;
+    font_size: number;
+    animation: string;
+    mascot: boolean;
+    reduced_motion: boolean;
+  };
+  skills: {
+    skills_dir: string;
+    require_hash: boolean;
+  };
+  raw: ConfigViewModel;
+};
+
 export type SkillList = {
   tools: Array<{
     name: string;
