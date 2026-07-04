@@ -13,7 +13,7 @@ Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 
 kairo
 ```
 
-`install.bat` 会创建 `.venv`、安装 Kairo、创建 `%LOCALAPPDATA%\Kairo\bin\kairo.bat`，并把该目录加入当前用户 PATH。安装完成后请打开新的 PowerShell 窗口，再运行 `kairo`。
+`install.bat` 会先卸载旧版 Kairo，再创建 `.venv`、安装当前目录版本、创建 `%LOCALAPPDATA%\Kairo\bin\kairo.bat`，并把该目录放到当前用户 PATH 的最前面。安装完成后请打开新的 PowerShell 窗口，再运行 `kairo`。
 
 如果只是临时启动、不安装用户级命令：
 
