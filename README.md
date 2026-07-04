@@ -1,14 +1,14 @@
-# Kairo
+﻿# Kairo
 
 Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, runtime configuration panels, and local config-first key management.
 
 Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时配置面板，以及本地配置优先的 key 管理。
 
-Current version / 当前版本：**0.3.0-preview**
+Current version / 当前版本：**0.3.1-preview**
 
 ## WebUI Preview / WebUI 预览
 
-Kairo 0.3.0-preview adds an optional local browser interface:
+Kairo 0.3.1-preview upgrades the optional local browser interface into a graphical desktop-style workbench:
 
 ```powershell
 kairo --web
@@ -16,9 +16,9 @@ kairo --web --port 8765
 kairo --web --no-browser
 ```
 
-The WebUI is local-only by default (`127.0.0.1`) and uses a temporary auth token in the browser URL. It exposes the same runtime through a UI-neutral Kairo kernel: chat streaming, stop generation, tool approval, settings, sessions, workspace review, skills and doctor checks. `--tui` and `--plain` remain supported.
+The WebUI is local-only by default (`127.0.0.1`) and uses a temporary auth token in the browser URL. It now includes a graphical chat timeline, tool approval cards, workspace tree/diff review, sessions management, settings panels, skills and doctor checks. `--tui` and `--plain` remain supported.
 
-Kairo 0.3.0-preview 新增可选本地浏览器界面。默认只监听 `127.0.0.1`，并在浏览器 URL 中使用临时 token。WebUI 通过 UI-neutral Kairo runtime 调用聊天流式输出、停止生成、工具审批、设置、会话、工作区审查、技能和 doctor 检查。`--tui` 与 `--plain` 继续保留。
+Kairo 0.3.1-preview 将可选本地浏览器界面升级为图形化工作台。默认只监听 `127.0.0.1`，并在浏览器 URL 中使用临时 token。WebUI 现在包含图形化聊天流、工具审批卡片、workspace tree/diff、session 管理、settings、skills 和 doctor 检查。`--tui` 与 `--plain` 继续保留。
 
 ## Documentation / 文档
 

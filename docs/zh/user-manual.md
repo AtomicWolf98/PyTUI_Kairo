@@ -1,6 +1,6 @@
-# Kairo 完整用户手册
+﻿# Kairo 完整用户手册
 
-版本：**0.3.0-preview**
+版本：**0.3.1-preview**
 
 Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
 
@@ -59,13 +59,13 @@ kairo
 
 ### WebUI 预览
 
-Kairo 0.3.0-preview 新增本地 WebUI：
+Kairo 0.3.1-preview 将本地 WebUI 升级为图形化桌面工作台：
 
 ```powershell
 kairo --web
 ```
 
-默认只监听 `127.0.0.1`，自动打开浏览器，并在 URL 中使用临时本地 token 保护 API。WebUI 与 TUI/plain 共用同一个 Kairo runtime，支持流式聊天、停止生成、工具审批、workspace 快照、session 管理、settings、skills 和 doctor 检查。
+默认只监听 `127.0.0.1`，自动打开浏览器，并在 URL 中使用临时本地 token 保护 API。WebUI 与 TUI/plain 共用同一个 Kairo runtime，现在提供图形化聊天时间线、thinking 折叠、工具审批卡片、workspace tree/diff 审查、session 管理、settings、skills 和 doctor 检查。
 
 ## 2. 首次配置
 

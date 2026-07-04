@@ -1,4 +1,22 @@
-# Changelog / 更新记录
+﻿# Changelog / 更新记录
+
+## [0.3.1-preview]
+
+### Added / New
+
+- Upgraded the WebUI from a single-file debug surface into a graphical desktop-style workbench.
+- Added typed Web API helpers, runtime event reducer, toast state, desktop layout shell, right-side inspector, and responsive mobile fallback.
+- Added graphical Chat timeline with streaming assistant cards, folded thinking, tool result cards, approval actions and stop generation.
+- Added graphical Workspace review with file tree, changed files, diff preview, file preview, hot workspace move and bookmark management.
+- Added Settings panels for profiles, API keys, model roles, appearance, assistant behavior, workbench, skills and config import/export.
+- Added Sessions and Doctor pages with search, switching, rename/delete/export, grouped health checks and masked secret handling.
+- Added Web API endpoints for chat history, workspace file preview, workspace bookmarks, and config import/export.
+
+### Changed
+
+- Package version moved to `0.3.1-preview`.
+- Web build now includes `lucide-react` icons and a structured React frontend under `web/src`.
+- Existing `kairo --web`, `--tui` and `--plain` launch paths remain supported.
 
 ## [0.3.0-preview]
 

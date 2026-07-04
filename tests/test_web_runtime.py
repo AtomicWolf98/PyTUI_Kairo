@@ -14,6 +14,7 @@ class TestWebRuntime(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        (self.root / "sample.py").write_text("print('hello from web preview')\n", encoding="utf-8")
         config_path = self.root / "config.json"
         config_path.write_text(json.dumps({
             "llm": {
@@ -32,6 +33,7 @@ class TestWebRuntime(unittest.TestCase):
                 }],
             },
             "workspace_root": str(self.root),
+            "workspace_bookmarks": [{"name": "root", "path": str(self.root)}],
             "skills_dir": "./skills",
             "sessions": {"enabled": False},
             "web": {
@@ -93,3 +95,47 @@ class TestWebRuntime(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.config.web["theme"], "dark")
+
+    def test_preview_api_history_file_bookmarks_and_config_export(self):
+        self.runtime.agent.history.append({"role": "user", "content": "hello"})
+        self.runtime.agent.history.append({"role": "assistant", "content": "hi"})
+
+        history = self.client.get("/api/chat/history?token=test-token")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual([item["role"] for item in history.json()["messages"]], ["user", "assistant"])
+
+        preview = self.client.get("/api/workspace/file?path=sample.py&token=test-token")
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json()["language"], "python")
+        self.assertIn("hello from web preview", preview.json()["content"])
+
+        traversal = self.client.get("/api/workspace/file?path=../secret.txt&token=test-token")
+        self.assertEqual(traversal.status_code, 400)
+
+        bookmarks = self.client.get("/api/workspace/bookmarks?token=test-token")
+        self.assertEqual(bookmarks.status_code, 200)
+        self.assertEqual(bookmarks.json()["bookmarks"][0]["name"], "root")
+
+        added = self.client.post(
+            "/api/workspace/bookmarks?token=test-token",
+            json={"name": "src", "path": str(self.root)},
+        )
+        self.assertEqual(added.status_code, 200)
+        self.assertTrue(any(item["name"] == "src" for item in added.json()["bookmarks"]))
+
+        removed = self.client.delete("/api/workspace/bookmarks/src?token=test-token")
+        self.assertEqual(removed.status_code, 200)
+
+        exported = self.client.post("/api/config/export?token=test-token", json={"with_keys": False})
+        self.assertEqual(exported.status_code, 200)
+        self.assertNotIn("secret-key", json.dumps(exported.json()))
+
+        blocked = self.client.post("/api/config/export?token=test-token", json={"with_keys": True})
+        self.assertEqual(blocked.status_code, 400)
+
+        with_keys = self.client.post(
+            "/api/config/export?token=test-token",
+            json={"with_keys": True, "confirm": "EXPORT_KEYS"},
+        )
+        self.assertEqual(with_keys.status_code, 200)
+        self.assertIn("secret-key", json.dumps(with_keys.json()))

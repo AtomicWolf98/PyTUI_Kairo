@@ -481,13 +481,23 @@ class Config:
                 })
             return result
 
-        # Legacy provider/model structure.
-        if not self.apply_model_profile(profile_id):
+        # Legacy provider/model structure. Resolve and update all routing state
+        # before syncing runtime fields; otherwise an existing model_roles.chat
+        # value can briefly point at the old/invalid profile and make the
+        # resolver fall back to the first legacy profile.
+        choice = self._resolve_profile_choice(profile_id)
+        if not choice:
             return result
+        provider_name, model_name = choice
+        if not self._get_model(provider_name, model_name):
+            return result
+        self.llm["active_provider"] = provider_name
+        self.llm["active_model"] = model_name
         if update_roles and self.model_roles.get("chat"):
             if self.model_roles["chat"] != profile_id:
                 self.model_roles["chat"] = profile_id
                 result["role_updated"] = True
+        self._sync_runtime_fields()
         result["ok"] = True
         result.update({
             "profile_id": profile_id,

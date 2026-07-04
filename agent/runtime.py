@@ -1,6 +1,7 @@
-"""UI-neutral runtime and service layer for Kairo 0.3.0-preview."""
+"""UI-neutral runtime and service layer for Kairo 0.3.1-preview."""
 from __future__ import annotations
 
+import copy
 import queue
 import threading
 import time
@@ -13,7 +14,7 @@ from agent.bootstrap import build_agent
 from agent.cancellation import CancellationToken
 from agent.config import Config
 from agent.config_editor import ConfigDraft, KEY_CLEAR
-from agent.profile_resolver import describe_key_source, list_profiles, mask_key
+from agent.profile_resolver import describe_key_source, is_masked_key, list_profiles, mask_key
 from agent.runtime_commands import handle_doctor
 from agent.workspace import WorkspaceMonitor, WorkspaceSnapshot
 
@@ -76,6 +77,7 @@ class KairoRuntime:
         self.workspace = WorkspaceService(self)
         self.config_service = ConfigService(self)
         self.sessions = SessionService(self)
+        self.chat = ChatService(self)
         self.skills = SkillService(self)
         self._task_lock = threading.RLock()
         self._task_thread: Optional[threading.Thread] = None
@@ -253,6 +255,51 @@ class ConfigService:
                 draft.workspace_bookmarks = list(values["workspace_bookmarks"])
         elif section == "roles":
             draft.model_roles = {str(k): str(v) for k, v in values.items() if str(k).strip()}
+        elif section == "llm":
+            if not isinstance(values, dict):
+                return {"ok": False, "error": "llm update payload must be an object"}
+            if isinstance(values.get("defaults"), dict):
+                draft.llm.setdefault("defaults", {}).update(values["defaults"])
+            for profile in values.get("profiles", []) if isinstance(values.get("profiles"), list) else []:
+                if not isinstance(profile, dict):
+                    continue
+                profile_id = str(profile.get("id", "")).strip()
+                if not profile_id:
+                    continue
+                updates = {
+                    "label": str(profile.get("label", "")),
+                    "provider": str(profile.get("provider", "")),
+                    "base_url": str(profile.get("base_url", "")),
+                    "api_key_env": str(profile.get("api_key_env", "")),
+                    "model": str(profile.get("model", "")),
+                    "temperature": float(profile.get("temperature", 0.2)),
+                    "max_tokens": int(profile.get("max_tokens", 4000)),
+                    "context_window": int(profile.get("context_window", 128000)),
+                    "context_management": profile.get("context_management")
+                    if isinstance(profile.get("context_management"), dict)
+                    else None,
+                }
+                api_key = str(profile.get("api_key", ""))
+                if api_key and not is_masked_key(api_key):
+                    updates["api_key"] = api_key
+                existing = draft.update_profile(profile_id, **updates)
+                if not existing:
+                    draft.add_profile(
+                        id=profile_id,
+                        label=updates["label"],
+                        provider=updates["provider"],
+                        base_url=updates["base_url"],
+                        api_key=updates.get("api_key", ""),
+                        api_key_env=updates["api_key_env"],
+                        model=updates["model"],
+                        temperature=updates["temperature"],
+                        max_tokens=updates["max_tokens"],
+                        context_window=updates["context_window"],
+                        context_management=updates["context_management"],
+                    )
+            active_profile = str(values.get("active_profile", "")).strip()
+            if active_profile:
+                draft.llm["active_profile"] = active_profile
         elif section == "key":
             profile_id = str(values.get("profile_id", "")).strip()
             if not profile_id:
@@ -283,6 +330,34 @@ class ConfigService:
         result = self.runtime.agent.switch_model_profile(profile_id, source="web")
         self.runtime.events.emit("config_updated", {"section": "model", "result": result.data})
         return {"ok": result.success, "message": result.message, "data": result.data}
+
+    def export_config(self, *, with_keys: bool = False, confirm: str = "") -> Dict[str, Any]:
+        if with_keys and confirm != "EXPORT_KEYS":
+            return {"ok": False, "error": "Exporting keys requires confirm='EXPORT_KEYS'."}
+        draft = ConfigDraft.from_config(self.runtime.config)
+        return {
+            "ok": True,
+            "with_keys": with_keys,
+            "config": draft.export_config(with_keys=with_keys),
+        }
+
+    def import_config(self, path: str) -> Dict[str, Any]:
+        draft = ConfigDraft.from_config(self.runtime.config)
+        report = draft.import_config(path)
+        if not report.ok:
+            return {"ok": False, "error": report.to_text()}
+        report = draft.apply_to(self.runtime.config, backup=True, allow_inline_key=True)
+        if not report.ok:
+            return {"ok": False, "error": report.to_text()}
+        self.runtime.config._sync_runtime_fields()
+        self.runtime.agent.conversations.set_context_window(self.runtime.config.context_window)
+        self.runtime.agent.conversations.update_runtime_state(
+            model_profile=self.runtime.config.active_model_profile,
+            authorization_level=self.runtime.config.authorization_level,
+        )
+        self.runtime.agent.conversations.save_all(reason="web_config_import")
+        self.runtime.events.emit("config_updated", {"section": "import"})
+        return {"ok": True, "config": self.redacted()}
 
 
 class SessionService:
@@ -368,6 +443,37 @@ class SessionService:
         return {"ok": True, "path": str(dest)}
 
 
+class ChatService:
+    def __init__(self, runtime: KairoRuntime):
+        self.runtime = runtime
+
+    def history(self) -> Dict[str, Any]:
+        messages = []
+        for index, message in enumerate(self.runtime.agent.history):
+            role = str(message.get("role", ""))
+            if role == "system":
+                continue
+            item = {
+                "id": f"history-{index}",
+                "role": role,
+                "content": str(message.get("content", "") or ""),
+            }
+            if message.get("name"):
+                item["name"] = str(message.get("name"))
+            if message.get("tool_call_id"):
+                item["tool_call_id"] = str(message.get("tool_call_id"))
+            if message.get("tool_calls"):
+                item["tool_calls"] = copy.deepcopy(message.get("tool_calls"))
+            messages.append(item)
+        return {
+            "session": {
+                "id": self.runtime.agent.conversations.active.id,
+                "name": self.runtime.agent.active_session_name,
+            },
+            "messages": messages,
+        }
+
+
 class WorkspaceService:
     def __init__(self, runtime: KairoRuntime):
         self.runtime = runtime
@@ -389,6 +495,63 @@ class WorkspaceService:
 
     def snapshot(self, selected_file: str = "") -> Dict[str, Any]:
         return _snapshot_to_dict(self.monitor.refresh(selected_file))
+
+    def file_preview(self, relative: str) -> Dict[str, Any]:
+        relative = (relative or "").strip().replace("\\", "/")
+        if not relative:
+            return {"ok": False, "error": "path is required"}
+        try:
+            root = self.monitor.root.resolve()
+            path = (root / relative).resolve()
+            path.relative_to(root)
+        except (OSError, ValueError):
+            return {"ok": False, "error": "path must stay inside the active workspace"}
+        if not path.exists() or not path.is_file():
+            return {"ok": False, "error": "file not found"}
+
+        max_bytes = int(self.runtime.config.ui.get("workspace_diff_max_bytes", 204800))
+        try:
+            size = path.stat().st_size
+            with open(path, "rb") as handle:
+                raw = handle.read(max_bytes + 1)
+        except OSError as exc:
+            return {"ok": False, "error": f"unable to read file: {exc}"}
+
+        truncated = len(raw) > max_bytes
+        sample = raw[:max_bytes]
+        binary = b"\0" in sample[:8192]
+        return {
+            "ok": True,
+            "path": relative,
+            "size": size,
+            "binary": binary,
+            "truncated": truncated,
+            "language": _language_hint(relative),
+            "content": "" if binary else sample.decode("utf-8", errors="replace"),
+        }
+
+    def bookmarks(self) -> Dict[str, Any]:
+        return {"bookmarks": list(self.runtime.config.workspace_bookmarks)}
+
+    def add_bookmark(self, name: str, path: str) -> Dict[str, Any]:
+        draft = ConfigDraft.from_config(self.runtime.config)
+        if not draft.add_workspace_bookmark(name, path):
+            return {"ok": False, "error": "Bookmark name and path are required."}
+        report = draft.apply_to(self.runtime.config, backup=True)
+        if not report.ok:
+            return {"ok": False, "error": report.to_text()}
+        self.runtime.events.emit("config_updated", {"section": "workspace_bookmarks"})
+        return {"ok": True, **self.bookmarks()}
+
+    def remove_bookmark(self, name: str) -> Dict[str, Any]:
+        draft = ConfigDraft.from_config(self.runtime.config)
+        if not draft.remove_workspace_bookmark(name):
+            return {"ok": False, "error": f"Bookmark '{name}' not found."}
+        report = draft.apply_to(self.runtime.config, backup=True)
+        if not report.ok:
+            return {"ok": False, "error": report.to_text()}
+        self.runtime.events.emit("config_updated", {"section": "workspace_bookmarks"})
+        return {"ok": True, **self.bookmarks()}
 
     def refresh(self) -> Dict[str, Any]:
         data = self.snapshot()
@@ -514,4 +677,26 @@ def _package_version() -> str:
 
         return version("kairo-agent")
     except Exception:
-        return "0.3.0-preview"
+        return "0.3.1-preview"
+
+
+def _language_hint(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    return {
+        ".bat": "batch",
+        ".cmd": "batch",
+        ".css": "css",
+        ".html": "html",
+        ".js": "javascript",
+        ".json": "json",
+        ".jsx": "javascript",
+        ".md": "markdown",
+        ".py": "python",
+        ".ps1": "powershell",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".toml": "toml",
+        ".txt": "text",
+        ".yml": "yaml",
+        ".yaml": "yaml",
+    }.get(suffix, "text")

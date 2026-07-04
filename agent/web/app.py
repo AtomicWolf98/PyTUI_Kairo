@@ -18,7 +18,7 @@ from agent.runtime import DoctorService, KairoRuntime, event_to_dict
 
 def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> FastAPI:
     """Create the local-only Kairo WebUI application."""
-    app = FastAPI(title="Kairo WebUI", version="0.3.0-preview")
+    app = FastAPI(title="Kairo WebUI", version="0.3.1-preview")
     auth_token = token if token is not None else secrets.token_urlsafe(24)
     app.state.kairo_runtime = runtime
     app.state.kairo_token = auth_token
@@ -44,6 +44,29 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
     def api_config():
         return runtime.config_service.redacted()
 
+    @app.post("/api/config/export")
+    async def api_config_export(request: Request):
+        payload: Dict[str, Any] = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            pass
+        result = runtime.config_service.export_config(
+            with_keys=bool(payload.get("with_keys", False)),
+            confirm=str(payload.get("confirm", "")),
+        )
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Config export failed."))
+        return result
+
+    @app.post("/api/config/import")
+    async def api_config_import(request: Request):
+        payload = await request.json()
+        result = runtime.config_service.import_config(str(payload.get("path", "")))
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Config import failed."))
+        return result
+
     @app.patch("/api/config/{section}")
     async def api_config_update(section: str, request: Request):
         payload = await request.json()
@@ -62,6 +85,32 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
     @app.get("/api/workspace/snapshot")
     def api_workspace_snapshot(selected_file: str = ""):
         return runtime.workspace.snapshot(selected_file)
+
+    @app.get("/api/workspace/file")
+    def api_workspace_file(path: str = ""):
+        result = runtime.workspace.file_preview(path)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "File preview failed."))
+        return result
+
+    @app.get("/api/workspace/bookmarks")
+    def api_workspace_bookmarks():
+        return runtime.workspace.bookmarks()
+
+    @app.post("/api/workspace/bookmarks")
+    async def api_workspace_bookmark_add(request: Request):
+        payload = await request.json()
+        result = runtime.workspace.add_bookmark(str(payload.get("name", "")), str(payload.get("path", "")))
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "Bookmark save failed."))
+        return result
+
+    @app.delete("/api/workspace/bookmarks/{name}")
+    def api_workspace_bookmark_delete(name: str):
+        result = runtime.workspace.remove_bookmark(name)
+        if not result.get("ok"):
+            raise HTTPException(status_code=404, detail=result.get("error", "Bookmark not found."))
+        return result
 
     @app.post("/api/workspace/move")
     async def api_workspace_move(request: Request):
@@ -113,6 +162,10 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=result.get("error", "Export failed."))
         return result
+
+    @app.get("/api/chat/history")
+    def api_chat_history():
+        return runtime.chat.history()
 
     @app.post("/api/chat")
     async def api_chat(request: Request):

@@ -1,6 +1,6 @@
-# Kairo Complete User Manual
+﻿# Kairo Complete User Manual
 
-Version: **0.3.0-preview**
+Version: **0.3.1-preview**
 
 Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, custom skills, and runtime provider/model configuration.
 
@@ -59,13 +59,13 @@ kairo
 
 ### WebUI Preview
 
-Kairo 0.3.0-preview adds a local WebUI:
+Kairo 0.3.1-preview upgrades the local WebUI into a graphical desktop-style workbench:
 
 ```powershell
 kairo --web
 ```
 
-By default it listens on `127.0.0.1`, opens the browser automatically, and protects the API with a temporary local token in the URL. The WebUI uses the same Kairo runtime as the TUI and plain modes, including streaming chat, stop generation, tool approval, workspace snapshots, session management, settings, skills and doctor checks.
+By default it listens on `127.0.0.1`, opens the browser automatically, and protects the API with a temporary local token in the URL. The WebUI uses the same Kairo runtime as the TUI and plain modes, and now provides a graphical chat timeline, folded thinking, tool approval cards, workspace tree/diff review, session management, settings panels, skills and doctor checks.
 
 ## 2. First Configuration
 
