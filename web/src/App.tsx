@@ -11,10 +11,10 @@ import {
   Settings,
   Sparkles
 } from "lucide-react";
-import { createSession, eventUrl, getChatHistory, getSessions, getStatus, getWorkspaceSnapshot, switchSession } from "./api";
+import { createSession, eventUrl, getChatHistory, getSessions, getSettings, getStatus, getWorkspaceSnapshot, switchSession } from "./api";
 import { Badge, Meter, Toasts, formatNumber } from "./components";
 import { useRuntimeStore } from "./stores";
-import type { RuntimeEvent, RuntimeStatus } from "./types";
+import type { RuntimeEvent, RuntimeStatus, SettingsViewModel } from "./types";
 import { ChatPage } from "./pages/ChatPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 import { SessionsPage } from "./pages/SessionsPage";
@@ -43,6 +43,7 @@ export function AppRoot() {
 
 function App() {
   const [page, setPage] = useState<Page>("chat");
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const status = useRuntimeStore(state => state.status);
   const setStatus = useRuntimeStore(state => state.setStatus);
   const applyEvent = useRuntimeStore(state => state.applyEvent);
@@ -55,6 +56,10 @@ function App() {
     getStatus().then(setStatus).catch(error => pushToast({ tone: "error", text: String(error.message || error) }));
     getChatHistory().then(history => setHistory(history.messages)).catch(() => undefined);
   }, [pushToast, setHistory, setStatus]);
+
+  useEffect(() => {
+    applyAppearance(settings.data?.appearance);
+  }, [settings.data?.appearance]);
 
   useEffect(() => {
     const socket = new WebSocket(eventUrl());
@@ -119,6 +124,27 @@ function App() {
       <Toasts />
     </main>
   );
+}
+
+function applyAppearance(appearance?: SettingsViewModel["appearance"]) {
+  if (!appearance || typeof document === "undefined") return;
+  const root = document.documentElement;
+  const prefersLight = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-color-scheme: light)").matches;
+  const theme = appearance.theme === "system"
+    ? (prefersLight ? "light" : "dark")
+    : appearance.theme === "kairo-light" ? "light" : "dark";
+  const density = ["compact", "comfortable", "spacious"].includes(appearance.density)
+    ? appearance.density
+    : "comfortable";
+  const fontSize = Math.min(22, Math.max(12, Number(appearance.font_size) || 14));
+  root.dataset.kairoTheme = theme;
+  root.dataset.kairoDensity = density;
+  root.dataset.kairoAnimation = appearance.animation || "full";
+  root.dataset.kairoMotion = appearance.reduced_motion ? "reduced" : "normal";
+  root.dataset.kairoMascot = appearance.mascot ? "on" : "off";
+  root.style.setProperty("--kairo-font-size", `${fontSize}px`);
 }
 
 function ProjectHeader({ status }: { status?: RuntimeStatus | null }) {

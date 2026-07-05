@@ -18,6 +18,55 @@
   --coral: #ed8796;
   --blue: #91d7ff;
   --shadow: 0 18px 54px rgba(0, 0, 0, 0.35);
+  --activity-bg: #080b0f;
+  --project-bg: rgba(11, 15, 20, 0.96);
+  --titlebar-bg: rgba(8, 11, 15, 0.86);
+  --canvas-bg: #090d12;
+  --field-bg: #080c10;
+  --surface-bg: rgba(17, 24, 33, 0.86);
+  --kairo-font-size: 14px;
+  --density-content-padding: 24px;
+  --density-panel-padding: 18px;
+  --density-gap: 14px;
+}
+
+:root[data-kairo-theme="light"] {
+  color-scheme: light;
+  background: #f3f0e8;
+  color: #17202a;
+  --bg: #f3f0e8;
+  --panel: #fffaf0;
+  --panel-2: #f0eadf;
+  --panel-3: #e8dfd0;
+  --line: #d2c7b6;
+  --line-strong: #b7aa98;
+  --text: #17202a;
+  --muted: #586472;
+  --subtle: #7a8390;
+  --cyan: #2a9d94;
+  --mint: #4f9f64;
+  --amber: #b7791f;
+  --coral: #c7515a;
+  --blue: #2b7fb8;
+  --shadow: 0 18px 54px rgba(71, 58, 38, 0.2);
+  --activity-bg: #ede6d9;
+  --project-bg: rgba(255, 250, 240, 0.96);
+  --titlebar-bg: rgba(250, 246, 238, 0.92);
+  --canvas-bg: #f7f2e9;
+  --field-bg: #fffdf8;
+  --surface-bg: rgba(255, 250, 240, 0.9);
+}
+
+:root[data-kairo-density="compact"] {
+  --density-content-padding: 16px;
+  --density-panel-padding: 12px;
+  --density-gap: 8px;
+}
+
+:root[data-kairo-density="spacious"] {
+  --density-content-padding: 32px;
+  --density-panel-padding: 24px;
+  --density-gap: 20px;
 }
 
 /* 0.3.2 graphical workbench -------------------------------------------------- */
@@ -706,6 +755,8 @@ body {
   margin: 0;
   min-width: 320px;
   overflow: hidden;
+  font-size: var(--kairo-font-size);
+  background: var(--bg);
 }
 
 button,
@@ -1690,12 +1741,14 @@ textarea:focus {
 .desktop-shell {
   grid-template-columns: 58px clamp(220px, 15vw, 260px) minmax(560px, 1fr) clamp(300px, 21vw, 430px);
   min-width: 0;
+  background: var(--bg);
 }
 
 .project-rail {
   min-width: 0;
   overflow: hidden;
   padding-inline: clamp(10px, 1vw, 14px);
+  background: var(--project-bg);
 }
 
 .project-header,
@@ -1737,6 +1790,72 @@ textarea:focus {
 
 .page-canvas {
   overflow: hidden;
+  background: var(--canvas-bg);
+}
+
+.left-activity {
+  background: var(--activity-bg);
+}
+
+.desktop-titlebar {
+  background: var(--titlebar-bg);
+}
+
+.settings-content,
+.inspector-panel,
+.editor-panel,
+.surface,
+.message-card,
+.composer-panel,
+.runtime-card,
+.error-panel {
+  background-color: var(--surface-bg);
+}
+
+input,
+select,
+textarea {
+  background: var(--field-bg);
+}
+
+.settings-content {
+  padding: var(--density-content-padding);
+}
+
+.settings-stack,
+.form-grid,
+.settings-card-grid,
+.rail-section,
+.runtime-panel {
+  gap: var(--density-gap);
+}
+
+.message-card,
+.composer-panel,
+.settings-section,
+.editor-panel,
+.surface,
+.runtime-card {
+  padding: var(--density-panel-padding);
+}
+
+:root[data-kairo-motion="reduced"] *,
+:root[data-kairo-animation="reduced"] *,
+:root[data-kairo-animation="off"] * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.001ms !important;
+}
+
+:root[data-kairo-mascot="off"] .kai-preview {
+  display: none;
+}
+
+:root[data-kairo-theme="light"] .brand-button,
+:root[data-kairo-theme="light"] .primary-button,
+:root[data-kairo-theme="light"] .kai-preview {
+  color: #f8fffc;
 }
 
 .chat-page {

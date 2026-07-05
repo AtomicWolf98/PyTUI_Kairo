@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import queue
+import tempfile
 import threading
 import time
 import uuid
@@ -339,7 +340,10 @@ class ConfigService:
                 draft.context_management_defaults.update(values["context_management"])
         elif section == "workbench":
             if "workspace_root" in values:
-                draft.workspace_root = str(values["workspace_root"])
+                workspace_root = self._validated_workspace_root(str(values["workspace_root"]))
+                if workspace_root is None:
+                    return {"ok": False, "error": f"Workspace root is invalid or not writable: {values['workspace_root']}"}
+                draft.workspace_root = str(workspace_root)
             if "skills_dir" in values:
                 draft.skills_dir = str(values["skills_dir"])
             if "shell_type" in values:
@@ -646,18 +650,83 @@ class ConfigService:
         return payload
 
     def _commit_draft(self, draft: ConfigDraft, section: str, *, view: bool = False) -> Dict[str, Any]:
+        previous = {
+            "workspace_root": str(self.runtime.agent.workspace_context.root),
+            "skills_dir": self.runtime.config.skills_dir,
+            "shell_type": self.runtime.config.shell_type,
+            "skills_require_hash": bool(self.runtime.config.policy.get("skills", {}).get("require_hash", False)),
+        }
         report = draft.apply_to(self.runtime.config, backup=True)
         if not report.ok:
             return {"ok": False, "error": report.to_text()}
-        self.runtime.config._sync_runtime_fields()
-        self.runtime.agent.conversations.set_context_window(self.runtime.config.context_window)
-        self.runtime.agent.conversations.update_runtime_state(
-            model_profile=self.runtime.config.active_model_profile,
-            authorization_level=self.runtime.config.authorization_level,
-        )
-        self.runtime.agent.conversations.save_all(reason="web_settings_update")
+        sync_result = self._sync_runtime_after_commit(previous)
+        if not sync_result.get("ok"):
+            return {"ok": False, "error": sync_result.get("error", "Runtime sync failed.")}
         self.runtime.events.emit("config_updated", {"section": section})
         return {"ok": True, "settings": self.settings_view() if view else None, "config": self.redacted()}
+
+    def _validated_workspace_root(self, value: str) -> Optional[Path]:
+        try:
+            path = Path(value).expanduser().resolve()
+        except Exception:
+            return None
+        if not path.exists() or not path.is_dir():
+            return None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path, delete=True):
+                pass
+        except Exception:
+            return None
+        return path
+
+    def _sync_runtime_after_commit(self, previous: Dict[str, Any]) -> Dict[str, Any]:
+        config = self.runtime.config
+        agent = self.runtime.agent
+        config._sync_runtime_fields()
+        manager = agent.conversations
+        if hasattr(agent, "refresh_system_instruction"):
+            agent.refresh_system_instruction(update_histories=True)
+        manager.set_context_window(config.context_window)
+        manager._autosave = bool(config.sessions.get("autosave", True))
+        manager._max_sessions = int(config.sessions.get("max_sessions", 0) or 0)
+        manager._save_interval_seconds = float(config.sessions.get("save_interval_seconds", 0) or 0)
+
+        target_root = Path(config.workspace_root).expanduser().resolve()
+        current_root = Path(previous["workspace_root"]).expanduser().resolve()
+        workspace_changed = target_root != current_root
+        if workspace_changed:
+            result = agent.move_workspace(target_root)
+            if not result.success:
+                return {"ok": False, "error": result.message}
+        else:
+            manager.update_runtime_state(
+                workspace_root=str(agent.workspace_context.root),
+                model_profile=config.active_model_profile,
+                authorization_level=config.authorization_level,
+            )
+
+        shell_changed = previous["shell_type"] != config.shell_type
+        if shell_changed and not workspace_changed:
+            shell = agent.registry.tools.get("run_command")
+            if shell is not None and hasattr(shell, "_on_workspace_moved"):
+                shell._on_workspace_moved(agent.workspace_context.root)
+
+        skills_changed = (
+            workspace_changed
+            or previous["skills_dir"] != config.skills_dir
+            or previous["skills_require_hash"] != bool(config.policy.get("skills", {}).get("require_hash", False))
+        )
+        if skills_changed and not workspace_changed and hasattr(agent.registry, "reload_custom_skills"):
+            agent.registry.reload_custom_skills(
+                config.skills_dir,
+                require_hash=bool(config.policy.get("skills", {}).get("require_hash", False)),
+                workspace_root=agent.workspace_context.root,
+            )
+        if skills_changed:
+            self.runtime.events.emit("skills_updated", self.runtime.skills.list())
+
+        manager.save_all(reason="web_settings_update")
+        return {"ok": True}
 
 
 class SessionService:

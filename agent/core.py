@@ -34,7 +34,7 @@ class Agent:
             )
         self.workspace_context = workspace_context
 
-        self.system_instruction = (
+        self.base_system_instruction = (
             "You are Kairo, a terminal-native coding assistant. The user interacts with you "
             "in a full-screen terminal UI, and your current working directory is the configured workspace root.\n\n"
             "You have access to tools for file operations (read, write, list, search, patch), "
@@ -55,6 +55,7 @@ class Agent:
             "5. If a tool fails, report the error and suggest a fix.\n"
             "6. Prefer safe, reversible changes; never run destructive commands silently."
         )
+        self.system_instruction = self._compose_system_instruction()
 
         session_store = None
         if config.sessions.get("enabled", True):
@@ -84,6 +85,50 @@ class Agent:
             console=self.console,
             system_instruction=self.system_instruction,
         )
+
+    def _compose_system_instruction(self) -> str:
+        """Build the effective system prompt from base policy plus user settings."""
+        parts = [self.base_system_instruction]
+        assistant = self.config._extra_fields.get("assistant", {})
+        if isinstance(assistant, dict):
+            assistant_name = str(assistant.get("name", "")).strip()
+            system_prompt = str(assistant.get("system_prompt", "")).strip()
+            lines = []
+            if assistant_name and assistant_name != "Kai":
+                lines.append(f"Assistant display name: {assistant_name}")
+            if system_prompt:
+                lines.append(system_prompt)
+            if lines:
+                parts.append("User-configured assistant instructions:\n" + "\n".join(lines))
+
+        user = self.config._extra_fields.get("user", {})
+        if isinstance(user, dict):
+            lines = []
+            for label, key in (
+                ("User name", "name"),
+                ("Timezone", "timezone"),
+                ("Preferences", "preferences"),
+                ("Default instruction", "default_instruction"),
+            ):
+                value = str(user.get(key, "")).strip()
+                if value:
+                    lines.append(f"{label}: {value}")
+            if lines:
+                parts.append("Local user profile:\n" + "\n".join(lines))
+        return "\n\n".join(parts)
+
+    def refresh_system_instruction(self, *, update_histories: bool = False):
+        """Refresh prompt-sensitive runtime state after Settings changes."""
+        self.system_instruction = self._compose_system_instruction()
+        if hasattr(self, "conversations"):
+            self.conversations.system_instruction = self.system_instruction
+            if update_histories:
+                for session in self.conversations.sessions:
+                    if session.history and session.history[0].get("role") == "system":
+                        session.history[0] = {"role": "system", "content": self.system_instruction}
+                self.conversations.refresh_context()
+        if hasattr(self, "runner"):
+            self.runner.system_instruction = self.system_instruction
 
     @property
     def history(self) -> List[Dict[str, Any]]:

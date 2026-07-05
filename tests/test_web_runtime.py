@@ -160,6 +160,7 @@ class TestWebRuntime(unittest.TestCase):
         self.assertEqual(self.config.authorization_level, "auto")
         self.assertTrue(self.config.plan_mode)
         self.assertEqual(self.config._extra_fields["appearance"]["language"], "zh-CN")
+        self.assertEqual(self.runtime.agent.registry.tools["run_command"].session.shell_type, "powershell")
 
         user = self.client.patch(
             "/api/settings/user?token=test-token",
@@ -167,14 +168,17 @@ class TestWebRuntime(unittest.TestCase):
         )
         self.assertEqual(user.status_code, 200)
         self.assertEqual(self.config._extra_fields["user"]["name"], "Tester")
+        self.assertIn("Preferences: quiet UI", self.runtime.agent.system_instruction)
 
         assistant = self.client.patch(
             "/api/settings/assistant?token=test-token",
-            json={"name": "Kai", "thinking_mode": True, "context_management": {"trigger_percent": 80}},
+            json={"name": "Kai Custom", "system_prompt": "Prefer precise, calm answers.", "thinking_mode": True, "context_management": {"trigger_percent": 80}},
         )
         self.assertEqual(assistant.status_code, 200)
         self.assertTrue(self.config.thinking_mode)
         self.assertEqual(self.config.context_management_defaults["trigger_percent"], 80)
+        self.assertIn("Assistant display name: Kai Custom", self.runtime.agent.system_instruction)
+        self.assertIn("Prefer precise, calm answers.", self.runtime.agent.history[0]["content"])
 
         roles = self.client.patch(
             "/api/settings/roles?token=test-token",
@@ -182,6 +186,62 @@ class TestWebRuntime(unittest.TestCase):
         )
         self.assertEqual(roles.status_code, 200)
         self.assertEqual(self.config.model_roles["fast"], "test/test-model")
+
+        appearance = self.client.patch(
+            "/api/settings/appearance?token=test-token",
+            json={
+                "theme": "kairo-light",
+                "density": "compact",
+                "font_size": 17,
+                "animation": "reduced",
+                "mascot": False,
+                "reduced_motion": True,
+            },
+        )
+        self.assertEqual(appearance.status_code, 200)
+        self.assertEqual(self.config.web["theme"], "kairo-light")
+        self.assertEqual(self.config._extra_fields["appearance"]["density"], "compact")
+        self.assertEqual(appearance.json()["settings"]["appearance"]["font_size"], 17)
+
+        new_root = self.root / "next_workspace"
+        new_root.mkdir()
+        (new_root / "custom_skills").mkdir()
+        reload_calls = []
+
+        def fake_reload(skills_dir, *, require_hash=False, workspace_root=None):
+            reload_calls.append({
+                "skills_dir": skills_dir,
+                "require_hash": require_hash,
+                "workspace_root": str(workspace_root),
+            })
+
+        self.runtime.agent.registry.reload_custom_skills = fake_reload
+        workbench = self.client.patch(
+            "/api/settings/workbench?token=test-token",
+            json={
+                "workspace_root": str(new_root),
+                "skills_dir": "custom_skills",
+                "shell_type": "powershell",
+                "workspace_max_files": 99,
+                "workspace_diff_max_bytes": 4096,
+                "workspace_refresh_seconds": 1.5,
+                "workspace_bookmarks": [{"name": "next", "path": str(new_root)}],
+            },
+        )
+        self.assertEqual(workbench.status_code, 200)
+        self.assertEqual(Path(self.config.workspace_root).resolve(), new_root.resolve())
+        self.assertEqual(self.runtime.agent.workspace_context.root, new_root.resolve())
+        self.assertEqual(self.runtime.workspace.monitor.root, new_root.resolve())
+        self.assertEqual(self.config.ui["workspace_max_files"], 99)
+        self.assertTrue(any(call["skills_dir"] == "custom_skills" for call in reload_calls))
+
+        skills = self.client.patch(
+            "/api/settings/skills?token=test-token",
+            json={"skills_dir": "custom_skills", "require_hash": True},
+        )
+        self.assertEqual(skills.status_code, 200)
+        self.assertTrue(self.config.policy["skills"]["require_hash"])
+        self.assertTrue(any(call["require_hash"] for call in reload_calls))
 
     def test_provider_and_profile_settings_api(self):
         created_provider = self.client.post(
