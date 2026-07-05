@@ -117,8 +117,8 @@ function App() {
         <div className="page-canvas">{pageNode}</div>
       </section>
 
-      <aside className="right-inspector">
-        <WorkspaceInspector />
+      <aside className={page === "workspace" ? "right-inspector workspace-context-inspector" : "right-inspector"}>
+        {page === "workspace" ? <WorkspaceSummaryInspector /> : <WorkspaceInspector />}
         <RuntimeInspector status={status} kaiState={kaiState} />
       </aside>
       <Toasts />
@@ -225,6 +225,41 @@ function WorkspaceInspector() {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function WorkspaceSummaryInspector() {
+  const snapshot = useQuery({ queryKey: ["workspace", "inspector", "summary"], queryFn: () => getWorkspaceSnapshot("") });
+  const files = snapshot.data?.files || [];
+  const changes = snapshot.data?.changes || [];
+  const touched = changes.filter(change => change.session_touched).length;
+  const root = snapshot.data?.root || "Workspace";
+  const parts = root.split(/[\\/]/).filter(Boolean);
+  return (
+    <section className="inspector-panel workspace-summary-panel">
+      <div className="surface-header">
+        <div>
+          <span className="section-kicker">Workspace</span>
+          <strong>{parts[parts.length - 1] || root}</strong>
+        </div>
+        <FolderGit2 size={18} />
+      </div>
+      <div className="workspace-summary-metrics">
+        <div>
+          <span>Files</span>
+          <strong>{formatNumber(files.length)}</strong>
+        </div>
+        <div>
+          <span>Changes</span>
+          <strong>{formatNumber(changes.length)}</strong>
+        </div>
+        <div>
+          <span>Touched</span>
+          <strong>{formatNumber(touched)}</strong>
+        </div>
+      </div>
+      <p className="inspector-note">File tree, changed files, bookmarks and diff review now live in the Workspace tab.</p>
     </section>
   );
 }

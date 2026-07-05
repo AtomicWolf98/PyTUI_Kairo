@@ -124,29 +124,31 @@ export function WorkspacePage() {
             <Search size={15} />
             <input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search files" />
           </div>
-          {tree.length ? tree.map(path => {
-            const parent = path.split("/").slice(0, -1).join("/");
-            const isFolderLike = folders.has(path);
-            const toggleTarget = isFolderLike ? path : parent;
-            return (
-              <button className={path === activeFile ? "tree-row active" : "tree-row"} key={path} onClick={() => setSelected(path)}>
-                <span style={{ paddingLeft: `${Math.min(path.split("/").length - 1, 6) * 10}px` }}>
-                  {toggleTarget && folders.has(toggleTarget) ? (
-                    <span
-                      className="tree-toggle"
-                      onClick={event => {
-                        event.stopPropagation();
-                        setCollapsed({ ...collapsed, [toggleTarget]: !collapsed[toggleTarget] });
-                      }}
-                    >
-                      {collapsed[toggleTarget] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                    </span>
-                  ) : null}
-                  {path}
-                </span>
-              </button>
-            );
-          }) : <EmptyState title="No files found" />}
+          <div className="file-tree-scroll">
+            {tree.length ? tree.map(path => {
+              const parent = path.split("/").slice(0, -1).join("/");
+              const isFolderLike = folders.has(path);
+              const toggleTarget = isFolderLike ? path : parent;
+              return (
+                <button className={path === activeFile ? "tree-row active" : "tree-row"} key={path} onClick={() => setSelected(path)}>
+                  <span style={{ paddingLeft: `${Math.min(path.split("/").length - 1, 6) * 10}px` }}>
+                    {toggleTarget && folders.has(toggleTarget) ? (
+                      <span
+                        className="tree-toggle"
+                        onClick={event => {
+                          event.stopPropagation();
+                          setCollapsed({ ...collapsed, [toggleTarget]: !collapsed[toggleTarget] });
+                        }}
+                      >
+                        {collapsed[toggleTarget] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                      </span>
+                    ) : null}
+                    {path}
+                  </span>
+                </button>
+              );
+            }) : <EmptyState title="No files found" />}
+          </div>
         </section>
 
         <section className="surface changes-list">
@@ -154,13 +156,15 @@ export function WorkspacePage() {
             <strong>Changes</strong>
             <Badge tone={changes.length ? "warn" : "good"}>{changes.length}</Badge>
           </div>
-          {changes.length ? (
-            <>
+          <div className="changes-scroll">
+            {changes.length ? (
+              <>
               <ChangeGroup title="Session touched" items={groupedChanges.session} activeFile={activeFile} onSelect={setSelected} />
               <ChangeGroup title="Untracked" items={groupedChanges.untracked} activeFile={activeFile} onSelect={setSelected} />
               <ChangeGroup title="Other changes" items={groupedChanges.other} activeFile={activeFile} onSelect={setSelected} />
-            </>
-          ) : <EmptyState title="No working tree changes" detail="Session-touched files and Git changes will appear here." />}
+              </>
+            ) : <EmptyState title="No working tree changes" detail="Session-touched files and Git changes will appear here." />}
+          </div>
 
           <div className="bookmarks-block">
             <div className="surface-header">

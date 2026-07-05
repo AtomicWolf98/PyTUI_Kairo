@@ -2183,3 +2183,244 @@ textarea {
     flex-direction: column;
   }
 }
+
+/* 0.3.2 workspace information architecture fix */
+.workspace-context-inspector {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-summary-panel {
+  min-height: auto;
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 12px;
+}
+
+.workspace-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workspace-summary-metrics div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.workspace-summary-metrics span,
+.inspector-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-summary-metrics strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-note {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.workspace-page {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-page .page-header {
+  min-width: 0;
+  gap: 12px;
+}
+
+.workspace-page .page-header > div:first-child {
+  min-width: 0;
+}
+
+.workspace-page .page-header h2 {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-controls {
+  min-width: 0;
+}
+
+.workspace-controls .inline-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.workspace-grid {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(240px, 0.72fr) minmax(460px, 2.05fr);
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.workspace-grid .surface {
+  min-width: 0;
+  min-height: 0;
+}
+
+.file-tree,
+.changes-list,
+.diff-viewer {
+  overflow: hidden;
+}
+
+.file-tree {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.file-search {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 36px;
+  margin: 10px 12px 8px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-search input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.file-search input:focus {
+  border-color: transparent;
+}
+
+.file-tree-scroll,
+.changes-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.file-tree-scroll {
+  padding: 0 12px 12px;
+}
+
+.tree-row {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  text-align: left;
+}
+
+.tree-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.changes-list {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.changes-scroll {
+  padding: 10px 12px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.change-group {
+  min-height: auto;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.change-row {
+  width: 100%;
+  min-height: 36px;
+  max-height: 48px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  text-align: left;
+}
+
+.change-row.active {
+  color: var(--text);
+  background: var(--active-soft-bg);
+  border-color: rgba(139, 213, 202, 0.42);
+}
+
+.bookmarks-block {
+  min-height: 0;
+  max-height: 30%;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px 12px;
+}
+
+.bookmarks-block .surface-header {
+  padding: 0 0 8px;
+}
+
+.bookmark-row {
+  min-width: 0;
+}
+
+.diff-viewer {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.split-preview {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: minmax(0, 1fr) minmax(120px, 32%);
+}
+
+.diff-block,
+.file-preview {
+  min-width: 0;
+  height: 100%;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+@media (max-width: 1380px) {
+  .workspace-grid {
+    grid-template-columns: minmax(210px, 0.9fr) minmax(260px, 1.1fr);
+  }
+
+  .diff-viewer {
+    grid-column: 1 / -1;
+    min-height: 420px;
+  }
+}
+
+@media (max-width: 860px) {
+  .workspace-controls,
+  .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diff-viewer {
+    grid-column: auto;
+  }
+}
