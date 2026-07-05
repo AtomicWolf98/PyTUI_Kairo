@@ -24,6 +24,9 @@
   --canvas-bg: #090d12;
   --field-bg: #080c10;
   --surface-bg: rgba(17, 24, 33, 0.86);
+  --code-bg: #070a0e;
+  --code-text: #d8e0e8;
+  --active-soft-bg: rgba(139, 213, 202, 0.12);
   --kairo-font-size: 14px;
   --density-content-padding: 24px;
   --density-panel-padding: 18px;
@@ -55,6 +58,9 @@
   --canvas-bg: #f7f2e9;
   --field-bg: #fffdf8;
   --surface-bg: rgba(255, 250, 240, 0.9);
+  --code-bg: #fffdf8;
+  --code-text: #24303a;
+  --active-soft-bg: rgba(42, 157, 148, 0.12);
 }
 
 :root[data-kairo-density="compact"] {
@@ -1856,6 +1862,98 @@ textarea {
 :root[data-kairo-theme="light"] .primary-button,
 :root[data-kairo-theme="light"] .kai-preview {
   color: #f8fffc;
+}
+
+:root[data-kairo-theme="light"] .right-inspector,
+:root[data-kairo-theme="light"] .settings-stage {
+  background:
+    radial-gradient(circle at 50% 0%, rgba(42, 157, 148, 0.08), transparent 34%),
+    var(--canvas-bg);
+}
+
+:root[data-kairo-theme="light"] .settings-dialog,
+:root[data-kairo-theme="light"] .settings-sidebar,
+:root[data-kairo-theme="light"] .inspector-panel,
+:root[data-kairo-theme="light"] .kai-card,
+:root[data-kairo-theme="light"] .inspector-block,
+:root[data-kairo-theme="light"] .welcome-grid div,
+:root[data-kairo-theme="light"] .message-card,
+:root[data-kairo-theme="light"] .composer-panel,
+:root[data-kairo-theme="light"] .surface,
+:root[data-kairo-theme="light"] .surface.subtle,
+:root[data-kairo-theme="light"] .approval-card,
+:root[data-kairo-theme="light"] .profile-editor,
+:root[data-kairo-theme="light"] .session-card,
+:root[data-kairo-theme="light"] .check-card,
+:root[data-kairo-theme="light"] .doctor-summary,
+:root[data-kairo-theme="light"] .skill-card,
+:root[data-kairo-theme="light"] .empty-state,
+:root[data-kairo-theme="light"] .toast {
+  color: var(--text);
+  background: var(--surface-bg);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .settings-sidebar {
+  background: #faf4e8;
+}
+
+:root[data-kairo-theme="light"] .settings-sidebar button.active,
+:root[data-kairo-theme="light"] .settings-sidebar button:hover,
+:root[data-kairo-theme="light"] .list-row.active,
+:root[data-kairo-theme="light"] .list-row:hover,
+:root[data-kairo-theme="light"] .rail-session.active,
+:root[data-kairo-theme="light"] .rail-session:hover,
+:root[data-kairo-theme="light"] .new-chat-button,
+:root[data-kairo-theme="light"] .secondary-button,
+:root[data-kairo-theme="light"] .icon-button {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .tree-row.active,
+:root[data-kairo-theme="light"] .change-row.active {
+  color: var(--text);
+  background: var(--active-soft-bg);
+  border-color: rgba(42, 157, 148, 0.35);
+}
+
+:root[data-kairo-theme="light"] .tree-row:hover,
+:root[data-kairo-theme="light"] .change-row:hover,
+:root[data-kairo-theme="light"] .mini-file-row:hover {
+  background: rgba(42, 157, 148, 0.08);
+}
+
+:root[data-kairo-theme="light"] .diff-block,
+:root[data-kairo-theme="light"] .file-preview,
+:root[data-kairo-theme="light"] .json-editor,
+:root[data-kairo-theme="light"] .tool-card,
+:root[data-kairo-theme="light"] .thought-block,
+:root[data-kairo-theme="light"] .tool-card pre,
+:root[data-kairo-theme="light"] .thought-block pre,
+:root[data-kairo-theme="light"] .panel pre,
+:root[data-kairo-theme="light"] .code-block {
+  color: var(--code-text);
+  background: var(--code-bg);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .message-notice,
+:root[data-kairo-theme="light"] .message-error,
+:root[data-kairo-theme="light"] .file-search,
+:root[data-kairo-theme="light"] .badge {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .meter-track {
+  background: #e5ddcf;
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .modal-backdrop {
+  background: rgba(35, 29, 21, 0.28);
 }
 
 .chat-page {
