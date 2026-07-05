@@ -1688,8 +1688,37 @@ textarea:focus {
 /* 0.3.2 layout-fix: keep these overrides at EOF so legacy page rules cannot win. */
 
 .desktop-shell {
-  grid-template-columns: 58px minmax(220px, 300px) minmax(560px, 1fr) clamp(300px, 21vw, 430px);
+  grid-template-columns: 58px clamp(220px, 15vw, 260px) minmax(560px, 1fr) clamp(300px, 21vw, 430px);
   min-width: 0;
+}
+
+.project-rail {
+  min-width: 0;
+  overflow: hidden;
+  padding-inline: clamp(10px, 1vw, 14px);
+}
+
+.project-header,
+.rail-section,
+.rail-header,
+.rail-session,
+.new-chat-button,
+.text-link {
+  min-width: 0;
+}
+
+.rail-header span,
+.new-chat-button,
+.text-link,
+.rail-session strong,
+.rail-session span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-chat-button {
+  padding-inline: 12px;
 }
 
 .main-workbench,
@@ -1865,10 +1894,20 @@ textarea:focus {
 
 @media (max-width: 1500px) {
   .desktop-shell {
-    grid-template-columns: 54px minmax(210px, 286px) minmax(0, 1fr);
+    grid-template-columns: 54px clamp(200px, 20vw, 230px) minmax(0, 1fr);
   }
 
   .right-inspector {
+    display: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .desktop-shell {
+    grid-template-columns: 50px minmax(0, 1fr);
+  }
+
+  .project-rail {
     display: none;
   }
 }
