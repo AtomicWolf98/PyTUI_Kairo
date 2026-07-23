@@ -30,7 +30,10 @@ auth*.json
 *.jks
 *.log
 .kairo/
+.agents/
+.codex/
 .trae/
+.mypy_cache/
 .ruff_cache/
 .DS_Store
 .vscode/
