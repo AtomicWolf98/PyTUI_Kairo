@@ -5,8 +5,9 @@ import asyncio
 import secrets
 import socket
 import webbrowser
+from contextlib import suppress
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -16,20 +17,20 @@ from agent.config import Config
 from agent.runtime import DoctorService, KairoRuntime, event_to_dict
 
 
-def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> FastAPI:
+def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAPI:
     """Create the local-only Kairo WebUI application."""
-    app = FastAPI(title="Kairo WebUI", version="0.3.2-preview")
+    app = FastAPI(title="Kairo WebUI", version="0.3.3-preview")
     auth_token = token if token is not None else secrets.token_urlsafe(24)
     app.state.kairo_runtime = runtime
     app.state.kairo_token = auth_token
 
     @app.middleware("http")
     async def local_token_middleware(request: Request, call_next):
-        if request.url.path.startswith("/assets/") or request.url.path in ("/favicon.ico",):
-            return await call_next(request)
         local_error = _local_request_error(request)
         if local_error:
             return JSONResponse({"detail": local_error}, status_code=403)
+        if request.url.path.startswith("/assets/") or request.url.path in ("/", "/index.html", "/favicon.ico"):
+            return await call_next(request)
         if runtime.config.web.get("local_auth_token", True):
             supplied = request.headers.get("x-kairo-token") or request.query_params.get("token")
             if supplied != auth_token:
@@ -111,11 +112,9 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
 
     @app.post("/api/config/export")
     async def api_config_export(request: Request):
-        payload: Dict[str, Any] = {}
-        try:
+        payload: dict[str, Any] = {}
+        with suppress(Exception):
             payload = await request.json()
-        except Exception:
-            pass
         result = runtime.config_service.export_config(
             with_keys=bool(payload.get("with_keys", False)),
             confirm=str(payload.get("confirm", "")),
@@ -262,11 +261,9 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
 
     @app.post("/api/doctor")
     async def api_doctor(request: Request):
-        payload: Dict[str, Any] = {}
-        try:
+        payload: dict[str, Any] = {}
+        with suppress(Exception):
             payload = await request.json()
-        except Exception:
-            pass
         return DoctorService(runtime).run(local_only=bool(payload.get("local_only", True)))
 
     @app.websocket("/api/events")
@@ -274,10 +271,9 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
         if _local_websocket_error(websocket):
             await websocket.close(code=4403)
             return
-        if runtime.config.web.get("local_auth_token", True):
-            if websocket.query_params.get("token") != auth_token:
-                await websocket.close(code=4401)
-                return
+        if runtime.config.web.get("local_auth_token", True) and websocket.query_params.get("token") != auth_token:
+            await websocket.close(code=4401)
+            return
         await websocket.accept()
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -302,7 +298,7 @@ def create_web_app(runtime: KairoRuntime, *, token: Optional[str] = None) -> Fas
     return app
 
 
-def run_web(config: Config, *, host: Optional[str] = None, port: Optional[int] = None, open_browser: Optional[bool] = None):
+def run_web(config: Config, *, host: str | None = None, port: int | None = None, open_browser: bool | None = None):
     """Run the local WebUI server."""
     import uvicorn
 

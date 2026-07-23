@@ -1,14 +1,13 @@
 import copy
 import json
 import os
+from contextlib import suppress
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from agent.config_migration import build_llm_from_legacy
-from agent.profile_resolver import (
-    get_active_profile as _get_active_profile,
-    mask_key,
-)
+from agent.profile_resolver import get_active_profile as _get_active_profile
+from agent.profile_resolver import mask_key
 from agent.provider_registry import (
     LLM_DEFAULTS,
     get_model,
@@ -25,6 +24,7 @@ from agent.provider_registry import (
 
 ACTIVE_LLM_FIELDS = ("api_key", "base_url", "model", "temperature", "max_tokens", "context_window")
 BACKUP_GLOB_PREFIX = "config.backup."
+BACKUP_DIR_NAME = "config_backups"
 STRICT_MESSAGE_PACKING_DEFAULT = True
 SESSION_DEFAULTS = {
     "enabled": True,
@@ -71,39 +71,39 @@ WEB_DEFAULTS = {
 class Config:
     def __init__(self, config_path: str = "config.json"):
         self.config_path = Path(config_path)
-        self._global_api_key_override: Optional[str] = None
-        self._base_url_override: Optional[str] = None
-        self._model_override: Optional[str] = None
-        self._context_window_override: Optional[int] = None
-        self._load_error: Optional[Exception] = None
-        self._extra_fields: Dict[str, Any] = {}
+        self._global_api_key_override: str | None = None
+        self._base_url_override: str | None = None
+        self._model_override: str | None = None
+        self._context_window_override: int | None = None
+        self._load_error: Exception | None = None
+        self._extra_fields: dict[str, Any] = {}
 
         self.api_key: str = ""
         self.base_url: str = "https://api.openai.com/v1"
         self.model: str = "gpt-4o"
-        self.models: List[str] = []
+        self.models: list[str] = []
         self.active_provider: str = ""
         self.active_model: str = ""
         self.active_model_profile: str = ""
-        self.model_profiles: List[Dict[str, Any]] = []
-        self.profile_defaults: Dict[str, Any] = dict(LLM_DEFAULTS)
+        self.model_profiles: list[dict[str, Any]] = []
+        self.profile_defaults: dict[str, Any] = dict(LLM_DEFAULTS)
         self.temperature: float = float(LLM_DEFAULTS["temperature"])
         self.max_tokens: int = int(LLM_DEFAULTS["max_tokens"])
         self.context_window: int = int(LLM_DEFAULTS["context_window"])
-        self.context_management_defaults: Dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
-        self.context_management: Dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
-        self.ui: Dict[str, Any] = dict(UI_DEFAULTS)
-        self.web: Dict[str, Any] = dict(WEB_DEFAULTS)
-        self.sessions: Dict[str, Any] = dict(SESSION_DEFAULTS)
+        self.context_management_defaults: dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
+        self.context_management: dict[str, Any] = dict(CONTEXT_MANAGEMENT_DEFAULTS)
+        self.ui: dict[str, Any] = dict(UI_DEFAULTS)
+        self.web: dict[str, Any] = dict(WEB_DEFAULTS)
+        self.sessions: dict[str, Any] = dict(SESSION_DEFAULTS)
         self.workspace_root: str = "."
         self.skills_dir: str = "./skills"
         self.shell_type: str = "cmd"
         self.authorization_level: str = "manual"
         self.plan_mode: bool = False
         self.thinking_mode: bool = False
-        self.model_roles: Dict[str, str] = {}
-        self.workspace_bookmarks: List[Dict[str, str]] = []
-        self.llm: Dict[str, Any] = {
+        self.model_roles: dict[str, str] = {}
+        self.workspace_bookmarks: list[dict[str, str]] = []
+        self.llm: dict[str, Any] = {
             "active_profile": "",
             "active_provider": "",
             "active_model": "",
@@ -111,7 +111,7 @@ class Config:
             "providers": [],
             "profiles": [],
         }
-        self.policy: Dict[str, Any] = {
+        self.policy: dict[str, Any] = {
             "workspace_path": {
                 "allow_absolute_outside": False,
             },
@@ -164,7 +164,7 @@ class Config:
     def _format_profile_label(self, provider_name: str, model_name: str) -> str:
         return f"{provider_name} / {model_name}"
 
-    def _normalize_sessions(self, value: Any) -> Dict[str, Any]:
+    def _normalize_sessions(self, value: Any) -> dict[str, Any]:
         settings = dict(SESSION_DEFAULTS)
         if isinstance(value, dict):
             settings.update({key: value[key] for key in settings if key in value})
@@ -174,7 +174,7 @@ class Config:
         settings["max_sessions"] = max(1, int(settings["max_sessions"]))
         return settings
 
-    def _normalize_context_management(self, value: Any) -> Dict[str, Any]:
+    def _normalize_context_management(self, value: Any) -> dict[str, Any]:
         settings = dict(CONTEXT_MANAGEMENT_DEFAULTS)
         if isinstance(value, dict):
             settings.update({key: value[key] for key in settings if key in value})
@@ -188,8 +188,8 @@ class Config:
         settings["preserve_recent_turns"] = max(0, int(settings["preserve_recent_turns"]))
         return settings
 
-    def _normalize_workspace_bookmarks(self, value: Any) -> List[Dict[str, str]]:
-        bookmarks: List[Dict[str, str]] = []
+    def _normalize_workspace_bookmarks(self, value: Any) -> list[dict[str, str]]:
+        bookmarks: list[dict[str, str]] = []
         if not isinstance(value, list):
             return bookmarks
         seen: set = set()
@@ -204,7 +204,7 @@ class Config:
             bookmarks.append({"name": name, "path": path})
         return bookmarks
 
-    def _normalize_web(self, value: Any) -> Dict[str, Any]:
+    def _normalize_web(self, value: Any) -> dict[str, Any]:
         settings = dict(WEB_DEFAULTS)
         if isinstance(value, dict):
             settings.update({key: value[key] for key in settings if key in value})
@@ -217,12 +217,12 @@ class Config:
         settings["max_event_buffer"] = max(100, int(settings["max_event_buffer"]))
         return settings
 
-    def update_web(self, values: Dict[str, Any]) -> None:
+    def update_web(self, values: dict[str, Any]) -> None:
         merged = dict(self.web)
         merged.update(values or {})
         self.web = self._normalize_web(merged)
 
-    def _normalize_llm_defaults(self, value: Any) -> Dict[str, Any]:
+    def _normalize_llm_defaults(self, value: Any) -> dict[str, Any]:
         defaults = dict(LLM_DEFAULTS)
         if isinstance(value, dict):
             for key in defaults:
@@ -233,16 +233,16 @@ class Config:
         defaults["context_window"] = int(defaults["context_window"])
         return defaults
 
-    def _normalize_model(self, value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_model(self, value: Any) -> dict[str, Any] | None:
         return normalize_model(value, self._normalize_context_management)
 
-    def _normalize_provider(self, value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_provider(self, value: Any) -> dict[str, Any] | None:
         return normalize_provider(value, self._normalize_context_management)
 
-    def _normalize_providers(self, value: Any) -> List[Dict[str, Any]]:
+    def _normalize_providers(self, value: Any) -> list[dict[str, Any]]:
         return normalize_providers(value, self._normalize_context_management)
 
-    def _build_llm_from_legacy(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_llm_from_legacy(self, data: dict[str, Any]) -> dict[str, Any]:
         llm = build_llm_from_legacy(
             data,
             self._normalize_context_management,
@@ -255,7 +255,7 @@ class Config:
         llm.setdefault("strict_message_packing", bool(data.get("strict_message_packing", STRICT_MESSAGE_PACKING_DEFAULT)))
         return llm
 
-    def _normalize_llm_config(self, value: Any, fallback_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_llm_config(self, value: Any, fallback_data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, dict):
             return self._build_llm_from_legacy(fallback_data)
 
@@ -300,44 +300,44 @@ class Config:
             llm["active_model"] = active_provider["models"][0]["name"]
         return llm
 
-    def _get_provider(self, provider_name: str) -> Optional[Dict[str, Any]]:
+    def _get_provider(self, provider_name: str) -> dict[str, Any] | None:
         return get_provider(self.llm["providers"], provider_name)
 
-    def _get_model(self, provider_name: str, model_name: str) -> Optional[Dict[str, Any]]:
+    def _get_model(self, provider_name: str, model_name: str) -> dict[str, Any] | None:
         provider = self._get_provider(provider_name)
         if not provider:
             return None
         return get_model(provider, model_name)
 
-    def _resolve_profile_choice(self, choice: str) -> Optional[Tuple[str, str]]:
+    def _resolve_profile_choice(self, choice: str) -> tuple[str, str] | None:
         return resolve_profile_choice(choice, self.llm["providers"])
 
-    def get_provider_names(self) -> List[str]:
+    def get_provider_names(self) -> list[str]:
         return [provider["name"] for provider in self.llm["providers"]]
 
-    def get_model_names(self, provider_name: str) -> List[str]:
+    def get_model_names(self, provider_name: str) -> list[str]:
         provider = self._get_provider(provider_name)
         if not provider:
             return []
         return [model["name"] for model in provider["models"]]
 
-    def get_model_profile_names(self) -> List[str]:
+    def get_model_profile_names(self) -> list[str]:
         if self.llm.get("profiles"):
             return [p.get("label") or p.get("id") or p.get("name", "") for p in self.llm["profiles"]]
-        names: List[str] = []
+        names: list[str] = []
         for provider in self.llm["providers"]:
             for model in provider["models"]:
                 names.append(self._format_profile_label(provider["name"], model["name"]))
         return names
 
-    def get_profile_ids(self) -> List[str]:
+    def get_profile_ids(self) -> list[str]:
         """Return profile ids (new structure) or legacy provider/model labels."""
         if self.llm.get("profiles"):
             return [str(p.get("id", "")).strip() for p in self.llm["profiles"] if p.get("id")]
         return self.get_model_profile_names()
 
-    def _build_legacy_profiles(self) -> List[Dict[str, Any]]:
-        profiles: List[Dict[str, Any]] = []
+    def _build_legacy_profiles(self) -> list[dict[str, Any]]:
+        profiles: list[dict[str, Any]] = []
         if self.llm.get("profiles"):
             for profile in self.llm["profiles"]:
                 pid = str(profile.get("id", "")).strip()
@@ -409,7 +409,7 @@ class Config:
         profile_id: str,
         *,
         update_roles: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Unified transaction that switches the active chat profile.
 
         0.2.6-beta: this is the single entry point for ``/model``. It keeps
@@ -431,7 +431,7 @@ class Config:
         role_updated, active_updated}``.
         """
         profile_id = (profile_id or "").strip()
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "ok": False,
             "profile_id": profile_id,
             "label": "",
@@ -445,7 +445,7 @@ class Config:
             return result
 
         if self.llm.get("profiles"):
-            matched_id: Optional[str] = None
+            matched_id: str | None = None
             for profile in self.llm["profiles"]:
                 pid = str(profile.get("id", "")).strip()
                 label = str(profile.get("label", "")).strip()
@@ -493,10 +493,9 @@ class Config:
             return result
         self.llm["active_provider"] = provider_name
         self.llm["active_model"] = model_name
-        if update_roles and self.model_roles.get("chat"):
-            if self.model_roles["chat"] != profile_id:
-                self.model_roles["chat"] = profile_id
-                result["role_updated"] = True
+        if update_roles and self.model_roles.get("chat") and self.model_roles["chat"] != profile_id:
+            self.model_roles["chat"] = profile_id
+            result["role_updated"] = True
         self._sync_runtime_fields()
         result["ok"] = True
         result.update({
@@ -508,7 +507,7 @@ class Config:
         })
         return result
 
-    def get_active_llm_settings(self) -> Dict[str, Any]:
+    def get_active_llm_settings(self) -> dict[str, Any]:
         """Resolve runtime LLM settings using the profile-first resolver."""
         profile = _get_active_profile(self)
         if profile is None:
@@ -597,7 +596,7 @@ class Config:
         base_url: str,
         api_key: str = "",
         api_key_env: str = "",
-        models: Optional[List[Dict[str, Any]]] = None,
+        models: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Add a new provider. Returns False if the name already exists."""
         name = (name or "").strip()
@@ -626,9 +625,9 @@ class Config:
         self,
         name: str,
         *,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_key_env: Optional[str] = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        api_key_env: str | None = None,
     ) -> bool:
         """Update base_url / api_key / api_key_env for an existing provider."""
         provider = self._get_provider(name)
@@ -668,10 +667,10 @@ class Config:
         provider_name: str,
         *,
         name: str,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        context_window: Optional[int] = None,
-        context_management: Optional[Dict[str, Any]] = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        context_window: int | None = None,
+        context_management: dict[str, Any] | None = None,
     ) -> bool:
         provider = self._get_provider(provider_name)
         if not provider:
@@ -696,10 +695,10 @@ class Config:
         provider_name: str,
         model_name: str,
         *,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        context_window: Optional[int] = None,
-        context_management: Optional[Dict[str, Any]] = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        context_window: int | None = None,
+        context_management: dict[str, Any] | None = None,
     ) -> bool:
         provider = self._get_provider(provider_name)
         if not provider:
@@ -786,35 +785,44 @@ class Config:
     # ---- Backup helper ----------------------------------------------------------
 
     @staticmethod
-    def list_backups(config_path: os.PathLike | str) -> List[Dict[str, Any]]:
+    def list_backups(config_path: os.PathLike | str) -> list[dict[str, Any]]:
         """Return backup files for the given config path sorted newest-first."""
         path = Path(config_path)
         if not path.exists():
             return []
-        backups: List[Dict[str, Any]] = []
-        for entry in path.parent.glob(f"{BACKUP_GLOB_PREFIX}*{path.suffix or '.json'}"):
-            if not entry.is_file():
+        backups: list[dict[str, Any]] = []
+        search_dirs = [path.parent / ".kairo" / BACKUP_DIR_NAME, path.parent]
+        seen: set[str] = set()
+        for directory in search_dirs:
+            if not directory.exists():
                 continue
-            try:
-                stat = entry.stat()
-            except OSError:
-                continue
-            backups.append({
-                "name": entry.name,
-                "path": str(entry),
-                "size": stat.st_size,
-                "modified": stat.st_mtime,
-            })
+            for entry in directory.glob(f"{BACKUP_GLOB_PREFIX}*{path.suffix or '.json'}"):
+                if not entry.is_file():
+                    continue
+                try:
+                    resolved = str(entry.resolve())
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                backups.append({
+                    "name": entry.name,
+                    "path": str(entry),
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                })
         backups.sort(key=lambda item: item.get("modified", 0), reverse=True)
         return backups
 
     def load(self):
         """Load configuration from JSON and environment variables."""
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
         self._load_error = None
         if self.config_path.exists():
             try:
-                with open(self.config_path, "r", encoding="utf-8-sig") as handle:
+                with open(self.config_path, encoding="utf-8-sig") as handle:
                     data = json.load(handle) or {}
             except Exception as exc:
                 self._load_error = exc
@@ -890,8 +898,8 @@ class Config:
     def save(self, *, backup: bool = False):
         """Save configuration using the provider-centric llm structure.
 
-        ``backup=True`` writes a timestamped copy of the existing on-disk file to
-        ``config.backup.YYYYMMDD-HHMMSS.json`` before the atomic replace. Config
+        ``backup=True`` writes a timestamped copy of the existing on-disk file under
+        ``.kairo/config_backups/config.backup.YYYYMMDD-HHMMSS.json`` before the atomic replace. Config
         backups never persist raw API keys; this method relies on the existing
         file content so leaked keys in an existing file would be preserved in
         the backup — callers should ensure env-based key storage in production.
@@ -905,7 +913,7 @@ class Config:
         if backup and self.config_path.exists():
             self._write_backup(self.config_path)
 
-        providers: List[Dict[str, Any]] = []
+        providers: list[dict[str, Any]] = []
         for provider in self.llm["providers"]:
             serialized_provider = {
                 "name": provider["name"],
@@ -932,7 +940,7 @@ class Config:
                 serialized_provider["models"].append(serialized_model)
             providers.append(serialized_provider)
 
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "llm": {
                 "active_provider": self.llm["active_provider"],
                 "active_model": self.llm["active_model"],
@@ -977,10 +985,8 @@ class Config:
                 os.fsync(handle.fileno())
             os.replace(tmp_path, self.config_path)
         except Exception as exc:
-            try:
+            with suppress(Exception):
                 tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             raise RuntimeError(f"Failed to save config to {self.config_path}: {exc}") from exc
 
     def __repr__(self) -> str:
@@ -992,11 +998,11 @@ class Config:
 
     # ---- Serialization helpers --------------------------------------------------
 
-    def _serialize_profiles(self) -> List[Dict[str, Any]]:
+    def _serialize_profiles(self) -> list[dict[str, Any]]:
         """Serialize llm.profiles for disk, preserving inline keys by default."""
-        profiles: List[Dict[str, Any]] = []
+        profiles: list[dict[str, Any]] = []
         for profile in self.llm.get("profiles", []):
-            serialized: Dict[str, Any] = {
+            serialized: dict[str, Any] = {
                 "id": str(profile.get("id", "")).strip(),
                 "label": str(profile.get("label", "")).strip(),
                 "provider": str(profile.get("provider", "")).strip(),
@@ -1013,9 +1019,9 @@ class Config:
             profiles.append(serialized)
         return profiles
 
-    def _serialize_legacy_llm(self) -> Dict[str, Any]:
+    def _serialize_legacy_llm(self) -> dict[str, Any]:
         """Serialize the legacy provider-centric llm structure."""
-        providers: List[Dict[str, Any]] = []
+        providers: list[dict[str, Any]] = []
         for provider in self.llm["providers"]:
             serialized_provider = {
                 "name": provider["name"],
@@ -1049,28 +1055,28 @@ class Config:
     # ---- Backup machinery --------------------------------------------------------
 
     @staticmethod
-    def _write_backup(config_path: Path) -> Optional[Path]:
-        """Copy ``config_path`` to a timestamped backup in the same directory."""
+    def _write_backup(config_path: Path) -> Path | None:
+        """Copy ``config_path`` to a timestamped backup under ``.kairo``."""
         from datetime import datetime
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         suffix = config_path.suffix or ".json"
-        backup_path = config_path.with_name(f"{BACKUP_GLOB_PREFIX}{timestamp}{suffix}")
+        backup_dir = config_path.parent / ".kairo" / BACKUP_DIR_NAME
+        backup_path = backup_dir / f"{BACKUP_GLOB_PREFIX}{timestamp}{suffix}"
         try:
-            with open(config_path, "r", encoding="utf-8") as source:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            with open(config_path, encoding="utf-8") as source:
                 content = source.read()
             with open(backup_path, "w", encoding="utf-8") as dest:
                 dest.write(content)
             return backup_path
         except Exception:
-            try:
+            with suppress(Exception):
                 backup_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             return None
 
     @classmethod
-    def create_backup(cls, config_path: os.PathLike | str) -> Optional[Path]:
+    def create_backup(cls, config_path: os.PathLike | str) -> Path | None:
         """Create an explicit backup of *config_path* and return its location."""
         path = Path(config_path)
         if not path.exists():
@@ -1088,11 +1094,13 @@ class Config:
         config_path = Path(config_path)
         backup_path = Path(backup_name)
         if not backup_path.is_absolute():
-            backup_path = config_path.parent / backup_path
+            modern_path = config_path.parent / ".kairo" / BACKUP_DIR_NAME / backup_path
+            legacy_path = config_path.parent / backup_path
+            backup_path = modern_path if modern_path.exists() else legacy_path
         if not backup_path.exists():
             return False
         try:
-            with open(backup_path, "r", encoding="utf-8") as source:
+            with open(backup_path, encoding="utf-8") as source:
                 content = source.read()
             tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
             with open(tmp_path, "w", encoding="utf-8") as dest:
@@ -1102,8 +1110,6 @@ class Config:
             os.replace(tmp_path, config_path)
             return True
         except Exception:
-            try:
+            with suppress(Exception):
                 tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             return False

@@ -26,6 +26,7 @@ class TestWebRuntime(unittest.TestCase):
                     "provider": "test",
                     "base_url": "https://example.test/v1",
                     "api_key": "secret-key",
+                    "api_key_env": "TEST_MODEL_KEY",
                     "model": "test-model",
                     "temperature": 0.2,
                     "max_tokens": 100,
@@ -68,6 +69,12 @@ class TestWebRuntime(unittest.TestCase):
         self.assertNotIn("secret-key", payload)
 
     def test_workspace_sessions_skills_and_stop_endpoints(self):
+        root_without_token = self.client.get("/")
+        self.assertEqual(root_without_token.status_code, 200)
+
+        api_without_token = self.client.get("/api/sessions")
+        self.assertEqual(api_without_token.status_code, 401)
+
         root = self.client.get("/?token=test-token")
         self.assertEqual(root.status_code, 200)
         self.assertIn("text/html", root.headers.get("content-type", ""))
@@ -146,10 +153,13 @@ class TestWebRuntime(unittest.TestCase):
         payload = view.json()
         self.assertIn("general", payload)
         self.assertIn("providers", payload)
-        self.assertEqual(payload["diagnostics"]["backend_version"], "0.3.2-preview")
-        self.assertEqual(payload["diagnostics"]["static_version"], "0.3.2-preview")
+        self.assertEqual(payload["diagnostics"]["backend_version"], "0.3.3-preview")
+        self.assertEqual(payload["diagnostics"]["static_version"], "0.3.3-preview")
         self.assertTrue(payload["diagnostics"]["version_match"])
         self.assertNotIn("secret-key", json.dumps(payload))
+        provider = payload["providers"][0]
+        self.assertEqual(provider["api_key_env"], "TEST_MODEL_KEY")
+        self.assertTrue(provider["has_inline_key"])
 
         general = self.client.patch(
             "/api/settings/general?token=test-token",
@@ -235,6 +245,16 @@ class TestWebRuntime(unittest.TestCase):
         self.assertEqual(self.config.ui["workspace_max_files"], 99)
         self.assertTrue(any(call["skills_dir"] == "custom_skills" for call in reload_calls))
 
+        before_root = self.config.workspace_root
+        before_runtime_root = self.runtime.agent.workspace_context.root
+        invalid = self.client.patch(
+            "/api/settings/workbench?token=test-token",
+            json={"workspace_root": str(self.root / "missing_workspace")},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(self.config.workspace_root, before_root)
+        self.assertEqual(self.runtime.agent.workspace_context.root, before_runtime_root)
+
         skills = self.client.patch(
             "/api/settings/skills?token=test-token",
             json={"skills_dir": "custom_skills", "require_hash": True},
@@ -271,6 +291,33 @@ class TestWebRuntime(unittest.TestCase):
         self.assertEqual(extra_profile["base_url"], "https://extra2.test/v1")
         self.assertEqual(extra_profile["api_key"], "extra-secret")
         self.assertEqual(extra_profile["api_key_env"], "EXTRA_KEY")
+
+        created_second_extra = self.client.post(
+            "/api/settings/profile?token=test-token",
+            json={
+                "id": "extra/second",
+                "label": "Extra Second",
+                "provider": "extra",
+                "base_url": "https://extra2.test/v1",
+                "model": "second",
+                "api_key_env": "EXTRA_SECOND_KEY",
+                "temperature": 0.2,
+                "max_tokens": 100,
+                "context_window": 1000,
+            },
+        )
+        self.assertEqual(created_second_extra.status_code, 200)
+        provider_base_only = self.client.patch(
+            "/api/settings/provider/extra?token=test-token",
+            json={"base_url": "https://extra3.test/v1"},
+        )
+        self.assertEqual(provider_base_only.status_code, 200)
+        extra_profiles = [profile for profile in self.config.llm["profiles"] if profile.get("provider") == "extra"]
+        self.assertGreaterEqual(len(extra_profiles), 2)
+        self.assertTrue(all(profile["base_url"] == "https://extra3.test/v1" for profile in extra_profiles))
+        self.assertEqual(next(profile for profile in extra_profiles if profile["id"] == "extra/extra-model")["api_key"], "extra-secret")
+        self.assertEqual(next(profile for profile in extra_profiles if profile["id"] == "extra/extra-model")["api_key_env"], "EXTRA_KEY")
+        self.assertEqual(next(profile for profile in extra_profiles if profile["id"] == "extra/second")["api_key_env"], "EXTRA_SECOND_KEY")
 
         created_profile = self.client.post(
             "/api/settings/profile?token=test-token",

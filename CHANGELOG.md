@@ -1,5 +1,26 @@
 ﻿# Changelog / 更新记录
 
+## [0.3.3-preview]
+
+### Fixed / 修复
+
+- Hardened Web Settings provider/profile editing so saving one provider no longer clears other API keys or API-key environment bindings.
+- Added workspace settings preflight and rollback behavior: invalid workspace roots fail before writing `config.json`, and runtime sync failures restore the previous config.
+- Moved WebUI startup tokens out of the visible browser URL after first load; API calls now use the `x-kairo-token` header while WebSocket auth remains local-token protected.
+- Added stable runtime event sequence/message/tool identifiers so same-name tool calls and streaming deltas are matched reliably in the WebUI.
+- Reworked Workspace grouping and removed the frontend-only 900-file silent cap; truncated snapshots now show explicit backend limit information.
+- Improved light-theme token coverage for Chat, Workspace, Settings, Inspector, Composer and Toast surfaces.
+- Config backups now write under `.kairo/config_backups/`; legacy root-level `config.backup.*.json` files remain restorable but are ignored by Git.
+
+### Added / New
+
+- Added Vitest frontend tests for runtime event reduction and Web token bootstrap behavior.
+- Added Web runtime tests for provider key/env preservation, workspace rollback, redacted settings output and token-protected API behavior.
+
+### Changed
+
+- Package version moved to `0.3.3-preview`.
+
 ## [0.3.2-preview]
 
 ### Added / New

@@ -9,6 +9,7 @@ export type RuntimeStatus = {
   context: { used: number; limit: number; percent: number };
   modes: { authorization: string; plan: boolean; thinking: boolean };
   task: { current: string; status: string; busy: boolean };
+  diagnostics?: { subscriber_errors?: Array<Record<string, unknown>> };
   web?: { token_required: boolean };
 };
 
@@ -16,6 +17,7 @@ export type RuntimeEvent = {
   kind: string;
   payload: unknown;
   timestamp: number;
+  sequence?: number;
 };
 
 export type ChatMessageView = {
@@ -64,6 +66,8 @@ export type WorkspaceSnapshot = {
   diff: string;
   diff_truncated: boolean;
   tree_truncated: boolean;
+  file_count?: number;
+  file_limit?: number;
   error: string;
 };
 
@@ -101,6 +105,7 @@ export type ConfigProfile = {
   api_key?: string;
   api_key_source?: string;
   api_key_env?: string;
+  has_inline_key?: boolean;
   model: string;
   temperature: number;
   max_tokens: number;
@@ -137,8 +142,11 @@ export type ProviderSetting = {
   base_url: string;
   api_key: string;
   api_key_source: string;
+  api_key_env: string;
+  has_inline_key: boolean;
   model_count: number;
   profiles: string[];
+  profile_ids: string[];
 };
 
 export type SettingsViewModel = {

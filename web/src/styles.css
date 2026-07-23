@@ -2424,3 +2424,208 @@ textarea {
     grid-column: auto;
   }
 }
+
+/* 0.3.3 stability overrides: layout proportions, light tokens and workspace clarity. */
+
+.desktop-shell {
+  grid-template-columns: 58px clamp(240px, 16vw, 320px) minmax(0, 1fr) clamp(300px, 20vw, 420px);
+}
+
+.project-rail {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+}
+
+.main-workbench {
+  position: relative;
+  z-index: 1;
+}
+
+.project-header strong,
+.project-header small,
+.rail-session strong,
+.rail-session span,
+.text-link {
+  max-width: 100%;
+}
+
+.welcome-grid div,
+.settings-dialog,
+.settings-sidebar,
+.settings-content,
+.surface,
+.editor-panel,
+.message-card,
+.composer-panel,
+.inspector-panel,
+.kai-card,
+.inspector-block,
+.tool-card,
+.thought-block,
+.approval-card,
+.empty-state,
+.workspace-summary-metrics div {
+  background: var(--surface-bg);
+  border-color: var(--line);
+}
+
+.new-chat-button,
+.rail-session:hover,
+.rail-session.active,
+.settings-sidebar button:hover,
+.settings-sidebar button.active,
+.list-row:hover,
+.list-row.active,
+.secondary-button,
+.icon-button,
+.file-search,
+.message-notice,
+.message-error {
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+input,
+select,
+textarea,
+.confirm-input {
+  color: var(--text);
+  background: var(--field-bg);
+  border-color: var(--line-strong);
+}
+
+.meter-track,
+.code-block,
+.json-editor,
+.diff-block,
+.file-preview,
+.tool-card pre,
+.thought-block pre {
+  color: var(--code-text);
+  background: var(--code-bg);
+  border-color: var(--line);
+}
+
+.workspace-grid {
+  grid-template-columns: minmax(240px, 0.8fr) minmax(260px, 0.75fr) minmax(520px, 2fr);
+}
+
+.file-tree {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.warning-box.compact {
+  min-height: auto;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.code-viewer {
+  tab-size: 2;
+  overflow: auto;
+}
+
+.toasts {
+  right: clamp(14px, 1vw, 22px);
+  bottom: clamp(14px, 1vw, 22px);
+  max-width: min(440px, calc(100vw - 32px));
+  z-index: 20;
+}
+
+.toast {
+  text-align: left;
+  box-shadow: var(--shadow);
+}
+
+:root[data-kairo-theme="light"] .welcome-grid div,
+:root[data-kairo-theme="light"] .inspector-panel,
+:root[data-kairo-theme="light"] .kai-card,
+:root[data-kairo-theme="light"] .inspector-block,
+:root[data-kairo-theme="light"] .compact-grid,
+:root[data-kairo-theme="light"] .composer-panel,
+:root[data-kairo-theme="light"] .message-card,
+:root[data-kairo-theme="light"] .surface,
+:root[data-kairo-theme="light"] .editor-panel,
+:root[data-kairo-theme="light"] .settings-dialog,
+:root[data-kairo-theme="light"] .settings-content,
+:root[data-kairo-theme="light"] .workspace-summary-metrics div,
+:root[data-kairo-theme="light"] .toast {
+  color: var(--text);
+  background: var(--surface-bg);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .secondary-button,
+:root[data-kairo-theme="light"] .icon-button,
+:root[data-kairo-theme="light"] .new-chat-button,
+:root[data-kairo-theme="light"] .rail-session.active,
+:root[data-kairo-theme="light"] .rail-session:hover,
+:root[data-kairo-theme="light"] .settings-sidebar button.active,
+:root[data-kairo-theme="light"] .settings-sidebar button:hover,
+:root[data-kairo-theme="light"] .list-row.active,
+:root[data-kairo-theme="light"] .list-row:hover,
+:root[data-kairo-theme="light"] .file-search,
+:root[data-kairo-theme="light"] .message-notice,
+:root[data-kairo-theme="light"] .message-error {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .code-viewer,
+:root[data-kairo-theme="light"] .code-block,
+:root[data-kairo-theme="light"] .json-editor,
+:root[data-kairo-theme="light"] .tool-card pre,
+:root[data-kairo-theme="light"] .thought-block pre {
+  color: var(--code-text);
+  background: var(--code-bg);
+  border-color: var(--line);
+}
+
+:root[data-kairo-theme="light"] .primary-button,
+:root[data-kairo-theme="light"] .brand-button,
+:root[data-kairo-theme="light"] .welcome-mark,
+:root[data-kairo-theme="light"] .kai-orb,
+:root[data-kairo-theme="light"] .badge-info,
+:root[data-kairo-theme="light"] .badge-good {
+  color: #f8fffc;
+}
+
+@media (max-width: 1500px) {
+  .desktop-shell {
+    grid-template-columns: 54px clamp(230px, 22vw, 300px) minmax(0, 1fr);
+  }
+
+  .right-inspector {
+    display: none;
+  }
+
+  .workspace-grid {
+    grid-template-columns: minmax(230px, 0.85fr) minmax(260px, 1fr);
+  }
+
+  .diff-viewer {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 920px) {
+  .desktop-shell {
+    grid-template-columns: 50px minmax(0, 1fr);
+  }
+
+  .project-rail {
+    display: none;
+  }
+
+  .workspace-grid,
+  .workspace-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .diff-viewer {
+    grid-column: auto;
+  }
+}

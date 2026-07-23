@@ -257,11 +257,12 @@ function ProvidersPanel({ settings }: { settings: SettingsViewModel }) {
 }
 
 function ProviderEditor({ provider }: { provider: ProviderSetting }) {
-  const [draft, setDraft] = useState({ ...provider, api_key_input: "", api_key_env: "" });
+  const [draft, setDraft] = useState({ ...provider, api_key_input: "", api_key_env: provider.api_key_env || "" });
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"save-key" | "clear-key" | null>(null);
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
-  useEffect(() => setDraft({ ...provider, api_key_input: "", api_key_env: "" }), [provider]);
+  useEffect(() => setDraft({ ...provider, api_key_input: "", api_key_env: provider.api_key_env || "" }), [provider]);
 
   async function save(clear_key = false) {
     try {
@@ -312,11 +313,27 @@ function ProviderEditor({ provider }: { provider: ProviderSetting }) {
       <PasswordField label="New API key" value={draft.api_key_input} onChange={api_key_input => setDraft({ ...draft, api_key_input })} placeholder="Leave blank to keep existing key" hint={`Current key: ${provider.api_key || "missing"}`} />
       <TextField label="API key env" value={draft.api_key_env} onChange={api_key_env => setDraft({ ...draft, api_key_env })} placeholder="KAIRO_PROVIDER_API_KEY" />
       <div className="toolbar">
-        <button className="primary-button" onClick={() => save()}><Save size={16} /> Save</button>
+        <button className="primary-button" onClick={() => draft.api_key_input.trim() ? setConfirmAction("save-key") : void save()}><Save size={16} /> Save</button>
         <button className="secondary-button" onClick={test}>Test config</button>
-        <button className="secondary-button danger" onClick={() => save(true)}>Clear key</button>
+        <button className="secondary-button danger" onClick={() => setConfirmAction("clear-key")}>Clear key</button>
         <button className="icon-button danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /></button>
       </div>
+      {confirmAction ? (
+        <ConfirmDialog
+          title={confirmAction === "clear-key" ? "Clear provider key?" : "Save provider API key?"}
+          detail={confirmAction === "clear-key"
+            ? "This clears the inline API key for every profile attached to this provider. API key env values are kept."
+            : "This saves the entered API key into local config.json for every profile attached to this provider."}
+          confirmLabel={confirmAction === "clear-key" ? "Clear key" : "Save key"}
+          danger={confirmAction === "clear-key"}
+          onClose={() => setConfirmAction(null)}
+          onConfirm={() => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            void save(action === "clear-key");
+          }}
+        />
+      ) : null}
       {confirmDelete ? (
         <ConfirmDialog
           title="Delete provider?"
@@ -345,6 +362,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
     max_tokens: 4000,
     temperature: 0.2
   });
+  const [confirmKey, setConfirmKey] = useState(false);
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
   async function save() {
@@ -371,8 +389,20 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
       </div>
       <div className="toolbar modal-actions">
         <button className="secondary-button" onClick={onClose}>Cancel</button>
-        <button className="primary-button" onClick={save} disabled={!draft.id.trim() || !draft.model.trim()}>Create provider</button>
+        <button className="primary-button" onClick={() => draft.api_key.trim() ? setConfirmKey(true) : void save()} disabled={!draft.id.trim() || !draft.model.trim()}>Create provider</button>
       </div>
+      {confirmKey ? (
+        <ConfirmDialog
+          title="Save provider API key?"
+          detail="This saves the entered API key into local config.json for this provider profile."
+          confirmLabel="Create with key"
+          onClose={() => setConfirmKey(false)}
+          onConfirm={() => {
+            setConfirmKey(false);
+            void save();
+          }}
+        />
+      ) : null}
     </Modal>
   );
 }
@@ -405,6 +435,7 @@ function ModelsPanel({ settings }: { settings: SettingsViewModel }) {
 function ModelProfileEditor({ profile, active }: { profile: ConfigProfile; active: boolean }) {
   const [draft, setDraft] = useState({ ...profile, api_key: "" });
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmKey, setConfirmKey] = useState(false);
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
   useEffect(() => setDraft({ ...profile, api_key: "" }), [profile]);
@@ -460,9 +491,21 @@ function ModelProfileEditor({ profile, active }: { profile: ConfigProfile; activ
         <PasswordField label="Profile API key" value={draft.api_key || ""} onChange={api_key => setDraft({ ...draft, api_key })} placeholder="Leave blank to keep existing key" />
       </div>
       <div className="toolbar">
-        <button className="primary-button" onClick={save}><Save size={16} /> Save profile</button>
+        <button className="primary-button" onClick={() => (draft.api_key || "").trim() ? setConfirmKey(true) : void save()}><Save size={16} /> Save profile</button>
         <button className="icon-button danger" onClick={() => setConfirmDelete(true)}><Trash2 size={16} /></button>
       </div>
+      {confirmKey ? (
+        <ConfirmDialog
+          title="Save profile API key?"
+          detail="This saves the entered API key into local config.json for this model profile."
+          confirmLabel="Save key"
+          onClose={() => setConfirmKey(false)}
+          onConfirm={() => {
+            setConfirmKey(false);
+            void save();
+          }}
+        />
+      ) : null}
       {confirmDelete ? (
         <ConfirmDialog
           title="Delete profile?"
@@ -494,6 +537,7 @@ function ProfileModal({ settings, onClose }: { settings: SettingsViewModel; onCl
     max_tokens: 4000,
     context_window: 128000
   });
+  const [confirmKey, setConfirmKey] = useState(false);
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
   async function save() {
@@ -523,8 +567,20 @@ function ProfileModal({ settings, onClose }: { settings: SettingsViewModel; onCl
       </div>
       <div className="toolbar modal-actions">
         <button className="secondary-button" onClick={onClose}>Cancel</button>
-        <button className="primary-button" onClick={save} disabled={!draft.id.trim() || !draft.model.trim()}>Create profile</button>
+        <button className="primary-button" onClick={() => draft.api_key.trim() ? setConfirmKey(true) : void save()} disabled={!draft.id.trim() || !draft.model.trim()}>Create profile</button>
       </div>
+      {confirmKey ? (
+        <ConfirmDialog
+          title="Save profile API key?"
+          detail="This saves the entered API key into local config.json for this model profile."
+          confirmLabel="Create with key"
+          onClose={() => setConfirmKey(false)}
+          onConfirm={() => {
+            setConfirmKey(false);
+            void save();
+          }}
+        />
+      ) : null}
     </Modal>
   );
 }
@@ -741,13 +797,13 @@ function AppearancePanel({ settings }: { settings: SettingsViewModel }) {
 function ImportExportPanel({ settings }: { settings: SettingsViewModel }) {
   const [exported, setExported] = useState("");
   const [importPath, setImportPath] = useState("");
-  const [confirmKeys, setConfirmKeys] = useState(false);
+  const [confirmKeys, setConfirmKeys] = useState("");
   const pushToast = useRuntimeStore(state => state.pushToast);
   const client = useQueryClient();
 
   async function doExport(withKeys: boolean) {
-    if (withKeys && !confirmKeys) {
-      pushToast({ tone: "warn", text: "Enable the confirmation checkbox before exporting keys." });
+    if (withKeys && confirmKeys !== "EXPORT_KEYS") {
+      pushToast({ tone: "warn", text: "Type EXPORT_KEYS before exporting secrets." });
       return;
     }
     try {
@@ -773,7 +829,7 @@ function ImportExportPanel({ settings }: { settings: SettingsViewModel }) {
       <div className="warning-box"><EyeOff size={16} /> Exports are redacted unless you explicitly confirm secret export.</div>
       <div className="toolbar">
         <button className="secondary-button" onClick={() => doExport(false)}>Export redacted</button>
-        <label className="checkbox-row"><input type="checkbox" checked={confirmKeys} onChange={event => setConfirmKeys(event.target.checked)} /> I understand this includes API keys.</label>
+        <input className="confirm-input" value={confirmKeys} onChange={event => setConfirmKeys(event.target.value)} placeholder="Type EXPORT_KEYS for secrets" />
         <button className="secondary-button danger" onClick={() => doExport(true)}>Export with keys</button>
       </div>
       <Field label="Import path">

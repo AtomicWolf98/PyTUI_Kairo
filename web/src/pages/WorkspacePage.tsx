@@ -48,7 +48,7 @@ export function WorkspacePage() {
   });
 
   const tree = useMemo(() => {
-    const files = snapshot.data?.files.slice(0, 900) || [];
+    const files = snapshot.data?.files || [];
     const q = filter.trim().toLowerCase();
     return files.filter(path => {
       if (q && !path.toLowerCase().includes(q)) return false;
@@ -64,8 +64,12 @@ export function WorkspacePage() {
   const groupedChanges = useMemo(() => {
     return {
       session: changes.filter(change => change.session_touched),
+      staged: changes.filter(change => change.staged && !change.session_touched),
+      unstaged: changes.filter(change => !change.staged && !change.untracked && !change.session_touched && !change.status.includes("D") && !change.status.includes("R") && /[MA]/.test(change.status)),
       untracked: changes.filter(change => change.untracked && !change.session_touched),
-      other: changes.filter(change => !change.untracked && !change.session_touched)
+      deleted: changes.filter(change => change.status.includes("D") && !change.session_touched),
+      renamed: changes.filter(change => change.status.includes("R") && !change.session_touched),
+      other: changes.filter(change => !change.staged && !change.untracked && !change.session_touched && !change.status.includes("D") && !change.status.includes("R") && !/[MA]/.test(change.status))
     };
   }, [changes]);
   const activeFile = selected || snapshot.data?.selected_file || "";
@@ -80,6 +84,15 @@ export function WorkspacePage() {
     return names;
   }, [snapshot.data?.files]);
 
+  const removeBookmark = useMutation({
+    mutationFn: removeWorkspaceBookmark,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["workspace-bookmarks"] });
+      pushToast({ tone: "success", text: "Bookmark removed." });
+    },
+    onError: error => pushToast({ tone: "error", text: String((error as Error).message || error) })
+  });
+
   return (
     <div className="page workspace-page">
       <header className="page-header">
@@ -89,6 +102,7 @@ export function WorkspacePage() {
         </div>
         <div className="toolbar">
           {snapshot.data?.tree_truncated ? <Badge tone="warn">tree truncated</Badge> : null}
+          {snapshot.data?.file_limit ? <Badge>{snapshot.data.file_count || snapshot.data.files.length}/{snapshot.data.file_limit} files</Badge> : null}
           <button className="secondary-button" onClick={() => client.invalidateQueries({ queryKey: ["workspace"] })}>
             <RefreshCw size={16} /> Refresh
           </button>
@@ -120,6 +134,9 @@ export function WorkspacePage() {
             <strong>Files</strong>
             <Badge>{tree.length}</Badge>
           </div>
+          {snapshot.data?.tree_truncated ? (
+            <div className="warning-box compact">Showing the first {snapshot.data.file_limit} files from the backend snapshot.</div>
+          ) : null}
           <div className="file-search">
             <Search size={15} />
             <input value={filter} onChange={event => setFilter(event.target.value)} placeholder="Search files" />
@@ -160,7 +177,11 @@ export function WorkspacePage() {
             {changes.length ? (
               <>
               <ChangeGroup title="Session touched" items={groupedChanges.session} activeFile={activeFile} onSelect={setSelected} />
+              <ChangeGroup title="Staged" items={groupedChanges.staged} activeFile={activeFile} onSelect={setSelected} />
+              <ChangeGroup title="Unstaged" items={groupedChanges.unstaged} activeFile={activeFile} onSelect={setSelected} />
               <ChangeGroup title="Untracked" items={groupedChanges.untracked} activeFile={activeFile} onSelect={setSelected} />
+              <ChangeGroup title="Deleted" items={groupedChanges.deleted} activeFile={activeFile} onSelect={setSelected} />
+              <ChangeGroup title="Renamed" items={groupedChanges.renamed} activeFile={activeFile} onSelect={setSelected} />
               <ChangeGroup title="Other changes" items={groupedChanges.other} activeFile={activeFile} onSelect={setSelected} />
               </>
             ) : <EmptyState title="No working tree changes" detail="Session-touched files and Git changes will appear here." />}
@@ -177,11 +198,7 @@ export function WorkspacePage() {
                   <GitBranch size={14} />
                   <span>{bookmark.name}</span>
                 </button>
-                <button className="icon-button" onClick={() => {
-                  removeWorkspaceBookmark(bookmark.name)
-                    .then(() => client.invalidateQueries({ queryKey: ["workspace-bookmarks"] }))
-                    .catch(error => pushToast({ tone: "error", text: String((error as Error).message || error) }));
-                }}>
+                <button className="icon-button" onClick={() => removeBookmark.mutate(bookmark.name)}>
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -196,9 +213,9 @@ export function WorkspacePage() {
           </div>
           {snapshot.data?.error ? <div className="error-banner">{snapshot.data.error}</div> : null}
           <div className="split-preview">
-            <pre className="code-block diff-block">{snapshot.data?.diff || "Select a changed file to review."}</pre>
+            <pre className="code-block diff-block code-viewer">{snapshot.data?.diff || "Select a changed file to review."}</pre>
             {selected ? (
-              <pre className="code-block file-preview">
+              <pre className="code-block file-preview code-viewer">
                 {preview.data?.binary ? "Binary file; preview unavailable." : preview.data?.content || safeJson(preview.error || "Loading preview...")}
               </pre>
             ) : null}
@@ -216,7 +233,7 @@ function ChangeGroup({
   onSelect
 }: {
   title: string;
-  items: Array<{ path: string; status: string; session_touched: boolean; untracked: boolean }>;
+  items: Array<{ path: string; status: string; session_touched: boolean; untracked: boolean; staged: boolean }>;
   activeFile: string;
   onSelect: (path: string) => void;
 }) {
@@ -226,10 +243,18 @@ function ChangeGroup({
       <span className="section-kicker">{title}</span>
       {items.map(change => (
         <button className={change.path === activeFile ? "change-row active" : "change-row"} key={change.path} onClick={() => onSelect(change.path)}>
-          <Badge tone={change.session_touched ? "info" : change.untracked ? "warn" : "neutral"}>{change.status}</Badge>
+          <Badge tone={changeTone(change)}>{change.status}</Badge>
           <span>{change.path}</span>
         </button>
       ))}
     </div>
   );
+}
+
+function changeTone(change: { status: string; session_touched: boolean; untracked: boolean; staged: boolean }): "neutral" | "good" | "warn" | "bad" | "info" {
+  if (change.session_touched) return "info";
+  if (change.untracked) return "warn";
+  if (change.status.includes("D")) return "bad";
+  if (change.staged) return "good";
+  return "neutral";
 }

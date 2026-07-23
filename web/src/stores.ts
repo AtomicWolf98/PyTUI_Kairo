@@ -26,7 +26,7 @@ function payloadObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-function normalizeHistory(messages: Array<Record<string, unknown>>): ChatMessageView[] {
+export function normalizeHistory(messages: Array<Record<string, unknown>>): ChatMessageView[] {
   return messages.map((message, index) => {
     const role = asString(message.role);
     return {
@@ -57,11 +57,20 @@ function findLastMessageIndex(messages: ChatMessageView[], predicate: (message: 
   return -1;
 }
 
-function appendToActiveMessage(messages: ChatMessageView[], field: "content" | "thought", delta: string) {
+function payloadText(payload: Record<string, unknown>, raw: unknown): string {
+  if (typeof payload.delta === "string") return payload.delta;
+  if (typeof payload.value === "string") return payload.value;
+  return asString(raw);
+}
+
+function appendToMessage(messages: ChatMessageView[], field: "content" | "thought", delta: string, messageId = "") {
   const next = [...messages];
-  let index = findLastMessageIndex(next, message => Boolean(message.streaming) && (message.role === "assistant" || message.role === "plan"));
+  let index = messageId ? next.findIndex(message => message.id === messageId) : -1;
   if (index < 0) {
-    next.push({ id: nowId("assistant"), role: "assistant", content: "", streaming: true });
+    index = findLastMessageIndex(next, message => Boolean(message.streaming) && (message.role === "assistant" || message.role === "plan"));
+  }
+  if (index < 0) {
+    next.push({ id: messageId || nowId("assistant"), role: "assistant", content: "", streaming: true });
     index = next.length - 1;
   }
   const current = next[index];
@@ -69,16 +78,19 @@ function appendToActiveMessage(messages: ChatMessageView[], field: "content" | "
   return next;
 }
 
-function updateActiveTool(messages: ChatMessageView[], update: ToolRunView): ChatMessageView[] {
+function updateActiveTool(messages: ChatMessageView[], update: ToolRunView, messageId = ""): ChatMessageView[] {
   const next = [...messages];
-  let index = findLastMessageIndex(next, message => message.role === "assistant" || message.role === "plan");
+  let index = messageId ? next.findIndex(message => message.id === messageId) : -1;
+  if (index < 0) {
+    index = findLastMessageIndex(next, message => message.role === "assistant" || message.role === "plan");
+  }
   if (index < 0) {
     next.push({ id: nowId("assistant"), role: "assistant", content: "", tools: [] });
     index = next.length - 1;
   }
   const message = next[index];
   const tools = [...(message.tools || [])];
-  const existing = tools.findIndex(tool => tool.id === update.id || tool.name === update.name);
+  const existing = tools.findIndex(tool => tool.id === update.id);
   if (existing >= 0) {
     tools[existing] = { ...tools[existing], ...update };
   } else {
@@ -86,6 +98,53 @@ function updateActiveTool(messages: ChatMessageView[], update: ToolRunView): Cha
   }
   next[index] = { ...message, tools };
   return next;
+}
+
+export function reduceRuntimeMessages(messages: ChatMessageView[], event: RuntimeEvent): ChatMessageView[] {
+  const payload = payloadObject(event.payload);
+  if (event.kind === "turn_started") {
+    const text = asString(payload.text);
+    const id = asString(payload.turn_id) || nowId("user");
+    return [...messages, { id, role: "user", content: text }];
+  }
+  if (event.kind === "message_started") {
+    const kind = asString(payload.kind) === "plan" ? "plan" : "assistant";
+    const id = asString(payload.message_id) || nowId(kind);
+    return [...messages, { id, role: kind, content: "", thought: "", streaming: true }];
+  }
+  if (event.kind === "content_delta") {
+    return appendToMessage(messages, "content", payloadText(payload, event.payload), asString(payload.message_id));
+  }
+  if (event.kind === "thought_delta") {
+    return appendToMessage(messages, "thought", payloadText(payload, event.payload), asString(payload.message_id));
+  }
+  if (event.kind === "message_finished") {
+    const messageId = asString(payload.message_id);
+    return messages.map(message => (!messageId || message.id === messageId) && message.streaming ? { ...message, streaming: false } : message);
+  }
+  if (event.kind === "tool_requested" || event.kind === "tool_started" || event.kind === "tool_finished") {
+    const status = event.kind === "tool_started" ? "running" : event.kind === "tool_finished"
+      ? (payload.success === false ? "failed" : "finished")
+      : "requested";
+    const toolId = asString(payload.tool_call_id) || asString(payload.id) || `${asString(payload.name)}-${asString(payload.target_path)}-${asString(payload.sequence)}`;
+    return updateActiveTool(messages, {
+      id: toolId,
+      name: asString(payload.name) || "tool",
+      arguments: asString(payload.arguments),
+      target_path: asString(payload.target_path) || undefined,
+      status,
+      result: asString(payload.result) || undefined,
+      success: typeof payload.success === "boolean" ? payload.success : undefined
+    }, asString(payload.message_id));
+  }
+  if (event.kind === "notice" || event.kind === "error") {
+    return [...messages, {
+      id: nowId(event.kind),
+      role: event.kind,
+      content: payloadText(payload, event.payload)
+    }];
+  }
+  return messages;
 }
 
 export const useRuntimeStore = create<RuntimeState>((set, get) => ({
@@ -108,46 +167,15 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       return;
     }
     if (event.kind === "state") {
-      set({ kaiState: asString(event.payload) || "idle" });
-      return;
-    }
-    if (event.kind === "turn_started") {
-      const text = asString(payload.text);
-      set({ messages: [...get().messages, { id: asString(payload.turn_id) || nowId("user"), role: "user", content: text }] });
-      return;
-    }
-    if (event.kind === "message_started") {
-      const kind = asString(payload.kind) === "plan" ? "plan" : "assistant";
-      set({ messages: [...get().messages, { id: nowId(kind), role: kind, content: "", thought: "", streaming: true }] });
-      return;
-    }
-    if (event.kind === "content_delta") {
-      set({ messages: appendToActiveMessage(get().messages, "content", asString(event.payload)) });
-      return;
-    }
-    if (event.kind === "thought_delta") {
-      set({ messages: appendToActiveMessage(get().messages, "thought", asString(event.payload)) });
-      return;
-    }
-    if (event.kind === "message_finished") {
-      set({ messages: get().messages.map(message => message.streaming ? { ...message, streaming: false } : message) });
+      set({ kaiState: asString(payload.value) || asString(event.payload) || "idle" });
       return;
     }
     if (event.kind === "tool_requested" || event.kind === "tool_started" || event.kind === "tool_finished") {
-      const status = event.kind === "tool_started" ? "running" : event.kind === "tool_finished"
-        ? (payload.success === false ? "failed" : "finished")
-        : "requested";
-      set({
-        messages: updateActiveTool(get().messages, {
-          id: asString(payload.id) || `${asString(payload.name)}-${asString(payload.target_path)}`,
-          name: asString(payload.name) || "tool",
-          arguments: asString(payload.arguments),
-          target_path: asString(payload.target_path) || undefined,
-          status,
-          result: asString(payload.result) || undefined,
-          success: typeof payload.success === "boolean" ? payload.success : undefined
-        })
-      });
+      set({ messages: reduceRuntimeMessages(get().messages, event) });
+      return;
+    }
+    if (["turn_started", "message_started", "content_delta", "thought_delta", "message_finished"].includes(event.kind)) {
+      set({ messages: reduceRuntimeMessages(get().messages, event) });
       return;
     }
     if (event.kind === "tool_approval_requested") {
@@ -164,11 +192,19 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       set({ approvals: get().approvals.filter(approval => approval.id !== asString(payload.id)) });
       return;
     }
+    if (event.kind === "stop_requested") {
+      const resolved = Array.isArray(payload.resolved_approvals) ? payload.resolved_approvals.map(asString) : [];
+      set({
+        approvals: get().approvals.filter(approval => !resolved.includes(approval.id)),
+        kaiState: "stopped"
+      });
+      return;
+    }
     if (event.kind === "notice" || event.kind === "error") {
       const tone = event.kind === "error" ? "error" : "info";
-      const text = asString(event.payload);
+      const text = payloadText(payload, event.payload);
       set({
-        messages: [...get().messages, { id: nowId(event.kind), role: event.kind, content: text }],
+        messages: reduceRuntimeMessages(get().messages, event),
         toasts: [...get().toasts.slice(-4), { id: nowId("toast"), tone, text }]
       });
     }

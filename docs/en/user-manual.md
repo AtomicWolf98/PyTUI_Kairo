@@ -1,6 +1,6 @@
 ﻿# Kairo Complete User Manual
 
-Version: **0.3.2-preview**
+Version: **0.3.3-preview**
 
 Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, custom skills, and runtime provider/model configuration.
 
@@ -59,13 +59,13 @@ kairo
 
 ### WebUI Preview
 
-Kairo 0.3.2-preview upgrades the local WebUI into a fuller graphical desktop-style workbench:
+Kairo 0.3.3-preview stabilizes the local WebUI workbench with safer settings writes, cleaner token handling, stronger event matching and improved Workspace layout:
 
 ```powershell
 kairo --web
 ```
 
-By default it listens on `127.0.0.1`, opens the browser automatically, and protects the API with a temporary local token in the URL. The WebUI uses the same Kairo runtime as the TUI and plain modes, and now provides a project/session rail, graphical chat timeline, folded thinking, tool approval cards, workspace tree/diff review, session management, full-form settings, skills and doctor checks.
+By default it listens on `127.0.0.1`, opens the browser automatically, and protects the API with a temporary local token. Startup URLs may contain that token, but the frontend stores it in session storage and removes it from the visible address bar after first load. The WebUI uses the same Kairo runtime as the TUI and plain modes, and provides a project/session rail, graphical chat timeline, folded thinking, tool approval cards, workspace tree/diff review, session management, full-form settings, skills and doctor checks.
 
 Open **Settings** in the left activity bar to edit `config.json` without touching raw JSON. The graphical settings center covers General, Providers, Models, Roles, Assistant, Me, Workbench, Skills, Appearance, and Import/Export. API keys are always masked in the UI; saving a new key writes it to the local config only after an explicit action.
 
@@ -554,7 +554,7 @@ Runtime configuration does not ask you to edit JSON by hand. Kairo uses a safer 
 3. **ConfigDraft first**: your answers are written into an in-memory `ConfigDraft`, not directly into `config.json`.
 4. **Validation**: before saving, Kairo checks duplicate provider/profile names, URL shape, active profile validity, `context_window`, `max_tokens`, and `temperature`.
 5. **API key handling**: with `env` mode, `config.json` stores only the `api_key_env` variable name; with `inline` mode, Kairo asks for explicit confirmation because the key will be written to disk.
-6. **Automatic backup**: before saving, Kairo writes `config.backup.YYYYMMDD-HHMMSS.json`.
+6. **Automatic backup**: before saving, Kairo writes `.kairo/config_backups/config.backup.YYYYMMDD-HHMMSS.json`.
 7. **Atomic save and rollback**: Kairo writes through a temporary file and replaces the config. If saving fails, the previous config remains available.
 8. **Immediate activation**: after saving, Kairo reloads the active profile and updates `base_url`, `model`, `temperature`, `max_tokens`, `context_window`, and context-management settings.
 9. **Session integration**: the active session runtime state records the new model profile; the Dock refreshes the model name and context limit.

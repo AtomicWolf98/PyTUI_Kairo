@@ -1,6 +1,6 @@
 ﻿# Kairo 完整用户手册
 
-版本：**0.3.2-preview**
+版本：**0.3.3-preview**
 
 Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
 
@@ -59,13 +59,13 @@ kairo
 
 ### WebUI 预览
 
-Kairo 0.3.2-preview 将本地 WebUI 升级为更完整的图形化桌面工作台：
+Kairo 0.3.3-preview 对本地 WebUI 工作台进行稳定性收口：更安全的 settings 写入、更干净的 token 处理、更可靠的事件匹配和更合理的 Workspace 布局：
 
 ```powershell
 kairo --web
 ```
 
-默认只监听 `127.0.0.1`，自动打开浏览器，并在 URL 中使用临时本地 token 保护 API。WebUI 与 TUI/plain 共用同一个 Kairo runtime，现在提供项目/session 侧栏、图形化聊天时间线、thinking 折叠、工具审批卡片、workspace tree/diff 审查、session 管理、全表单 settings、skills 和 doctor 检查。
+默认只监听 `127.0.0.1`，自动打开浏览器，并使用临时本地 token 保护 API。启动 URL 可以携带该 token，但前端首次读取后会写入 session storage 并从可见地址栏移除。WebUI 与 TUI/plain 共用同一个 Kairo runtime，提供项目/session 侧栏、图形化聊天时间线、thinking 折叠、工具审批卡片、workspace tree/diff 审查、session 管理、全表单 settings、skills 和 doctor 检查。
 
 点击左侧活动栏的 **Settings** 可以在不手写 JSON 的情况下编辑 `config.json`。图形化设置中心覆盖 General、Providers、Models、Roles、Assistant、Me、Workbench、Skills、Appearance 和 Import/Export。API key 在界面里始终脱敏，只有你明确保存新 key 时才会写入本地配置。
 
@@ -554,7 +554,7 @@ provider/model 测试会发送最小 OpenAI-compatible 探测请求；测试不�
 3. **写入 ConfigDraft**：表单内容先写入内存中的 `ConfigDraft`，不会立刻覆盖 `config.json`。
 4. **校验配置**：保存前检查 provider/profile 名称是否重复、base URL 是否合法、active profile 是否存在、`context_window`、`max_tokens` 和 `temperature` 是否合理。
 5. **API Key 处理**：选择 `env` 时只保存 `api_key_env` 名称；选择 `inline` 时会要求确认，因为 key 会写入磁盘。
-6. **自动备份**：保存前生成 `config.backup.YYYYMMDD-HHMMSS.json`。
+6. **自动备份**：保存前生成 `.kairo/config_backups/config.backup.YYYYMMDD-HHMMSS.json`。
 7. **原子保存与回滚**：Kairo 使用临时文件写入再替换原配置；如果保存失败，会保留原配置。
 8. **立即生效**：保存成功后重新加载 active profile，更新 `base_url`、`model`、`temperature`、`max_tokens`、`context_window` 和上下文管理参数。
 9. **会话联动**：当前会话的 runtime state 会记录新的模型 profile；Dock 中的模型名和上下文窗口也会刷新。

@@ -11,8 +11,23 @@ web/tsconfig.tsbuildinfo
 htmlcov/
 build/
 dist/
-config.local.json
-config.json
+# Local configuration and secrets
+config*.json
+!config.example.json
+!**/config.example.json
+.env
+.env.*
+!.env.example
+!**/.env.example
+credentials*.json
+secrets*.json
+tokens*.json
+auth*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
 *.log
 .kairo/
 .trae/

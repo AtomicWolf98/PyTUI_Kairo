@@ -10,13 +10,28 @@ import type {
   WorkspaceSnapshot
 } from "./types";
 
-export const token = new URLSearchParams(window.location.search).get("token") || "";
+const TOKEN_STORAGE_KEY = "kairo.local.token";
+
+function bootstrapToken() {
+  const params = new URLSearchParams(window.location.search);
+  const urlToken = params.get("token") || "";
+  if (urlToken) {
+    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, urlToken);
+    params.delete("token");
+    const query = params.toString();
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    window.history.replaceState({}, document.title, nextUrl);
+    return urlToken;
+  }
+  return window.sessionStorage.getItem(TOKEN_STORAGE_KEY) || "";
+}
+
+export const token = bootstrapToken();
 
 type JsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const separator = path.includes("?") ? "&" : "?";
-  const response = await fetch(`${path}${separator}token=${encodeURIComponent(token)}`, {
+  const response = await fetch(path, {
     ...init,
     headers: {
       "content-type": "application/json",

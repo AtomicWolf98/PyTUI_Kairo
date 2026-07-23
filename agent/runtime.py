@@ -1,4 +1,4 @@
-"""UI-neutral runtime and service layer for Kairo 0.3.2-preview."""
+"""UI-neutral runtime and service layer for Kairo 0.3.3-preview."""
 from __future__ import annotations
 
 import copy
@@ -7,14 +7,16 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any
 
 from agent.bootstrap import build_agent
 from agent.cancellation import CancellationToken
 from agent.config import Config
-from agent.config_editor import ConfigDraft, KEY_CLEAR
+from agent.config_editor import KEY_CLEAR, ConfigDraft
 from agent.profile_resolver import describe_key_source, is_masked_key, list_profiles, mask_key
 from agent.runtime_commands import handle_doctor
 from agent.workspace import WorkspaceMonitor, WorkspaceSnapshot
@@ -25,6 +27,7 @@ class RuntimeEvent:
     kind: str
     payload: Any = None
     timestamp: float = field(default_factory=time.time)
+    sequence: int = 0
 
 
 class RuntimeEventBus:
@@ -32,21 +35,30 @@ class RuntimeEventBus:
 
     def __init__(self, max_buffer: int = 1000):
         self.max_buffer = max(100, int(max_buffer))
-        self._events: List[RuntimeEvent] = []
-        self._subscribers: List[Callable[[RuntimeEvent], None]] = []
+        self._events: list[RuntimeEvent] = []
+        self._subscribers: list[Callable[[RuntimeEvent], None]] = []
+        self._subscriber_errors: list[dict[str, Any]] = []
+        self._sequence = 0
         self._lock = threading.RLock()
 
     def emit(self, kind: str, payload: Any = None) -> RuntimeEvent:
-        event = RuntimeEvent(kind=kind, payload=payload)
         with self._lock:
+            self._sequence += 1
+            event = RuntimeEvent(kind=kind, payload=payload, sequence=self._sequence)
             self._events.append(event)
             self._events = self._events[-self.max_buffer:]
             subscribers = list(self._subscribers)
         for subscriber in subscribers:
             try:
                 subscriber(event)
-            except Exception:
-                pass
+            except Exception as exc:
+                with self._lock:
+                    self._subscriber_errors.append({
+                        "kind": kind,
+                        "error": str(exc),
+                        "timestamp": time.time(),
+                    })
+                    self._subscriber_errors = self._subscriber_errors[-20:]
         return event
 
     def subscribe(self, callback: Callable[[RuntimeEvent], None]) -> Callable[[], None]:
@@ -54,17 +66,18 @@ class RuntimeEventBus:
             self._subscribers.append(callback)
 
         def unsubscribe() -> None:
-            with self._lock:
-                try:
-                    self._subscribers.remove(callback)
-                except ValueError:
-                    pass
+            with self._lock, suppress(ValueError):
+                self._subscribers.remove(callback)
 
         return unsubscribe
 
-    def snapshot(self) -> List[RuntimeEvent]:
+    def snapshot(self) -> list[RuntimeEvent]:
         with self._lock:
             return list(self._events)
+
+    def diagnostics(self) -> dict[str, Any]:
+        with self._lock:
+            return {"subscriber_errors": list(self._subscriber_errors)}
 
 
 class KairoRuntime:
@@ -81,12 +94,12 @@ class KairoRuntime:
         self.chat = ChatService(self)
         self.skills = SkillService(self)
         self._task_lock = threading.RLock()
-        self._task_thread: Optional[threading.Thread] = None
-        self._cancel_token: Optional[CancellationToken] = None
-        self._pending_approvals: Dict[str, "_PendingApproval"] = {}
+        self._task_thread: threading.Thread | None = None
+        self._cancel_token: CancellationToken | None = None
+        self._pending_approvals: dict[str, _PendingApproval] = {}
         self._approval_lock = threading.RLock()
 
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         tracker = self.agent.token_tracker
         return {
             "version": _package_version(),
@@ -115,13 +128,14 @@ class KairoRuntime:
                 "status": self.agent.task_status,
                 "busy": self.is_busy(),
             },
+            "diagnostics": self.events.diagnostics(),
         }
 
     def is_busy(self) -> bool:
         with self._task_lock:
             return bool(self._task_thread and self._task_thread.is_alive())
 
-    def submit_message(self, text: str) -> Dict[str, Any]:
+    def submit_message(self, text: str) -> dict[str, Any]:
         text = (text or "").strip()
         if not text:
             return {"ok": False, "error": "Message is empty."}
@@ -142,9 +156,18 @@ class KairoRuntime:
 
     def _run_message_worker(self, turn_id: str, text: str, token: CancellationToken) -> None:
         self.events.emit("turn_started", {"turn_id": turn_id, "text": text})
+        current_message_id = ""
+        local_sequence = 0
 
         def emit(kind: str, payload: Any = None) -> None:
-            self.events.emit(kind, payload)
+            nonlocal current_message_id, local_sequence
+            local_sequence += 1
+            normalized = self._normalize_worker_payload(kind, payload, turn_id, current_message_id, local_sequence)
+            if kind == "message_started":
+                current_message_id = str(normalized.get("message_id") or current_message_id)
+            self.events.emit(kind, normalized)
+            if kind == "message_finished":
+                current_message_id = ""
 
         try:
             self.agent.runner.run_interaction_events(
@@ -157,17 +180,55 @@ class KairoRuntime:
         finally:
             self.agent.conversations.save_active(reason="web_turn")
             self.workspace.refresh()
-            self.events.emit("turn_finished", {"turn_id": turn_id})
+            status = "stopped" if token.cancelled else "finished"
+            self.events.emit("turn_finished", {"turn_id": turn_id, "status": status})
 
-    def stop_current_task(self) -> Dict[str, Any]:
+    def _normalize_worker_payload(
+        self,
+        kind: str,
+        payload: Any,
+        turn_id: str,
+        current_message_id: str,
+        sequence: int,
+    ) -> dict[str, Any]:
+        if isinstance(payload, dict):
+            data = dict(payload)
+        elif kind in ("content_delta", "thought_delta"):
+            data = {"delta": "" if payload is None else str(payload)}
+        elif payload is None:
+            data = {}
+        else:
+            data = {"value": payload}
+        data.setdefault("turn_id", turn_id)
+        data.setdefault("sequence", sequence)
+        if kind == "message_started":
+            data.setdefault("message_id", uuid.uuid4().hex)
+        elif kind in ("content_delta", "thought_delta", "message_finished") and current_message_id:
+            data.setdefault("message_id", current_message_id)
+        if kind.startswith("tool_"):
+            tool_id = str(data.get("tool_call_id") or data.get("id") or "")
+            if tool_id:
+                data.setdefault("id", tool_id)
+                data.setdefault("tool_call_id", tool_id)
+        return data
+
+    def stop_current_task(self) -> dict[str, Any]:
         with self._task_lock:
             if self._cancel_token is None or not self.is_busy():
                 return {"ok": False, "message": "No active task."}
             self._cancel_token.cancel()
-        self.events.emit("stop_requested", None)
+        resolved: list[str] = []
+        with self._approval_lock:
+            pending_items = list(self._pending_approvals.items())
+        for request_id, pending in pending_items:
+            pending.resolve(pending.stop_choice())
+            resolved.append(request_id)
+        for request_id in resolved:
+            self.events.emit("tool_approval_resolved", {"id": request_id, "choice": "stopped"})
+        self.events.emit("stop_requested", {"status": "stopped", "resolved_approvals": resolved})
         return {"ok": True, "message": "Stop requested."}
 
-    def _approve_tool(self, prompt: str, options: List[str], default_index: int) -> int:
+    def _approve_tool(self, prompt: str, options: list[str], default_index: int) -> int:
         request_id = uuid.uuid4().hex
         pending = _PendingApproval(options=options, default_index=default_index)
         with self._approval_lock:
@@ -183,7 +244,7 @@ class KairoRuntime:
             self._pending_approvals.pop(request_id, None)
         return choice
 
-    def resolve_approval(self, request_id: str, choice: int) -> Dict[str, Any]:
+    def resolve_approval(self, request_id: str, choice: int) -> dict[str, Any]:
         with self._approval_lock:
             pending = self._pending_approvals.get(request_id)
         if pending is None:
@@ -205,10 +266,11 @@ class ConfigService:
     def __init__(self, runtime: KairoRuntime):
         self.runtime = runtime
 
-    def redacted(self) -> Dict[str, Any]:
+    def redacted(self) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         data = draft.export_config(with_keys=False)
         data["active"] = self.runtime.status()
+        raw_profiles = self._raw_profile_map()
         data["profiles_summary"] = [
             {
                 "id": profile.id,
@@ -218,6 +280,8 @@ class ConfigService:
                 "base_url": profile.base_url,
                 "api_key": mask_key(profile.api_key),
                 "api_key_source": describe_key_source(profile.api_key, profile.api_key_source),
+                "api_key_env": str(raw_profiles.get(profile.id, {}).get("api_key_env", "")),
+                "has_inline_key": bool(str(raw_profiles.get(profile.id, {}).get("api_key", "")).strip()),
                 "context_window": profile.context_window,
                 "max_tokens": profile.max_tokens,
                 "temperature": profile.temperature,
@@ -226,11 +290,38 @@ class ConfigService:
         ]
         return data
 
-    def settings_view(self) -> Dict[str, Any]:
+    def _raw_profile_map(self) -> dict[str, dict[str, Any]]:
+        llm = self.runtime.config.llm if hasattr(self.runtime.config, "llm") else {}
+        values: dict[str, dict[str, Any]] = {}
+        if isinstance(llm.get("profiles"), list) and llm.get("profiles"):
+            for profile in llm.get("profiles", []):
+                if not isinstance(profile, dict):
+                    continue
+                profile_id = str(profile.get("id", "")).strip()
+                if profile_id:
+                    values[profile_id] = profile
+            return values
+        for provider in llm.get("providers", []):
+            if not isinstance(provider, dict):
+                continue
+            provider_name = str(provider.get("name", "")).strip()
+            for model in provider.get("models", []):
+                if not isinstance(model, dict):
+                    continue
+                model_name = str(model.get("name", "")).strip()
+                profile_id = f"{provider_name}/{model_name}" if provider_name and model_name else (provider_name or model_name)
+                if profile_id:
+                    values[profile_id] = {
+                        "api_key": provider.get("api_key", ""),
+                        "api_key_env": provider.get("api_key_env", ""),
+                    }
+        return values
+
+    def settings_view(self) -> dict[str, Any]:
         config = self.runtime.config
         redacted = self.redacted()
         profiles = redacted.get("profiles_summary", [])
-        provider_map: Dict[str, Dict[str, Any]] = {}
+        provider_map: dict[str, dict[str, Any]] = {}
         for profile in profiles:
             provider_id = str(profile.get("provider") or profile.get("id", "").split("/", 1)[0]).strip()
             if not provider_id:
@@ -243,14 +334,22 @@ class ConfigService:
                     "base_url": profile.get("base_url", ""),
                     "api_key": profile.get("api_key", ""),
                     "api_key_source": profile.get("api_key_source", "missing"),
+                    "api_key_env": profile.get("api_key_env", ""),
+                    "has_inline_key": bool(profile.get("has_inline_key")),
                     "model_count": 0,
                     "profiles": [],
+                    "profile_ids": [],
                 },
             )
             entry["model_count"] += 1
             entry["profiles"].append(profile.get("id", ""))
+            entry["profile_ids"].append(profile.get("id", ""))
             if not entry.get("base_url") and profile.get("base_url"):
                 entry["base_url"] = profile.get("base_url", "")
+            if not entry.get("api_key_env") and profile.get("api_key_env"):
+                entry["api_key_env"] = profile.get("api_key_env", "")
+            if profile.get("has_inline_key"):
+                entry["has_inline_key"] = True
             if entry.get("api_key_source") in ("missing", "none") and profile.get("api_key_source"):
                 entry["api_key"] = profile.get("api_key", "")
                 entry["api_key_source"] = profile.get("api_key_source", "")
@@ -319,7 +418,7 @@ class ConfigService:
             "raw": redacted,
         }
 
-    def update(self, section: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    def update(self, section: str, values: dict[str, Any]) -> dict[str, Any]:
         config = self.runtime.config
         draft = ConfigDraft.from_config(config)
         section = (section or "").strip().lower()
@@ -423,7 +522,7 @@ class ConfigService:
         self.runtime.events.emit("config_updated", {"section": section})
         return {"ok": True, "config": self.redacted()}
 
-    def update_settings(self, section: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    def update_settings(self, section: str, values: dict[str, Any]) -> dict[str, Any]:
         section = (section or "").strip().lower()
         values = values or {}
         draft = ConfigDraft.from_config(self.runtime.config)
@@ -474,7 +573,10 @@ class ConfigService:
             }
         elif section == "workbench":
             if "workspace_root" in values:
-                draft.workspace_root = str(values["workspace_root"])
+                workspace_root = self._validated_workspace_root(str(values["workspace_root"]))
+                if workspace_root is None:
+                    return {"ok": False, "error": f"Workspace root is invalid or not writable: {values['workspace_root']}"}
+                draft.workspace_root = str(workspace_root)
             if "skills_dir" in values:
                 draft.skills_dir = str(values["skills_dir"])
             if "shell_type" in values:
@@ -511,7 +613,7 @@ class ConfigService:
             return {"ok": False, "error": f"Unsupported settings section: {section}"}
         return self._commit_draft(draft, f"settings:{section}", view=True)
 
-    def save_provider(self, provider_id: str, values: Dict[str, Any], *, create: bool = False) -> Dict[str, Any]:
+    def save_provider(self, provider_id: str, values: dict[str, Any], *, create: bool = False) -> dict[str, Any]:
         provider_id = (provider_id or values.get("id") or values.get("name") or "").strip()
         if not provider_id:
             return {"ok": False, "error": "Provider id is required."}
@@ -549,13 +651,13 @@ class ConfigService:
                 return {"ok": False, "error": f"Provider '{provider_id}' not found."}
         return self._commit_draft(draft, f"provider:{provider_id}", view=True)
 
-    def delete_provider(self, provider_id: str) -> Dict[str, Any]:
+    def delete_provider(self, provider_id: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         if not draft.remove_provider(provider_id):
             return {"ok": False, "error": f"Provider '{provider_id}' not found."}
         return self._commit_draft(draft, f"provider-delete:{provider_id}", view=True)
 
-    def test_provider(self, provider_id: str) -> Dict[str, Any]:
+    def test_provider(self, provider_id: str) -> dict[str, Any]:
         view = self.settings_view()
         provider = next((item for item in view["providers"] if item["id"] == provider_id), None)
         if not provider:
@@ -571,7 +673,7 @@ class ConfigService:
             return {"ok": False, "status": "warning", "message": " ".join(issues), "provider": provider}
         return {"ok": True, "status": "ready", "message": "Local provider configuration looks ready.", "provider": provider}
 
-    def save_profile(self, profile_id: str, values: Dict[str, Any], *, create: bool = False) -> Dict[str, Any]:
+    def save_profile(self, profile_id: str, values: dict[str, Any], *, create: bool = False) -> dict[str, Any]:
         profile_id = (profile_id or values.get("id") or "").strip()
         if not profile_id:
             return {"ok": False, "error": "Profile id is required."}
@@ -588,18 +690,18 @@ class ConfigService:
             draft.set_active_profile(active)
         return self._commit_draft(draft, f"profile:{profile_id}", view=True)
 
-    def delete_profile(self, profile_id: str) -> Dict[str, Any]:
+    def delete_profile(self, profile_id: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         if not draft.remove_profile(profile_id):
             return {"ok": False, "error": f"Profile '{profile_id}' not found."}
         return self._commit_draft(draft, f"profile-delete:{profile_id}", view=True)
 
-    def switch_profile(self, profile_id: str) -> Dict[str, Any]:
+    def switch_profile(self, profile_id: str) -> dict[str, Any]:
         result = self.runtime.agent.switch_model_profile(profile_id, source="web")
         self.runtime.events.emit("config_updated", {"section": "model", "result": result.data})
         return {"ok": result.success, "message": result.message, "data": result.data}
 
-    def export_config(self, *, with_keys: bool = False, confirm: str = "") -> Dict[str, Any]:
+    def export_config(self, *, with_keys: bool = False, confirm: str = "") -> dict[str, Any]:
         if with_keys and confirm != "EXPORT_KEYS":
             return {"ok": False, "error": "Exporting keys requires confirm='EXPORT_KEYS'."}
         draft = ConfigDraft.from_config(self.runtime.config)
@@ -609,7 +711,7 @@ class ConfigService:
             "config": draft.export_config(with_keys=with_keys),
         }
 
-    def import_config(self, path: str) -> Dict[str, Any]:
+    def import_config(self, path: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         report = draft.import_config(path)
         if not report.ok:
@@ -627,13 +729,13 @@ class ConfigService:
         self.runtime.events.emit("config_updated", {"section": "import"})
         return {"ok": True, "config": self.redacted()}
 
-    def _profile_payload(self, values: Dict[str, Any]) -> Dict[str, Any]:
+    def _profile_payload(self, values: dict[str, Any]) -> dict[str, Any]:
         api_key = values.get("api_key")
         if isinstance(api_key, str) and (not api_key.strip() or is_masked_key(api_key)):
             api_key = None
         if values.get("clear_key"):
             api_key = KEY_CLEAR
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "label": str(values.get("label", "")),
             "provider": str(values.get("provider", "")),
             "base_url": str(values.get("base_url", "")),
@@ -649,23 +751,51 @@ class ConfigService:
             payload["context_management"] = values["context_management"]
         return payload
 
-    def _commit_draft(self, draft: ConfigDraft, section: str, *, view: bool = False) -> Dict[str, Any]:
+    def _commit_draft(self, draft: ConfigDraft, section: str, *, view: bool = False) -> dict[str, Any]:
+        preflight = self._preflight_draft(draft)
+        if not preflight.get("ok"):
+            return {"ok": False, "error": preflight.get("error", "Configuration preflight failed.")}
         previous = {
             "workspace_root": str(self.runtime.agent.workspace_context.root),
             "skills_dir": self.runtime.config.skills_dir,
             "shell_type": self.runtime.config.shell_type,
             "skills_require_hash": bool(self.runtime.config.policy.get("skills", {}).get("require_hash", False)),
         }
+        rollback = ConfigDraft.from_config(self.runtime.config)
         report = draft.apply_to(self.runtime.config, backup=True)
         if not report.ok:
             return {"ok": False, "error": report.to_text()}
         sync_result = self._sync_runtime_after_commit(previous)
         if not sync_result.get("ok"):
+            rollback.apply_to(self.runtime.config, backup=False)
+            self._sync_runtime_after_commit(previous)
             return {"ok": False, "error": sync_result.get("error", "Runtime sync failed.")}
         self.runtime.events.emit("config_updated", {"section": section})
         return {"ok": True, "settings": self.settings_view() if view else None, "config": self.redacted()}
 
-    def _validated_workspace_root(self, value: str) -> Optional[Path]:
+    def _preflight_draft(self, draft: ConfigDraft) -> dict[str, Any]:
+        current = self.runtime.config
+        workspace_changed = str(draft.workspace_root) != str(current.workspace_root)
+        skills_changed = str(draft.skills_dir) != str(current.skills_dir)
+        if workspace_changed:
+            workspace_root = self._validated_workspace_root(draft.workspace_root)
+            if workspace_root is None:
+                return {"ok": False, "error": f"Workspace root is invalid or not writable: {draft.workspace_root}"}
+            draft.workspace_root = str(workspace_root)
+        else:
+            workspace_root = Path(self.runtime.agent.workspace_context.root)
+        if skills_changed and draft.skills_dir:
+            try:
+                skills_path = Path(draft.skills_dir).expanduser()
+                if not skills_path.is_absolute():
+                    skills_path = workspace_root / skills_path
+                if skills_path.exists() and not skills_path.is_dir():
+                    return {"ok": False, "error": f"Skills path is not a directory: {draft.skills_dir}"}
+            except Exception:
+                return {"ok": False, "error": f"Skills path is invalid: {draft.skills_dir}"}
+        return {"ok": True}
+
+    def _validated_workspace_root(self, value: str) -> Path | None:
         try:
             path = Path(value).expanduser().resolve()
         except Exception:
@@ -679,7 +809,7 @@ class ConfigService:
             return None
         return path
 
-    def _sync_runtime_after_commit(self, previous: Dict[str, Any]) -> Dict[str, Any]:
+    def _sync_runtime_after_commit(self, previous: dict[str, Any]) -> dict[str, Any]:
         config = self.runtime.config
         agent = self.runtime.agent
         config._sync_runtime_fields()
@@ -692,7 +822,7 @@ class ConfigService:
         manager._save_interval_seconds = float(config.sessions.get("save_interval_seconds", 0) or 0)
 
         target_root = Path(config.workspace_root).expanduser().resolve()
-        current_root = Path(previous["workspace_root"]).expanduser().resolve()
+        current_root = Path(agent.workspace_context.root).expanduser().resolve()
         workspace_changed = target_root != current_root
         if workspace_changed:
             result = agent.move_workspace(target_root)
@@ -733,7 +863,7 @@ class SessionService:
     def __init__(self, runtime: KairoRuntime):
         self.runtime = runtime
 
-    def list(self) -> Dict[str, Any]:
+    def list(self) -> dict[str, Any]:
         manager = self.runtime.agent.conversations
         return {
             "active_session_id": manager.active_session_id,
@@ -750,18 +880,18 @@ class SessionService:
             ],
         }
 
-    def create(self, name: Optional[str] = None) -> Dict[str, Any]:
+    def create(self, name: str | None = None) -> dict[str, Any]:
         session = self.runtime.agent.conversations.create_session(name)
         self.runtime.events.emit("session_changed", self.list())
         return {"ok": True, "session": {"id": session.id, "name": session.name}}
 
-    def switch(self, session_id: str) -> Dict[str, Any]:
+    def switch(self, session_id: str) -> dict[str, Any]:
         ok = self.runtime.agent.conversations.switch_session(session_id)
         if ok:
             self.runtime.events.emit("session_changed", self.list())
         return {"ok": ok}
 
-    def rename(self, session_id: str, name: str) -> Dict[str, Any]:
+    def rename(self, session_id: str, name: str) -> dict[str, Any]:
         manager = self.runtime.agent.conversations
         session = next((item for item in manager.sessions if item.id == session_id), None)
         if session is None:
@@ -775,7 +905,7 @@ class SessionService:
         self.runtime.events.emit("session_changed", self.list())
         return {"ok": True}
 
-    def delete(self, session_id: str) -> Dict[str, Any]:
+    def delete(self, session_id: str) -> dict[str, Any]:
         manager = self.runtime.agent.conversations
         if len(manager.sessions) <= 1:
             return {"ok": False, "error": "Cannot delete the last session."}
@@ -790,7 +920,7 @@ class SessionService:
         self.runtime.events.emit("session_changed", self.list())
         return {"ok": True}
 
-    def search(self, keyword: str) -> Dict[str, Any]:
+    def search(self, keyword: str) -> dict[str, Any]:
         keyword = (keyword or "").strip().lower()
         results = []
         if keyword:
@@ -802,7 +932,7 @@ class SessionService:
                     results.append({"index": index, "id": session.id, "name": session.name})
         return {"keyword": keyword, "results": results}
 
-    def export(self, session_id: str, fmt: str = "markdown") -> Dict[str, Any]:
+    def export(self, session_id: str, fmt: str = "markdown") -> dict[str, Any]:
         store = self.runtime.agent.conversations.session_store
         if store is None:
             return {"ok": False, "error": "Session persistence is disabled."}
@@ -816,7 +946,7 @@ class ChatService:
     def __init__(self, runtime: KairoRuntime):
         self.runtime = runtime
 
-    def history(self) -> Dict[str, Any]:
+    def history(self) -> dict[str, Any]:
         messages = []
         for index, message in enumerate(self.runtime.agent.history):
             role = str(message.get("role", ""))
@@ -862,10 +992,14 @@ class WorkspaceService:
         )
         self.refresh()
 
-    def snapshot(self, selected_file: str = "") -> Dict[str, Any]:
-        return _snapshot_to_dict(self.monitor.refresh(selected_file))
+    def snapshot(self, selected_file: str = "") -> dict[str, Any]:
+        snapshot = self.monitor.refresh(selected_file)
+        data = _snapshot_to_dict(snapshot)
+        data["file_count"] = len(snapshot.files)
+        data["file_limit"] = self.monitor.max_files
+        return data
 
-    def file_preview(self, relative: str) -> Dict[str, Any]:
+    def file_preview(self, relative: str) -> dict[str, Any]:
         relative = (relative or "").strip().replace("\\", "/")
         if not relative:
             return {"ok": False, "error": "path is required"}
@@ -899,10 +1033,10 @@ class WorkspaceService:
             "content": "" if binary else sample.decode("utf-8", errors="replace"),
         }
 
-    def bookmarks(self) -> Dict[str, Any]:
+    def bookmarks(self) -> dict[str, Any]:
         return {"bookmarks": list(self.runtime.config.workspace_bookmarks)}
 
-    def add_bookmark(self, name: str, path: str) -> Dict[str, Any]:
+    def add_bookmark(self, name: str, path: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         if not draft.add_workspace_bookmark(name, path):
             return {"ok": False, "error": "Bookmark name and path are required."}
@@ -912,7 +1046,7 @@ class WorkspaceService:
         self.runtime.events.emit("config_updated", {"section": "workspace_bookmarks"})
         return {"ok": True, **self.bookmarks()}
 
-    def remove_bookmark(self, name: str) -> Dict[str, Any]:
+    def remove_bookmark(self, name: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         if not draft.remove_workspace_bookmark(name):
             return {"ok": False, "error": f"Bookmark '{name}' not found."}
@@ -922,12 +1056,12 @@ class WorkspaceService:
         self.runtime.events.emit("config_updated", {"section": "workspace_bookmarks"})
         return {"ok": True, **self.bookmarks()}
 
-    def refresh(self) -> Dict[str, Any]:
+    def refresh(self) -> dict[str, Any]:
         data = self.snapshot()
         self.runtime.events.emit("workspace_updated", data)
         return data
 
-    def move(self, target: str) -> Dict[str, Any]:
+    def move(self, target: str) -> dict[str, Any]:
         result = self.runtime.agent.move_workspace(target)
         data = {"ok": result.success, "message": result.message, "root": result.data.get("root")}
         self.runtime.events.emit("workspace_updated", self.snapshot())
@@ -938,7 +1072,7 @@ class SkillService:
     def __init__(self, runtime: KairoRuntime):
         self.runtime = runtime
 
-    def list(self) -> Dict[str, Any]:
+    def list(self) -> dict[str, Any]:
         tools = []
         for name, tool in self.runtime.agent.registry.tools.items():
             tools.append({
@@ -950,7 +1084,7 @@ class SkillService:
             })
         return {"tools": tools}
 
-    def reload(self) -> Dict[str, Any]:
+    def reload(self) -> dict[str, Any]:
         registry = self.runtime.agent.registry
         if not hasattr(registry, "reload_custom_skills"):
             return {"ok": False, "error": "Skill reload is unavailable."}
@@ -967,16 +1101,16 @@ class DoctorService:
     def __init__(self, runtime: KairoRuntime):
         self.runtime = runtime
 
-    def run(self, *, local_only: bool = True) -> Dict[str, Any]:
+    def run(self, *, local_only: bool = True) -> dict[str, Any]:
         result = handle_doctor(self.runtime.agent, "/doctor", ["/doctor"], local_only=local_only)
         return {"ok": result.success, "message": result.message, "checks": result.data.get("checks", [])}
 
 
 class _PendingApproval:
-    def __init__(self, options: List[str], default_index: int):
+    def __init__(self, options: list[str], default_index: int):
         self.options = options
         self.default_index = default_index
-        self._choice: Optional[int] = None
+        self._choice: int | None = None
         self._event = threading.Event()
 
     def wait(self, timeout: float) -> int:
@@ -990,8 +1124,14 @@ class _PendingApproval:
         self._choice = choice
         self._event.set()
 
+    def stop_choice(self) -> int:
+        for index, option in enumerate(self.options):
+            if "stop" in str(option).lower():
+                return index
+        return self.default_index
 
-def _snapshot_to_dict(snapshot: WorkspaceSnapshot) -> Dict[str, Any]:
+
+def _snapshot_to_dict(snapshot: WorkspaceSnapshot) -> dict[str, Any]:
     return {
         "root": snapshot.root,
         "files": list(snapshot.files),
@@ -1015,12 +1155,12 @@ def _snapshot_to_dict(snapshot: WorkspaceSnapshot) -> Dict[str, Any]:
     }
 
 
-def event_to_dict(event: RuntimeEvent) -> Dict[str, Any]:
-    return {"kind": event.kind, "payload": event.payload, "timestamp": event.timestamp}
+def event_to_dict(event: RuntimeEvent) -> dict[str, Any]:
+    return {"kind": event.kind, "payload": event.payload, "timestamp": event.timestamp, "sequence": event.sequence}
 
 
-def event_stream(runtime: KairoRuntime) -> Iterable[Dict[str, Any]]:
-    q: "queue.Queue[RuntimeEvent]" = queue.Queue()
+def event_stream(runtime: KairoRuntime) -> Iterable[dict[str, Any]]:
+    q: queue.Queue[RuntimeEvent] = queue.Queue()
     unsubscribe = runtime.events.subscribe(q.put)
     try:
         for event in runtime.events.snapshot():
@@ -1046,7 +1186,7 @@ def _package_version() -> str:
 
         return version("kairo-agent")
     except Exception:
-        return "0.3.2-preview"
+        return "0.3.3-preview"
 
 
 def _web_static_version() -> str:
@@ -1054,7 +1194,7 @@ def _web_static_version() -> str:
     try:
         import json
 
-        with open(package_json, "r", encoding="utf-8-sig") as handle:
+        with open(package_json, encoding="utf-8-sig") as handle:
             value = json.load(handle)
         return str(value.get("version", ""))
     except Exception:

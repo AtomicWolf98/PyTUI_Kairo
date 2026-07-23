@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -17,7 +18,7 @@ from agent.context_manager import ConversationManager
 from agent.llm import LLMClient
 from agent.message_packer import pack_messages_for_provider
 from tools.base import ToolRegistry
-from tools.policy import is_authorized, AUTHORIZATION_AUTO, AUTHORIZATION_YOLO
+from tools.policy import AUTHORIZATION_AUTO, AUTHORIZATION_YOLO, is_authorized
 
 
 class InteractionRunner:
@@ -41,7 +42,7 @@ class InteractionRunner:
         self.task_status = "Idle"
         self.cancel_token = None  # 0.2.6-beta: optional CancellationToken
 
-    def _packed_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _packed_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Fold internal history into a strict provider-safe payload.
 
         0.2.6-beta: the internal history may carry several system-class
@@ -57,11 +58,11 @@ class InteractionRunner:
         return packed
 
     @property
-    def history(self) -> List[Dict[str, Any]]:
+    def history(self) -> list[dict[str, Any]]:
         return self.conversations.active.history
 
     @history.setter
-    def history(self, value: List[Dict[str, Any]]) -> None:
+    def history(self, value: list[dict[str, Any]]) -> None:
         self.conversations.active.history = value
         self.conversations.refresh_context()
 
@@ -76,7 +77,7 @@ class InteractionRunner:
             return ""
         return str(values.get("path", "")) if isinstance(values, dict) else ""
 
-    def _compression_messages(self, source: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _compression_messages(self, source: list[dict[str, Any]]) -> list[dict[str, Any]]:
         source_text = json.dumps(source, ensure_ascii=False, indent=2, default=str)
         return [
             {
@@ -91,7 +92,7 @@ class InteractionRunner:
             {"role": "user", "content": source_text},
         ]
 
-    def _generate_context_summary(self, source: List[Dict[str, Any]], cancel_token=None) -> Tuple[Optional[str], Optional[str]]:
+    def _generate_context_summary(self, source: list[dict[str, Any]], cancel_token=None) -> tuple[str | None, str | None]:
         messages = self._compression_messages(source)
         safety_margin = max(1024, int(self.config.context_window * 0.02))
         estimated_prompt = self.conversations.estimator.estimate_messages(messages)
@@ -131,7 +132,7 @@ class InteractionRunner:
             return None, "The compression request returned an empty summary."
         return summary.strip(), None
 
-    def compress_context(self, manual: bool = False, tools=None, cancel_token=None) -> Tuple[bool, str]:
+    def compress_context(self, manual: bool = False, tools=None, cancel_token=None) -> tuple[bool, str]:
         if cancel_token is None:
             cancel_token = self.cancel_token
         settings = self.config.context_management
@@ -259,8 +260,8 @@ class InteractionRunner:
         self,
         user_input: str,
         emit: Callable[[str, Any], None],
-        approve: Optional[Callable[[str, List[str], int], int]] = None,
-        request_text: Optional[Callable[[str], str]] = None,
+        approve: Callable[[str, list[str], int], int] | None = None,
+        request_text: Callable[[str], str] | None = None,
         cancel_token=None,
     ) -> None:
         """Run one interaction without terminal rendering, emitting structured UI events.
@@ -347,7 +348,7 @@ class InteractionRunner:
                 while True:
                     current_thought = ""
                     current_content = ""
-                    current_tool_calls: List[Dict[str, Any]] = []
+                    current_tool_calls: list[dict[str, Any]] = []
                     context_error = None
                     official_context_tokens = None
                     has_usage = False
@@ -457,6 +458,8 @@ class InteractionRunner:
                     scope_label = scope.value.upper() if scope else "UNKNOWN"
 
                     emit("tool_requested", {
+                        "id": call_id,
+                        "tool_call_id": call_id,
                         "name": name,
                         "arguments": arguments,
                         "target_path": target_path,
@@ -490,6 +493,8 @@ class InteractionRunner:
                     if approved:
                         emit("state", "tool_run")
                         emit("tool_started", {
+                            "id": call_id,
+                            "tool_call_id": call_id,
                             "name": name,
                             "arguments": arguments,
                             "target_path": target_path,
@@ -497,6 +502,8 @@ class InteractionRunner:
                         result = self.registry.execute_tool(name, arguments)
                         success = not str(result).lstrip().lower().startswith("error")
                         emit("tool_finished", {
+                            "id": call_id,
+                            "tool_call_id": call_id,
                             "name": name,
                             "arguments": arguments,
                             "target_path": target_path,
@@ -506,6 +513,8 @@ class InteractionRunner:
                     else:
                         result = "Error: Tool execution was rejected by the user."
                         emit("tool_finished", {
+                            "id": call_id,
+                            "tool_call_id": call_id,
                             "name": name,
                             "arguments": arguments,
                             "target_path": target_path,
@@ -583,7 +592,7 @@ class InteractionRunner:
                 while True:
                     current_thought = ""
                     current_content = ""
-                    current_tool_calls: List[Dict[str, Any]] = []
+                    current_tool_calls: list[dict[str, Any]] = []
                     context_error = None
 
                     self.console.print()
