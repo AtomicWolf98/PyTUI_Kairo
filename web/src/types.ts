@@ -1,5 +1,7 @@
 export type RuntimeStatus = {
   version: string;
+  runtime_id?: string;
+  workspace_revision?: number;
   model: string;
   profile: string;
   base_url: string;
@@ -9,7 +11,15 @@ export type RuntimeStatus = {
   context: { used: number; limit: number; percent: number };
   modes: { authorization: string; plan: boolean; thinking: boolean };
   task: { current: string; status: string; busy: boolean };
-  diagnostics?: { subscriber_errors?: Array<Record<string, unknown>> };
+  lifecycle?: {
+    closing?: boolean;
+    degraded?: boolean;
+    degraded_reason?: string;
+  };
+  diagnostics?: {
+    subscriber_errors?: Array<Record<string, unknown>>;
+    degraded_reason?: string;
+  };
   web?: { token_required: boolean };
 };
 
@@ -57,6 +67,8 @@ export type WorkspaceChange = {
 };
 
 export type WorkspaceSnapshot = {
+  runtime_id?: string;
+  workspace_revision?: number;
   root: string;
   files: string[];
   changes: WorkspaceChange[];
@@ -69,6 +81,21 @@ export type WorkspaceSnapshot = {
   file_count?: number;
   file_limit?: number;
   error: string;
+};
+
+export type WorkspaceMoveResult = {
+  ok: boolean;
+  message: string;
+  code?: string;
+  retryable?: boolean;
+  runtime_id?: string;
+  workspace_revision?: number;
+  workspace_root?: string;
+  previous_root?: string;
+  root?: string;
+  snapshot?: WorkspaceSnapshot;
+  status?: RuntimeStatus;
+  warnings?: string[];
 };
 
 export type WorkspaceFilePreview = {
@@ -217,6 +244,12 @@ export type SkillList = {
     source: string;
     parameters: Record<string, unknown>;
   }>;
+  custom?: {
+    status: "absent" | "untrusted" | "trusted" | "changed" | "error";
+    manifest_digest?: string;
+    files?: string[];
+    error?: string;
+  };
 };
 
 export type DoctorResult = {

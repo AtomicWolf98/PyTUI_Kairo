@@ -1,8 +1,8 @@
 ﻿# Kairo 中文文档
 
-当前版本：**0.3.3-preview**
+当前版本：**0.3.3**
 
-WebUI 预览：运行 `kairo --web`。
+WebUI：运行 `kairo --web`。
 
 推荐从完整手册开始：
 

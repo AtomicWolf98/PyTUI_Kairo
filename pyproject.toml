@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kairo-agent"
-version = "0.3.3-preview"
+dynamic = ["version"]
 description = "Kairo, an animated terminal-native coding agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,8 +30,18 @@ dev = [
 [tool.setuptools]
 py-modules = ["kairo", "main"]
 
+[tool.setuptools.dynamic]
+version = {attr = "agent._version.__version__"}
+
 [tool.setuptools.packages.find]
 include = ["agent*", "tools*"]
+
+[tool.setuptools.package-data]
+"agent.web" = [
+    "static/index.html",
+    "static/version.json",
+    "static/assets/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

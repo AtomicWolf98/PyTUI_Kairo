@@ -100,7 +100,11 @@ class ShellExecutor(BaseTool):
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)
         command = args.get("command", "")
-        return classify_command_scope(command, self.policy)
+        scope = classify_command_scope(command, self.policy)
+        # A shell is arbitrary code execution, not an AUTO-safe internal file
+        # operation.  Preserve stronger labels while forcing simple commands to
+        # require an explicit confirmation in AUTO mode.
+        return OperationScope.SYSTEM if scope == OperationScope.INTERNAL else scope
 
     def execute(self, command: str, confirmed: bool = False) -> str:
         """Runs the shell command persistently and returns output."""
@@ -183,7 +187,10 @@ class PythonExecutor(BaseTool):
     def classify_scope(self, arguments: str) -> OperationScope:
         args = _parse_tool_args(arguments)
         code = args.get("code", "")
-        return classify_python_scope(code, self.policy)
+        scope = classify_python_scope(code, self.policy)
+        # The persistent REPL is not a sandbox.  Even pure-looking snippets may
+        # access retained objects, so AUTO must confirm every invocation.
+        return OperationScope.SYSTEM if scope == OperationScope.INTERNAL else scope
 
     def execute(self, code: str) -> str:
         """Runs python code persistently and returns output."""

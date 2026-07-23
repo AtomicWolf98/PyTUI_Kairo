@@ -7,6 +7,7 @@ from agent.bootstrap import build_agent
 from agent.config import Config
 from agent.context_manager import RUNTIME_STATE_NAME
 from tools.patch_ops import SearchFileTool
+from tools.skill_trust import SkillTrustStore
 
 
 class TestWorkspaceMoveHotSwitch(unittest.TestCase):
@@ -70,6 +71,7 @@ class TestWorkspaceMoveHotSwitch(unittest.TestCase):
         config_path = self._make_temp_config()
         self.config = Config(config_path)
         self.agent = build_agent(self.config)
+        self.agent.registry.skill_trust_store = SkillTrustStore(self.root / "skill-trust.json")
 
     def tearDown(self):
         # Close persistent shell/Python sessions so temporary dirs can be removed.
@@ -104,7 +106,7 @@ class TestWorkspaceMoveHotSwitch(unittest.TestCase):
         output = self.agent.registry.tools["run_python_code"].repl.execute("'workspace_marker' in globals()")
         self.assertIn("False", output)
 
-    def test_move_workspace_reloads_custom_skills(self):
+    def test_move_workspace_discovers_custom_skills_until_explicitly_trusted(self):
         # Create a skill in the new workspace.
         new_skills = self.new / "skills"
         new_skills.mkdir()
@@ -118,13 +120,18 @@ class TestWorkspaceMoveHotSwitch(unittest.TestCase):
 
         result = self.agent.move_workspace(self.new)
         self.assertTrue(result.success)
+        self.assertNotIn("new_skill", self.agent.registry.tools)
+        candidate = self.agent.registry.list_custom_skills()[0]
+        self.assertEqual(candidate["status"], "pending")
+
+        self.agent.registry.trust_custom_skill(candidate["relative_path"], candidate["digest"])
         self.assertIn("new_skill", self.agent.registry.tools)
         self.assertEqual(self.agent.registry.tools["new_skill"].execute(), "new workspace result")
 
     def test_move_workspace_unloads_old_skills(self):
         # Create a skill in the old workspace and reload on the existing agent.
-        # build_agent already created ./skills relative to the old workspace.
         old_skills = self.old / "skills"
+        old_skills.mkdir()
         (old_skills / "old_skill.py").write_text(
             "from tools.base import skill\n"
             "@skill(name='old_skill', description='From old workspace')\n"
@@ -136,6 +143,8 @@ class TestWorkspaceMoveHotSwitch(unittest.TestCase):
             self.config.skills_dir,
             workspace_root=self.old,
         )
+        candidate = self.agent.registry.list_custom_skills()[0]
+        self.agent.registry.trust_custom_skill(candidate["relative_path"], candidate["digest"])
         self.assertIn("old_skill", self.agent.registry.tools)
 
         result = self.agent.move_workspace(self.new)

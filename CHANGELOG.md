@@ -1,7 +1,9 @@
 ﻿# Changelog / 更新记录
 
-## [0.3.3-preview]
+## [0.3.3]
 
+- WebUI assets are built into and served from the Python package, so wheel installs no longer depend on a repository-side `web/dist` directory.
+- The Windows installer now uses a manifest-owned `%LOCALAPPDATA%\Kairo` environment and leaves unrelated packages and commands untouched.
 ### Fixed / 修复
 
 - Hardened Web Settings provider/profile editing so saving one provider no longer clears other API keys or API-key environment bindings.
@@ -19,7 +21,7 @@
 
 ### Changed
 
-- Package version moved to `0.3.3-preview`.
+- Package version moved to the stable `0.3.3` release.
 
 ## [0.3.2-preview]
 

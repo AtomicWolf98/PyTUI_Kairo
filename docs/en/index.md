@@ -1,8 +1,8 @@
 ﻿# Kairo English Docs
 
-Current version: **0.3.3-preview**
+Current version: **0.3.3**
 
-WebUI preview: run `kairo --web`.
+WebUI: run `kairo --web`.
 
 Start here:
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from agent.config import Config
 from agent.context_manager import ConversationManager, RUNTIME_STATE_NAME
 from agent.core import Agent
-from agent.session_store import SessionStore
+from agent.session_store import InvalidSessionIdError, SessionStore
 from tools.base import ToolRegistry
 
 
@@ -156,6 +156,52 @@ class TestSessionStore(unittest.TestCase):
             index = json.load(f)
         self.assertEqual(index["sessions"], [])
         self.assertEqual(index["active_session_id"], "")
+
+    def test_rejects_noncanonical_session_ids_before_path_access(self):
+        original_config = self.config_path.read_text(encoding="utf-8")
+        invalid_ids = [
+            "..\\..\\config",
+            "../../config",
+            "C:\\Windows\\system32",
+            "\\\\server\\share",
+            ".",
+            "A" * 32,
+            "a" * 31,
+            "g" * 32,
+        ]
+        for session_id in invalid_ids:
+            with self.subTest(session_id=session_id):
+                with self.assertRaises(InvalidSessionIdError):
+                    self.store.delete_session(session_id)
+        self.assertEqual(self.config_path.read_text(encoding="utf-8"), original_config)
+
+    def test_load_all_skips_malicious_index_entries_and_mismatched_files(self):
+        good = self._make_session("Good")
+        self.store.save_session(good, is_active=True)
+
+        mismatched_id = "b" * 32
+        mismatched_path = self.store.storage_dir / f"{mismatched_id}.json"
+        good_data = json.loads((self.store.storage_dir / f"{good.id}.json").read_text(encoding="utf-8"))
+        good_data["id"] = "c" * 32
+        mismatched_path.write_text(json.dumps(good_data), encoding="utf-8")
+
+        index = json.loads((self.store.storage_dir / "index.json").read_text(encoding="utf-8"))
+        index["active_session_id"] = "..\\config"
+        index["sessions"].extend(
+            [
+                {"id": "..\\..\\config", "file": "..\\..\\config.json"},
+                {"id": "d" * 32, "file": "..\\outside.json"},
+                {"id": mismatched_id, "file": f"{mismatched_id}.json"},
+            ]
+        )
+        (self.store.storage_dir / "index.json").write_text(json.dumps(index), encoding="utf-8")
+
+        sessions, active_id, warnings = self.store.load_all("You are Kairo.")
+        self.assertEqual([session.id for session in sessions], [good.id])
+        self.assertEqual(active_id, good.id)
+        self.assertTrue(any("Invalid session id in index" in warning for warning in warnings))
+        self.assertTrue(any("file mismatch" in warning for warning in warnings))
+        self.assertTrue(any("does not match filename" in warning for warning in warnings))
 
 
 class TestConversationManagerWithSessionStore(unittest.TestCase):

@@ -223,6 +223,14 @@ DESTRUCTIVE_COMMAND_KEYWORDS = {
     "format ", "mkfs", "dd if=", "> /dev/", "> /sys/", "> /proc/",
 }
 
+# Interpreter and shell frontends can hide arbitrary code behind flags such as
+# ``-c``, ``-m``, ``/c`` and ``-EncodedCommand``.  Treat the wrapper itself as
+# system scope; inspecting only the visible trailing tokens is not sufficient.
+INTERPRETER_WRAPPERS = {
+    "bash", "cmd", "cscript", "deno", "node", "perl", "powershell",
+    "pwsh", "py", "python", "python2", "python3", "ruby", "sh", "wscript", "zsh",
+}
+
 
 # Characters/substrings that indicate shell metacharacters or chaining. Any
 # command containing these cannot be proven to stay inside the workspace without
@@ -258,18 +266,28 @@ def classify_command_scope(command: str, policy: WorkspacePathPolicy) -> Operati
         if keyword in cmd_lower:
             return OperationScope.SYSTEM
 
-    # 3. Any chaining/variable/redirection/pipe metacharacter means the command
+    # 3. Interpreter/shell wrappers can execute opaque inline or encoded code.
+    try:
+        preliminary_tokens = shlex.split(command, posix=False)
+    except ValueError:
+        return OperationScope.SYSTEM
+    if preliminary_tokens:
+        executable = preliminary_tokens[0].strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        for suffix in (".exe", ".cmd", ".bat", ".com"):
+            if executable.endswith(suffix):
+                executable = executable[:-len(suffix)]
+                break
+        if executable in INTERPRETER_WRAPPERS:
+            return OperationScope.SYSTEM
+
+    # 4. Any chaining/variable/redirection/pipe metacharacter means the command
     #    cannot be statically proven to stay inside the workspace.
     if SHELL_METACHARACTERS.search(command):
         return OperationScope.SYSTEM
 
-    # 4. Path access: parse tokens with shlex to respect quoting, then check if
+    # 5. Path access: parse tokens with shlex to respect quoting, then check if
     #    any path resolves outside the workspace or uses parent-directory escape.
-    try:
-        tokens = shlex.split(command, posix=False)
-    except ValueError:
-        # Unbalanced quotes or other parsing issues -> cannot analyze safely.
-        return OperationScope.SYSTEM
+    tokens = preliminary_tokens
 
     for token in tokens:
         stripped = token.strip('"\'')

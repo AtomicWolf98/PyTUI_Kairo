@@ -12,6 +12,7 @@ export function SessionsPage() {
   const client = useQueryClient();
   const setHistory = useRuntimeStore(state => state.setHistory);
   const pushToast = useRuntimeStore(state => state.pushToast);
+  const busy = useRuntimeStore(state => Boolean(state.status?.task.busy));
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: getSessions });
   const searchResult = useQuery({ queryKey: ["session-search", search], queryFn: () => searchSessions(search), enabled: Boolean(search.trim()) });
 
@@ -85,7 +86,7 @@ export function SessionsPage() {
         <Field label="New session">
           <div className="inline-form">
             <input value={newName} onChange={event => setNewName(event.target.value)} placeholder="Conversation name" />
-            <button className="primary-button" onClick={() => create.mutate(newName || undefined as unknown as string)}>
+            <button className="primary-button" onClick={() => create.mutate(newName || undefined as unknown as string)} disabled={busy || create.isPending}>
               <Plus size={16} /> New
             </button>
           </div>
@@ -98,6 +99,8 @@ export function SessionsPage() {
         </Field>
       </section>
 
+      {busy ? <div className="warning-box">A task is running. Session create, switch, rename and delete are available after it finishes; search and export remain available.</div> : null}
+
       <section className="session-list">
         {list.length ? list.map(session => {
           const matched = !search.trim() || results.has(session.id);
@@ -109,15 +112,16 @@ export function SessionsPage() {
                 <p>{formatNumber(session.message_count)} messages · context {formatNumber(session.context_used)}</p>
               </div>
               <div className="session-card-actions">
-                <button className="secondary-button" onClick={() => switchTo(session.id)}>Switch</button>
+                <button className="secondary-button" onClick={() => switchTo(session.id)} disabled={busy}>Switch</button>
                 <input
                   value={renaming[session.id] || ""}
                   onChange={event => setRenaming({ ...renaming, [session.id]: event.target.value })}
                   placeholder="Rename"
+                  disabled={busy}
                 />
-                <button className="icon-button" onClick={() => rename(session.id)}><Pencil size={15} /></button>
+                <button className="icon-button" onClick={() => rename(session.id)} disabled={busy}><Pencil size={15} /></button>
                 <button className="icon-button" onClick={() => exportOne(session.id, "markdown")}><Download size={15} /></button>
-                <button className="icon-button danger" onClick={() => remove(session.id)}><Trash2 size={15} /></button>
+                <button className="icon-button danger" onClick={() => remove(session.id)} disabled={busy}><Trash2 size={15} /></button>
               </div>
             </article>
           );

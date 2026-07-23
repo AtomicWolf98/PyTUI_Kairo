@@ -1,11 +1,12 @@
 import json
+import threading
 import uuid
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agent.token_tracker import TokenTracker
-
 
 SUMMARY_PREFIX = "[Conversation Summary]"
 RUNTIME_STATE_NAME = "kairo_runtime_state"
@@ -92,6 +93,7 @@ class ConversationManager:
         self.session_store = session_store
         self.sessions: List[ConversationSession] = []
         self.active_session_id = ""
+        self._session_binding = threading.local()
         self._runtime_state = {
             "workspace_root": workspace_root,
             "model_profile": model_profile,
@@ -162,10 +164,33 @@ class ConversationManager:
 
     @property
     def active(self) -> ConversationSession:
+        bound_id = getattr(self._session_binding, "session_id", "")
+        target_id = bound_id or self.active_session_id
         for session in self.sessions:
-            if session.id == self.active_session_id:
+            if session.id == target_id:
                 return session
         raise RuntimeError("No active conversation session")
+
+    @contextmanager
+    def bind_session(self, session_id: str):
+        """Pin active-session access in the current thread to ``session_id``.
+
+        The Web runtime uses this for an entire turn so a concurrent or
+        out-of-band active-session change cannot redirect messages, token
+        accounting, or autosaves into another conversation.
+        """
+        if not any(session.id == session_id for session in self.sessions):
+            raise RuntimeError(f"Conversation session not found: {session_id}")
+        previous = getattr(self._session_binding, "session_id", "")
+        self._session_binding.session_id = session_id
+        try:
+            yield
+        finally:
+            if previous:
+                self._session_binding.session_id = previous
+            else:
+                with suppress(AttributeError):
+                    del self._session_binding.session_id
 
     def create_session(self, name: Optional[str] = None) -> ConversationSession:
         # 0.2.4: enforce max_sessions limit when configured
@@ -287,20 +312,28 @@ class ConversationManager:
     def save_active(self, reason: str = ""):
         """Persist the active session if a store is configured."""
         if self.session_store is None:
-            return
+            return True
         try:
-            self.session_store.save_session(self.active, is_active=True, reason=reason)
+            session = self.active
+            self.session_store.save_session(
+                session,
+                is_active=(session.id == self.active_session_id),
+                reason=reason,
+            )
             self._dirty = False
             self._dirty_reason = ""
             import time
             self._last_save_time = time.monotonic()
+            return True
         except Exception as exc:
             print(f"[Warning] Failed to save active session ({reason}): {exc}")
+            return False
 
     def save_all(self, reason: str = ""):
         """Persist all sessions if a store is configured."""
         if self.session_store is None:
-            return
+            return True
+        saved = True
         for session in self.sessions:
             try:
                 self.session_store.save_session(
@@ -309,7 +342,9 @@ class ConversationManager:
                     reason=reason,
                 )
             except Exception as exc:
+                saved = False
                 print(f"[Warning] Failed to save session {session.name} ({reason}): {exc}")
+        return saved
 
     def mark_dirty(self, reason: str = ""):
         """Mark the active session as dirty and auto-save when autosave is enabled.

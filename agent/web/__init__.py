@@ -1,4 +1,4 @@
-"""Web adapter for Kairo 0.3.0-preview."""
+"""Web adapter for Kairo."""
 
 from agent.web.app import create_web_app, run_web
 

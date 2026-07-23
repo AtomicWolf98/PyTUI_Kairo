@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -9,7 +9,8 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles
+  Sparkles,
+  WifiOff
 } from "lucide-react";
 import { createSession, eventUrl, getChatHistory, getSessions, getSettings, getStatus, getWorkspaceSnapshot, switchSession } from "./api";
 import { Badge, Meter, Toasts, formatNumber } from "./components";
@@ -50,7 +51,10 @@ function App() {
   const setHistory = useRuntimeStore(state => state.setHistory);
   const pushToast = useRuntimeStore(state => state.pushToast);
   const kaiState = useRuntimeStore(state => state.kaiState);
+  const connection = useRuntimeStore(state => state.connection);
+  const setConnection = useRuntimeStore(state => state.setConnection);
   const client = useQueryClient();
+  const connectedOnce = useRef(false);
 
   useEffect(() => {
     getStatus().then(setStatus).catch(error => pushToast({ tone: "error", text: String(error.message || error) }));
@@ -62,21 +66,48 @@ function App() {
   }, [settings.data?.appearance]);
 
   useEffect(() => {
-    const socket = new WebSocket(eventUrl());
-    socket.onmessage = event => {
-      const parsed = JSON.parse(event.data) as RuntimeEvent;
-      applyEvent(parsed);
-      if (parsed.kind === "status") setStatus(parsed.payload as RuntimeStatus);
-      if (["config_updated", "workspace_updated", "session_changed", "skills_updated", "usage_updated", "turn_finished"].includes(parsed.kind)) {
-        client.invalidateQueries();
+    let socket: WebSocket | null = null;
+    let retryTimer: number | undefined;
+    let disposed = false;
+    let attempts = 0;
+
+    const connect = () => {
+      if (disposed) return;
+      setConnection(attempts ? "reconnecting" : "connecting");
+      socket = new WebSocket(eventUrl());
+      socket.onmessage = event => {
+        const parsed = JSON.parse(event.data) as RuntimeEvent;
+        applyEvent(parsed);
+        if (parsed.kind === "status") setStatus(parsed.payload as RuntimeStatus);
+        void refreshForRuntimeEvent(client, parsed.kind, setStatus, setHistory);
+      };
+      socket.onopen = () => {
+        attempts = 0;
+        setConnection("connected");
         getStatus().then(setStatus).catch(() => undefined);
-      }
+        if (!connectedOnce.current) {
+          connectedOnce.current = true;
+          pushToast({ tone: "success", text: "Connected to Kairo runtime." });
+        }
+      };
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (disposed) return;
+        attempts += 1;
+        setConnection("reconnecting");
+        const delay = Math.min(10_000, 500 * (2 ** Math.min(attempts, 5)));
+        retryTimer = window.setTimeout(connect, delay);
+      };
     };
-    socket.onopen = () => pushToast({ tone: "success", text: "Connected to Kairo runtime." });
-    socket.onerror = () => pushToast({ tone: "error", text: "WebSocket connection failed." });
-    socket.onclose = () => pushToast({ tone: "info", text: "Runtime event stream closed." });
-    return () => socket.close();
-  }, [applyEvent, client, pushToast, setStatus]);
+
+    connect();
+    return () => {
+      disposed = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      socket?.close();
+      setConnection("disconnected");
+    };
+  }, [applyEvent, client, pushToast, setConnection, setHistory, setStatus]);
 
   const pageNode = useMemo(() => {
     if (page === "workspace") return <WorkspacePage />;
@@ -106,6 +137,12 @@ function App() {
       </aside>
 
       <section className="main-workbench">
+        {connection !== "connected" ? (
+          <div className="connection-banner" role="status">
+            <WifiOff size={15} />
+            {connection === "reconnecting" ? "Runtime connection lost. Reconnecting…" : "Connecting to local runtime…"}
+          </div>
+        ) : null}
         <header className="desktop-titlebar">
           <div className="search-pill"><Search size={15} /> Search Kairo <kbd>Ctrl+K</kbd></div>
           <div className="titlebar-cluster">
@@ -124,6 +161,47 @@ function App() {
       <Toasts />
     </main>
   );
+}
+
+async function refreshForRuntimeEvent(
+  client: ReturnType<typeof useQueryClient>,
+  kind: string,
+  setStatus: (status: RuntimeStatus) => void,
+  setHistory: (messages: Array<Record<string, unknown>>) => void
+) {
+  if (kind === "workspace_changed" || kind === "workspace_updated") {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["workspace"] }),
+      client.invalidateQueries({ queryKey: ["workspace-file"] }),
+      client.invalidateQueries({ queryKey: ["settings"] }),
+      client.invalidateQueries({ queryKey: ["skills"] })
+    ]);
+  } else if (kind === "session_changed") {
+    await client.invalidateQueries({ queryKey: ["sessions"] });
+    const history = await getChatHistory().catch(() => null);
+    if (history) setHistory(history.messages);
+  } else if (kind === "config_updated") {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["settings"] }),
+      client.invalidateQueries({ queryKey: ["workspace"] })
+    ]);
+  } else if (kind === "skills_updated") {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["skills"] }),
+      client.invalidateQueries({ queryKey: ["settings"] })
+    ]);
+  } else if (kind === "turn_finished") {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ["sessions"] }),
+      client.invalidateQueries({ queryKey: ["workspace"] })
+    ]);
+    const history = await getChatHistory().catch(() => null);
+    if (history) setHistory(history.messages);
+  } else if (kind !== "usage_updated") {
+    return;
+  }
+  const nextStatus = await getStatus().catch(() => null);
+  if (nextStatus) setStatus(nextStatus);
 }
 
 function applyAppearance(appearance?: SettingsViewModel["appearance"]) {
@@ -163,6 +241,7 @@ function SessionRail({ onOpenSessions }: { onOpenSessions: () => void }) {
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: getSessions });
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
+  const busy = useRuntimeStore(state => Boolean(state.status?.task.busy));
   const activeId = sessions.data?.active_session_id || "";
   async function create() {
     try {
@@ -176,7 +255,12 @@ function SessionRail({ onOpenSessions }: { onOpenSessions: () => void }) {
   async function open(id: string) {
     try {
       await switchSession(id);
-      await client.invalidateQueries();
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["sessions"] }),
+        client.invalidateQueries({ queryKey: ["workspace"] })
+      ]);
+      const history = await getChatHistory();
+      useRuntimeStore.getState().setHistory(history.messages);
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
     }
@@ -185,12 +269,12 @@ function SessionRail({ onOpenSessions }: { onOpenSessions: () => void }) {
     <div className="rail-section">
       <div className="rail-header">
         <span>Conversations</span>
-        <button className="icon-button" onClick={create} title="New session"><Plus size={15} /></button>
+        <button className="icon-button" onClick={create} title={busy ? "Finish the running task first" : "New session"} disabled={busy}><Plus size={15} /></button>
       </div>
-      <button className="new-chat-button" onClick={create}><Plus size={15} /> New chat</button>
+      <button className="new-chat-button" onClick={create} disabled={busy}><Plus size={15} /> New chat</button>
       <div className="rail-session-list">
         {(sessions.data?.sessions || []).slice(0, 12).map(session => (
-          <button className={session.id === activeId ? "rail-session active" : "rail-session"} key={session.id} onClick={() => open(session.id)}>
+          <button className={session.id === activeId ? "rail-session active" : "rail-session"} key={session.id} onClick={() => open(session.id)} disabled={busy}>
             <strong>{session.name}</strong>
             <span>{formatNumber(session.message_count)} messages</span>
           </button>
@@ -202,7 +286,11 @@ function SessionRail({ onOpenSessions }: { onOpenSessions: () => void }) {
 }
 
 function WorkspaceInspector() {
-  const snapshot = useQuery({ queryKey: ["workspace", "inspector"], queryFn: () => getWorkspaceSnapshot("") });
+  const identity = useRuntimeStore(state => state.workspace);
+  const snapshot = useQuery({
+    queryKey: ["workspace", "inspector", identity.runtimeId, identity.revision],
+    queryFn: () => getWorkspaceSnapshot("")
+  });
   const files = snapshot.data?.files || [];
   const changes = snapshot.data?.changes || [];
   return (
@@ -230,7 +318,11 @@ function WorkspaceInspector() {
 }
 
 function WorkspaceSummaryInspector() {
-  const snapshot = useQuery({ queryKey: ["workspace", "inspector", "summary"], queryFn: () => getWorkspaceSnapshot("") });
+  const identity = useRuntimeStore(state => state.workspace);
+  const snapshot = useQuery({
+    queryKey: ["workspace", "inspector", "summary", identity.runtimeId, identity.revision],
+    queryFn: () => getWorkspaceSnapshot("")
+  });
   const files = snapshot.data?.files || [];
   const changes = snapshot.data?.changes || [];
   const touched = changes.filter(change => change.session_touched).length;

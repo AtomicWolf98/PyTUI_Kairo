@@ -1,17 +1,17 @@
 from pathlib import Path
-from typing import Any, Callable, List, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from agent import tui_widgets
 from agent.commands import CommandDispatcher, CommandResult
 from agent.config import Config
 from agent.context_manager import ConversationManager
 from agent.interaction import InteractionRunner
-from agent import tui_widgets
 from agent.session_store import SessionStore
-from agent.workspace_context import WorkspaceContext, WorkspaceMoveError
+from agent.workspace_context import WorkspaceContext
 from tools.base import ToolRegistry
 
 
@@ -172,62 +172,95 @@ class Agent:
         """Resets the chat history to only the system instruction."""
         self.conversations.clear_active()
 
-    def move_workspace(self, target: str | Path) -> CommandResult:
-        """Move the workspace root to *target* and update all dependent state.
+    def move_workspace(
+        self,
+        target: str | Path,
+        *,
+        persist: bool = True,
+        notify: bool = True,
+    ) -> CommandResult:
+        """Reconcile every workspace-dependent component to ``target``.
 
-        This is the single transaction entry point used by both plain and TUI modes.
+        ``persist=False`` is used by :class:`KairoRuntime` after its config
+        transaction has already been committed.  The method itself still
+        restores the old runtime root when a later reconcile step fails.
         """
         target_path = Path(target).expanduser().resolve()
+        previous_root = Path(self.workspace_context.root).resolve()
+        previous_config_root = self.config.workspace_root
+
+        if target_path == previous_root:
+            return CommandResult(
+                handled=True,
+                success=True,
+                message=f"Workspace already active: {target_path}",
+                refresh_ui=True,
+                data={"kind": "workspace_moved", "root": str(target_path), "previous_root": str(previous_root)},
+            )
+
         try:
+            if persist:
+                self.config.workspace_root = str(target_path)
+                self.config.save()
             self.workspace_context.move(target_path)
-        except WorkspaceMoveError as exc:
-            return CommandResult(
-                handled=True,
-                success=False,
-                message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_moved", "root": str(target_path)},
-            )
-        except Exception as exc:
-            return CommandResult(
-                handled=True,
-                success=False,
-                message=f"Workspace move failed: {exc}",
-                data={"kind": "workspace_moved", "root": str(target_path)},
+            new_root = str(target_path)
+            self.config.workspace_root = new_root
+            self.conversations.update_runtime_state(
+                workspace_root=new_root,
+                model_profile=self.config.active_model_profile,
+                authorization_level=self.config.authorization_level,
             )
 
-        new_root = str(target_path)
-        self.config.workspace_root = new_root
-        self.config.save()
-
-        self.conversations.update_runtime_state(
-            workspace_root=new_root,
-            model_profile=self.config.active_model_profile,
-            authorization_level=self.config.authorization_level,
-        )
-        self.conversations.save_active(reason="workspace_move")
-
-        # Reset Python REPL so old variables and cwd semantics do not leak.
-        python_executor = self.registry.tools.get("run_python_code")
-        if python_executor is not None and hasattr(python_executor, "reset_repl"):
-            try:
-                python_executor.reset_repl()
-                self.console.print("[dim]Python REPL reset after workspace move.[/dim]")
-            except Exception as exc:
-                self.console.print(f"[yellow]Python REPL reset failed: {exc}[/yellow]")
-
-        # Reload custom skills from the new workspace.
-        if hasattr(self.registry, "reload_custom_skills"):
-            try:
+            # WorkspaceContext listeners restart the shell, reset the Python
+            # REPL, and update filesystem policies.  Skills are reconciled
+            # explicitly because import failures must fail the transaction.
+            if hasattr(self.registry, "reload_custom_skills"):
                 self.registry.reload_custom_skills(
                     self.config.skills_dir,
                     require_hash=self.config.policy.get("skills", {}).get("require_hash", False),
                     workspace_root=target_path,
                 )
-            except Exception as exc:
-                self.console.print(f"[yellow]Custom skills reload failed: {exc}[/yellow]")
-
-        if self.workspace_changed:
-            self.workspace_changed(new_root)
+            if not self.conversations.save_all(reason="workspace_move"):
+                raise RuntimeError("Failed to persist sessions after workspace move.")
+            if notify and self.workspace_changed:
+                self.workspace_changed(new_root)
+        except Exception as exc:
+            rollback_errors = []
+            self.config.workspace_root = previous_config_root
+            if persist:
+                try:
+                    self.config.save()
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"config: {rollback_exc}")
+            try:
+                self.workspace_context.move(previous_root)
+                self.conversations.update_runtime_state(
+                    workspace_root=str(previous_root),
+                    model_profile=self.config.active_model_profile,
+                    authorization_level=self.config.authorization_level,
+                )
+                if hasattr(self.registry, "reload_custom_skills"):
+                    self.registry.reload_custom_skills(
+                        self.config.skills_dir,
+                        require_hash=self.config.policy.get("skills", {}).get("require_hash", False),
+                        workspace_root=previous_root,
+                    )
+                if notify and self.workspace_changed:
+                    self.workspace_changed(str(previous_root))
+            except Exception as rollback_exc:
+                rollback_errors.append(f"runtime: {rollback_exc}")
+            rollback_note = f" Rollback failed ({'; '.join(rollback_errors)})." if rollback_errors else ""
+            return CommandResult(
+                handled=True,
+                success=False,
+                message=f"Workspace move failed: {exc}.{rollback_note}".strip(),
+                data={
+                    "kind": "workspace_move_failed",
+                    "root": str(target_path),
+                    "previous_root": str(previous_root),
+                    "rollback_failed": bool(rollback_errors),
+                },
+            )
 
         notice = f"Workspace moved to: {target_path}"
         # 0.2.4: workspace notice is delivered via CommandResult.message / UI event,
@@ -237,7 +270,7 @@ class Agent:
             success=True,
             message=notice,
             refresh_ui=True,
-            data={"kind": "workspace_moved", "root": new_root},
+            data={"kind": "workspace_moved", "root": new_root, "previous_root": str(previous_root)},
         )
 
     def switch_model_profile(self, profile_id: str, *, source: str = "command") -> CommandResult:

@@ -7,6 +7,7 @@ import type {
   SkillList,
   WorkspaceBookmark,
   WorkspaceFilePreview,
+  WorkspaceMoveResult,
   WorkspaceSnapshot
 } from "./types";
 
@@ -30,6 +31,20 @@ export const token = bootstrapToken();
 
 type JsonValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  retryable: boolean;
+
+  constructor(message: string, status: number, code = "", retryable = false) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -41,13 +56,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!response.ok) {
     let message = await response.text();
+    let code = "";
+    let retryable = false;
     try {
-      const parsed = JSON.parse(message) as { detail?: string };
-      message = parsed.detail || message;
+      const parsed = JSON.parse(message) as {
+        detail?: string | { message?: string };
+        error?: string;
+        code?: string;
+        retryable?: boolean;
+      };
+      const detail = typeof parsed.detail === "string" ? parsed.detail : parsed.detail?.message;
+      message = detail || parsed.error || message;
+      code = parsed.code || "";
+      retryable = Boolean(parsed.retryable);
     } catch {
       // Keep the raw response text.
     }
-    throw new Error(message || `HTTP ${response.status}`);
+    throw new ApiError(message || `HTTP ${response.status}`, response.status, code, retryable);
   }
   return response.json() as Promise<T>;
 }
@@ -176,7 +201,7 @@ export function getWorkspaceFile(path: string) {
 }
 
 export function moveWorkspace(target: string) {
-  return request<{ ok: boolean; message: string; root?: string }>("/api/workspace/move", {
+  return request<WorkspaceMoveResult>("/api/workspace/move", {
     method: "POST",
     body: JSON.stringify({ target })
   });
@@ -244,6 +269,17 @@ export function getSkills() {
 
 export function reloadSkills() {
   return request<SkillList & { ok: boolean }>("/api/skills/reload", { method: "POST" });
+}
+
+export function trustSkills(manifestDigest: string) {
+  return request<SkillList & { ok: boolean }>("/api/skills/trust", {
+    method: "POST",
+    body: JSON.stringify({ manifest_digest: manifestDigest, persist: true })
+  });
+}
+
+export function revokeSkillsTrust() {
+  return request<SkillList & { ok: boolean }>("/api/skills/trust", { method: "DELETE" });
 }
 
 export function runDoctor(localOnly = true) {

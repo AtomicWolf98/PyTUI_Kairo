@@ -1,8 +1,8 @@
 ﻿# Commands / 命令
 
-Current version / 当前版本：**0.3.3-preview**
+Current version / 当前版本：**0.3.3**
 
-WebUI preview / WebUI 预览：`kairo --web`
+WebUI / Web 图形界面：`kairo --web`
 
 The complete command reference is maintained in the bilingual manuals:
 

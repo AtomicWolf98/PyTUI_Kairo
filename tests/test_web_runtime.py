@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from agent.config import Config
-from agent.runtime import KairoRuntime
+from agent.runtime import ActiveTurn, KairoRuntime
 from agent.web import create_web_app
 
 
@@ -95,6 +95,47 @@ class TestWebRuntime(unittest.TestCase):
         self.assertEqual(stopped.status_code, 200)
         self.assertFalse(stopped.json()["ok"])
 
+    def test_workspace_identity_and_transactional_move_response(self):
+        status = self.client.get("/api/status?token=test-token").json()
+        snapshot = self.client.get("/api/workspace/snapshot?token=test-token").json()
+        self.assertEqual(snapshot["runtime_id"], status["runtime_id"])
+        self.assertEqual(snapshot["workspace_revision"], status["workspace_revision"])
+
+        next_root = self.root / "transactional-workspace"
+        next_root.mkdir()
+        moved = self.client.post(
+            "/api/workspace/move?token=test-token",
+            json={"target": str(next_root)},
+        )
+        self.assertEqual(moved.status_code, 200)
+        payload = moved.json()
+        self.assertEqual(payload["workspace_root"], str(next_root.resolve()))
+        self.assertEqual(payload["snapshot"]["root"], str(next_root.resolve()))
+        self.assertEqual(payload["status"]["workspace_root"], str(next_root.resolve()))
+        self.assertEqual(payload["workspace_revision"], 1)
+        self.assertEqual(payload["snapshot"]["workspace_revision"], 1)
+
+    def test_busy_mutations_and_invalid_session_ids_have_stable_errors(self):
+        active_id = self.runtime.agent.conversations.active.id
+        self.runtime._active_turn = ActiveTurn("busy-turn", active_id)
+        try:
+            requests = [
+                self.client.post("/api/workspace/move?token=test-token", json={"target": str(self.root)}),
+                self.client.post("/api/sessions?token=test-token", json={"name": "blocked"}),
+                self.client.patch("/api/settings/general?token=test-token", json={"language": "en"}),
+                self.client.post("/api/skills/reload?token=test-token"),
+            ]
+        finally:
+            self.runtime._active_turn = None
+        for response in requests:
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["code"], "runtime_busy")
+            self.assertTrue(response.json()["retryable"])
+
+        invalid = self.client.delete("/api/sessions/..%5Cconfig?token=test-token")
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.json()["code"], "invalid_session_id")
+
     def test_config_web_update_persists(self):
         response = self.client.patch(
             "/api/config/web?token=test-token",
@@ -153,8 +194,8 @@ class TestWebRuntime(unittest.TestCase):
         payload = view.json()
         self.assertIn("general", payload)
         self.assertIn("providers", payload)
-        self.assertEqual(payload["diagnostics"]["backend_version"], "0.3.3-preview")
-        self.assertEqual(payload["diagnostics"]["static_version"], "0.3.3-preview")
+        self.assertEqual(payload["diagnostics"]["backend_version"], "0.3.3")
+        self.assertEqual(payload["diagnostics"]["static_version"], "0.3.3")
         self.assertTrue(payload["diagnostics"]["version_match"])
         self.assertNotIn("secret-key", json.dumps(payload))
         provider = payload["providers"][0]

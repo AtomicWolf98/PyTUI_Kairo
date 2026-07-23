@@ -4,11 +4,11 @@ Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain t
 
 Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时配置面板，以及本地配置优先的 key 管理。
 
-Current version / 当前版本：**0.3.3-preview**
+Current version / 当前版本：**0.3.3**
 
 ## WebUI Preview / WebUI 预览
 
-Kairo 0.3.3-preview stabilizes the optional local browser workbench with safer settings, cleaner authentication, stronger event matching and better Workspace layout:
+Kairo 0.3.3 stabilizes the optional local browser workbench with safer settings, cleaner authentication, stronger event matching and better Workspace layout:
 
 ```powershell
 kairo --web
@@ -18,7 +18,7 @@ kairo --web --no-browser
 
 The WebUI is local-only by default (`127.0.0.1`). Startup links may include a temporary auth token, but the browser removes it from the visible URL after first load and uses local header/session auth for API calls. It includes a graphical chat timeline, tool approval cards, workspace tree/diff review, sessions management, settings panels, skills and doctor checks. `--tui` and `--plain` remain supported.
 
-Kairo 0.3.3-preview 对可选本地浏览器工作台进行稳定性收口：更安全的 settings 保存、更干净的本地认证、更可靠的事件匹配和更合理的 Workspace 布局。默认只监听 `127.0.0.1`；启动链接可以携带临时 token，但前端首次读取后会从可见 URL 中移除，并通过本地 header/session 认证调用 API。WebUI 包含项目/会话侧栏、聊天流、工具审批卡片、workspace tree/diff、session 管理、全表单 settings、skills 和 doctor 检查。`--tui` 与 `--plain` 继续保留。
+Kairo 0.3.3 对可选本地浏览器工作台进行稳定性收口：更安全的 settings 保存、更干净的本地认证、更可靠的事件匹配和更合理的 Workspace 布局。默认只监听 `127.0.0.1`；启动链接可以携带临时 token，但前端首次读取后会从可见 URL 中移除，并通过本地 header/session 认证调用 API。WebUI 包含项目/会话侧栏、聊天流、工具审批卡片、workspace tree/diff、session 管理、全表单 settings、skills 和 doctor 检查。`--tui` 与 `--plain` 继续保留。
 
 ## Documentation / 文档
 
@@ -57,7 +57,7 @@ Kairo 0.3.3-preview 对可选本地浏览器工作台进行稳定性收口：更
 kairo
 ```
 
-`install.bat` removes old Kairo installs, creates `.venv`, installs this checkout, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat`, and puts that folder first in the current user's PATH. Open a new PowerShell window after installation.
+`install.bat` installs into the owned `%LOCALAPPDATA%\Kairo` environment, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat`, and puts that folder first in the current user's PATH. It never uninstalls similarly named packages or deletes commands from other Python environments. An existing target without Kairo's ownership manifest is rejected; set `KAIRO_INSTALL_ROOT` to choose a separate managed root. Open a new PowerShell window after installation.
 
 Quick run without installing the user-level command:
 

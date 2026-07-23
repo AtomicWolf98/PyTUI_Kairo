@@ -1,9 +1,9 @@
-"""UI-neutral runtime and service layer for Kairo 0.3.3-preview."""
+"""UI-neutral runtime and service layer for Kairo."""
 from __future__ import annotations
 
 import copy
+import os
 import queue
-import tempfile
 import threading
 import time
 import uuid
@@ -19,6 +19,7 @@ from agent.config import Config
 from agent.config_editor import KEY_CLEAR, ConfigDraft
 from agent.profile_resolver import describe_key_source, is_masked_key, list_profiles, mask_key
 from agent.runtime_commands import handle_doctor
+from agent.session_store import InvalidSessionIdError, SessionStore
 from agent.workspace import WorkspaceMonitor, WorkspaceSnapshot
 
 
@@ -28,6 +29,13 @@ class RuntimeEvent:
     payload: Any = None
     timestamp: float = field(default_factory=time.time)
     sequence: int = 0
+
+
+@dataclass(frozen=True)
+class ActiveTurn:
+    turn_id: str
+    session_id: str
+    started_at: float = field(default_factory=time.time)
 
 
 class RuntimeEventBus:
@@ -86,6 +94,9 @@ class KairoRuntime:
     def __init__(self, config: Config):
         self.config = config
         self.agent = build_agent(config)
+        self.runtime_id = uuid.uuid4().hex
+        self.workspace_revision = 0
+        self.previous_workspace_root = str(self.agent.workspace_context.root)
         max_buffer = getattr(config, "web", {}).get("max_event_buffer", 1000)
         self.events = RuntimeEventBus(max_buffer=max_buffer)
         self.workspace = WorkspaceService(self)
@@ -94,20 +105,35 @@ class KairoRuntime:
         self.chat = ChatService(self)
         self.skills = SkillService(self)
         self._task_lock = threading.RLock()
+        self._mutation_lock = threading.RLock()
         self._task_thread: threading.Thread | None = None
         self._cancel_token: CancellationToken | None = None
+        self._active_turn: ActiveTurn | None = None
+        self._closing = False
+        self._degraded = False
+        self._degraded_reason = ""
         self._pending_approvals: dict[str, _PendingApproval] = {}
         self._approval_lock = threading.RLock()
 
     def status(self) -> dict[str, Any]:
         tracker = self.agent.token_tracker
+        diagnostics = self.events.diagnostics()
+        diagnostics.update(
+            {
+                "degraded": self._degraded,
+                "degraded_reason": self._degraded_reason,
+            }
+        )
         return {
             "version": _package_version(),
+            "runtime_id": self.runtime_id,
+            "workspace_revision": self.workspace_revision,
             "model": self.config.model,
             "profile": self.config.active_model_profile,
             "base_url": self.config.base_url,
             "api_key": self.config.describe_active_api_key(),
             "workspace_root": str(self.agent.workspace_context.root),
+            "previous_workspace_root": self.previous_workspace_root,
             "session": {
                 "id": self.agent.conversations.active.id,
                 "name": self.agent.active_session_name,
@@ -127,61 +153,157 @@ class KairoRuntime:
                 "current": self.agent.current_task,
                 "status": self.agent.task_status,
                 "busy": self.is_busy(),
+                "turn_id": self._active_turn.turn_id if self._active_turn else "",
+                "session_id": self._active_turn.session_id if self._active_turn else "",
             },
-            "diagnostics": self.events.diagnostics(),
+            "lifecycle": {
+                "closing": self._closing,
+                "degraded": self._degraded,
+                "degraded_reason": self._degraded_reason,
+            },
+            "diagnostics": diagnostics,
         }
 
     def is_busy(self) -> bool:
         with self._task_lock:
-            return bool(self._task_thread and self._task_thread.is_alive())
+            return self._active_turn is not None
+
+    def mutation_error(self, operation: str) -> dict[str, Any] | None:
+        """Return the stable failure payload for a prohibited state mutation."""
+        with self._task_lock:
+            if self._closing:
+                return _failure("runtime_closing", "Kairo is shutting down.", retryable=False)
+            if self._degraded:
+                detail = self._degraded_reason or "Runtime reconciliation failed."
+                return _failure("runtime_degraded", detail, retryable=False)
+            if self._active_turn is not None:
+                return _failure(
+                    "runtime_busy",
+                    f"Cannot {operation} while turn {self._active_turn.turn_id} is running.",
+                    retryable=True,
+                )
+        return None
+
+    def run_mutation(self, operation: str, callback: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+        """Serialize state changes and reject them while a turn is active."""
+        with self._mutation_lock:
+            blocked = self.mutation_error(operation)
+            if blocked is not None:
+                return blocked
+            try:
+                return callback()
+            except Exception as exc:
+                return _failure("mutation_failed", f"{operation} failed: {exc}", retryable=False)
+
+    def mark_degraded(self, reason: str) -> None:
+        with self._task_lock:
+            self._degraded = True
+            self._degraded_reason = str(reason)
+        self.events.emit("runtime_degraded", {"reason": self._degraded_reason, **self._runtime_identity()})
+
+    def _runtime_identity(self) -> dict[str, Any]:
+        return {
+            "runtime_id": self.runtime_id,
+            "workspace_revision": self.workspace_revision,
+            "workspace_root": str(self.agent.workspace_context.root),
+        }
 
     def submit_message(self, text: str) -> dict[str, Any]:
         text = (text or "").strip()
         if not text:
-            return {"ok": False, "error": "Message is empty."}
-        with self._task_lock:
-            if self.is_busy():
-                return {"ok": False, "error": "Another task is already running."}
-            turn_id = uuid.uuid4().hex
+            return _failure("invalid_message", "Message is empty.", retryable=False)
+        with self._mutation_lock, self._task_lock:
+            if self._closing:
+                return _failure("runtime_closing", "Kairo is shutting down.", retryable=False)
+            if self._degraded:
+                return _failure(
+                    "runtime_degraded",
+                    self._degraded_reason or "Runtime reconciliation failed.",
+                    retryable=False,
+                )
+            if self._active_turn is not None:
+                return _failure("runtime_busy", "Another task is already running.", retryable=True)
+            turn = ActiveTurn(
+                turn_id=uuid.uuid4().hex,
+                session_id=self.agent.conversations.active.id,
+            )
             token = CancellationToken()
+            self._active_turn = turn
             self._cancel_token = token
             self._task_thread = threading.Thread(
                 target=self._run_message_worker,
-                args=(turn_id, text, token),
-                name=f"kairo-runtime-{turn_id[:8]}",
+                args=(turn, text, token),
+                name=f"kairo-runtime-{turn.turn_id[:8]}",
                 daemon=True,
             )
-            self._task_thread.start()
-        return {"ok": True, "turn_id": turn_id}
+            try:
+                self._task_thread.start()
+            except Exception:
+                self._active_turn = None
+                self._cancel_token = None
+                self._task_thread = None
+                raise
+        return {"ok": True, "turn_id": turn.turn_id, "session_id": turn.session_id}
 
-    def _run_message_worker(self, turn_id: str, text: str, token: CancellationToken) -> None:
-        self.events.emit("turn_started", {"turn_id": turn_id, "text": text})
+    def _run_message_worker(self, turn: ActiveTurn, text: str, token: CancellationToken) -> None:
+        turn_id = turn.turn_id
+        self.events.emit(
+            "turn_started",
+            {"turn_id": turn_id, "session_id": turn.session_id, "text": text, **self._runtime_identity()},
+        )
         current_message_id = ""
         local_sequence = 0
+        failed = False
 
         def emit(kind: str, payload: Any = None) -> None:
-            nonlocal current_message_id, local_sequence
+            nonlocal current_message_id, local_sequence, failed
             local_sequence += 1
             normalized = self._normalize_worker_payload(kind, payload, turn_id, current_message_id, local_sequence)
+            normalized.setdefault("session_id", turn.session_id)
+            normalized.update({key: value for key, value in self._runtime_identity().items() if key not in normalized})
             if kind == "message_started":
                 current_message_id = str(normalized.get("message_id") or current_message_id)
+            if kind == "error":
+                failed = True
             self.events.emit(kind, normalized)
             if kind == "message_finished":
                 current_message_id = ""
 
         try:
-            self.agent.runner.run_interaction_events(
-                text,
-                emit=emit,
-                approve=self._approve_tool,
-                request_text=self._request_text,
-                cancel_token=token,
-            )
+            with self.agent.conversations.bind_session(turn.session_id):
+                self.agent.runner.run_interaction_events(
+                    text,
+                    emit=emit,
+                    approve=self._approve_tool,
+                    request_text=self._request_text,
+                    cancel_token=token,
+                )
+                if not self.agent.conversations.save_active(reason="web_turn"):
+                    raise RuntimeError("Failed to persist the completed turn.")
+        except Exception as exc:
+            failed = True
+            emit("error", str(exc))
         finally:
-            self.agent.conversations.save_active(reason="web_turn")
-            self.workspace.refresh()
-            status = "stopped" if token.cancelled else "finished"
-            self.events.emit("turn_finished", {"turn_id": turn_id, "status": status})
+            try:
+                self.workspace.refresh()
+            except Exception as exc:
+                failed = True
+                self.events.emit("runtime_warning", {"turn_id": turn_id, "error": str(exc)})
+            status = "failed" if failed else ("stopped" if token.cancelled else "finished")
+            with self._task_lock:
+                if self._active_turn and self._active_turn.turn_id == turn_id:
+                    self._active_turn = None
+                    self._cancel_token = None
+                    self._task_thread = None
+                self.events.emit(
+                    "turn_finished",
+                    {
+                        "turn_id": turn_id,
+                        "session_id": turn.session_id,
+                        "status": status,
+                        **self._runtime_identity(),
+                    },
+                )
 
     def _normalize_worker_payload(
         self,
@@ -214,7 +336,7 @@ class KairoRuntime:
 
     def stop_current_task(self) -> dict[str, Any]:
         with self._task_lock:
-            if self._cancel_token is None or not self.is_busy():
+            if self._cancel_token is None or self._active_turn is None:
                 return {"ok": False, "message": "No active task."}
             self._cancel_token.cancel()
         resolved: list[str] = []
@@ -258,7 +380,16 @@ class KairoRuntime:
         return ""
 
     def shutdown(self) -> None:
+        with self._mutation_lock, self._task_lock:
+            if self._closing:
+                return
+            self._closing = True
+            thread = self._task_thread
         self.stop_current_task()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                self.mark_degraded("Task worker did not stop before the shutdown timeout.")
         self.agent.shutdown()
 
 
@@ -509,18 +640,7 @@ class ConfigService:
                 return {"ok": False, "error": f"Profile '{profile_id}' not found."}
         else:
             return {"ok": False, "error": f"Unsupported config section: {section}"}
-        report = draft.apply_to(config, backup=True)
-        if not report.ok:
-            return {"ok": False, "error": report.to_text()}
-        config._sync_runtime_fields()
-        self.runtime.agent.conversations.set_context_window(config.context_window)
-        self.runtime.agent.conversations.update_runtime_state(
-            model_profile=config.active_model_profile,
-            authorization_level=config.authorization_level,
-        )
-        self.runtime.agent.conversations.save_all(reason="web_config_update")
-        self.runtime.events.emit("config_updated", {"section": section})
-        return {"ok": True, "config": self.redacted()}
+        return self._commit_draft(draft, f"config:{section}")
 
     def update_settings(self, section: str, values: dict[str, Any]) -> dict[str, Any]:
         section = (section or "").strip().lower()
@@ -697,9 +817,12 @@ class ConfigService:
         return self._commit_draft(draft, f"profile-delete:{profile_id}", view=True)
 
     def switch_profile(self, profile_id: str) -> dict[str, Any]:
-        result = self.runtime.agent.switch_model_profile(profile_id, source="web")
-        self.runtime.events.emit("config_updated", {"section": "model", "result": result.data})
-        return {"ok": result.success, "message": result.message, "data": result.data}
+        def apply() -> dict[str, Any]:
+            result = self.runtime.agent.switch_model_profile(profile_id, source="web")
+            self.runtime.events.emit("config_updated", {"section": "model", "result": result.data})
+            return {"ok": result.success, "message": result.message, "data": result.data}
+
+        return self.runtime.run_mutation("switch model profile", apply)
 
     def export_config(self, *, with_keys: bool = False, confirm: str = "") -> dict[str, Any]:
         if with_keys and confirm != "EXPORT_KEYS":
@@ -716,18 +839,7 @@ class ConfigService:
         report = draft.import_config(path)
         if not report.ok:
             return {"ok": False, "error": report.to_text()}
-        report = draft.apply_to(self.runtime.config, backup=True, allow_inline_key=True)
-        if not report.ok:
-            return {"ok": False, "error": report.to_text()}
-        self.runtime.config._sync_runtime_fields()
-        self.runtime.agent.conversations.set_context_window(self.runtime.config.context_window)
-        self.runtime.agent.conversations.update_runtime_state(
-            model_profile=self.runtime.config.active_model_profile,
-            authorization_level=self.runtime.config.authorization_level,
-        )
-        self.runtime.agent.conversations.save_all(reason="web_config_import")
-        self.runtime.events.emit("config_updated", {"section": "import"})
-        return {"ok": True, "config": self.redacted()}
+        return self._commit_draft(draft, "config:import")
 
     def _profile_payload(self, values: dict[str, Any]) -> dict[str, Any]:
         api_key = values.get("api_key")
@@ -752,6 +864,12 @@ class ConfigService:
         return payload
 
     def _commit_draft(self, draft: ConfigDraft, section: str, *, view: bool = False) -> dict[str, Any]:
+        return self.runtime.run_mutation(
+            f"update {section}",
+            lambda: self._commit_draft_locked(draft, section, view=view),
+        )
+
+    def _commit_draft_locked(self, draft: ConfigDraft, section: str, *, view: bool = False) -> dict[str, Any]:
         preflight = self._preflight_draft(draft)
         if not preflight.get("ok"):
             return {"ok": False, "error": preflight.get("error", "Configuration preflight failed.")}
@@ -762,16 +880,67 @@ class ConfigService:
             "skills_require_hash": bool(self.runtime.config.policy.get("skills", {}).get("require_hash", False)),
         }
         rollback = ConfigDraft.from_config(self.runtime.config)
+        old_root = str(self.runtime.agent.workspace_context.root)
         report = draft.apply_to(self.runtime.config, backup=True)
         if not report.ok:
             return {"ok": False, "error": report.to_text()}
         sync_result = self._sync_runtime_after_commit(previous)
         if not sync_result.get("ok"):
-            rollback.apply_to(self.runtime.config, backup=False)
-            self._sync_runtime_after_commit(previous)
-            return {"ok": False, "error": sync_result.get("error", "Runtime sync failed.")}
-        self.runtime.events.emit("config_updated", {"section": section})
-        return {"ok": True, "settings": self.settings_view() if view else None, "config": self.redacted()}
+            failed_state = {
+                "workspace_root": str(self.runtime.agent.workspace_context.root),
+                "skills_dir": self.runtime.config.skills_dir,
+                "shell_type": self.runtime.config.shell_type,
+                "skills_require_hash": bool(
+                    self.runtime.config.policy.get("skills", {}).get("require_hash", False)
+                ),
+            }
+            rollback_report = rollback.apply_to(self.runtime.config, backup=False)
+            rollback_sync = self._sync_runtime_after_commit(failed_state)
+            rollback_failed = not rollback_report.ok or not rollback_sync.get("ok")
+            error = sync_result.get("error", "Runtime sync failed.")
+            if rollback_failed:
+                rollback_error = rollback_report.to_text() if not rollback_report.ok else rollback_sync.get("error", "")
+                self.runtime.mark_degraded(f"{error} Rollback failed: {rollback_error}")
+            self.runtime.events.emit(
+                "workspace_change_failed",
+                {
+                    "error": error,
+                    "rollback_failed": rollback_failed,
+                    "previous_root": old_root,
+                    **self.runtime._runtime_identity(),
+                },
+            )
+            return _failure("runtime_sync_failed", error, retryable=not rollback_failed)
+
+        new_root = str(self.runtime.agent.workspace_context.root)
+        workspace_changed = Path(new_root).resolve() != Path(old_root).resolve()
+        if workspace_changed:
+            self.runtime.previous_workspace_root = old_root
+            self.runtime.workspace_revision += 1
+            snapshot = self.runtime.workspace.snapshot()
+            event_payload = {
+                "previous_root": old_root,
+                "snapshot": snapshot,
+                "status": self.runtime.status(),
+                **self.runtime._runtime_identity(),
+            }
+            self.runtime.events.emit("workspace_changed", event_payload)
+        if sync_result.get("skills_changed"):
+            self.runtime.events.emit("skills_updated", self.runtime.skills.list())
+        self.runtime.events.emit(
+            "config_updated",
+            {"section": section, **self.runtime._runtime_identity()},
+        )
+        return {
+            "ok": True,
+            "settings": self.settings_view() if view else None,
+            "config": self.redacted(),
+            "workspace_changed": workspace_changed,
+            "previous_root": old_root,
+            "snapshot": self.runtime.workspace.snapshot(),
+            "status": self.runtime.status(),
+            **self.runtime._runtime_identity(),
+        }
 
     def _preflight_draft(self, draft: ConfigDraft) -> dict[str, Any]:
         current = self.runtime.config
@@ -802,10 +971,14 @@ class ConfigService:
             return None
         if not path.exists() or not path.is_dir():
             return None
+        probe = path / f".kairo-write-probe-{uuid.uuid4().hex}.tmp"
         try:
-            with tempfile.NamedTemporaryFile(dir=path, delete=True):
-                pass
+            descriptor = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(descriptor)
+            probe.unlink()
         except Exception:
+            with suppress(OSError):
+                probe.unlink()
             return None
         return path
 
@@ -825,7 +998,7 @@ class ConfigService:
         current_root = Path(agent.workspace_context.root).expanduser().resolve()
         workspace_changed = target_root != current_root
         if workspace_changed:
-            result = agent.move_workspace(target_root)
+            result = agent.move_workspace(target_root, persist=False)
             if not result.success:
                 return {"ok": False, "error": result.message}
         else:
@@ -852,11 +1025,9 @@ class ConfigService:
                 require_hash=bool(config.policy.get("skills", {}).get("require_hash", False)),
                 workspace_root=agent.workspace_context.root,
             )
-        if skills_changed:
-            self.runtime.events.emit("skills_updated", self.runtime.skills.list())
-
-        manager.save_all(reason="web_settings_update")
-        return {"ok": True}
+        if not manager.save_all(reason="web_settings_update"):
+            return {"ok": False, "error": "Failed to persist sessions after runtime sync."}
+        return {"ok": True, "skills_changed": skills_changed}
 
 
 class SessionService:
@@ -881,24 +1052,46 @@ class SessionService:
         }
 
     def create(self, name: str | None = None) -> dict[str, Any]:
-        session = self.runtime.agent.conversations.create_session(name)
+        return self.runtime.run_mutation("create session", lambda: self._create(name))
+
+    def _create(self, name: str | None = None) -> dict[str, Any]:
+        try:
+            session = self.runtime.agent.conversations.create_session(name)
+        except RuntimeError as exc:
+            if "max_sessions" in str(exc):
+                return _failure("max_sessions", str(exc), retryable=False)
+            raise
         self.runtime.events.emit("session_changed", self.list())
         return {"ok": True, "session": {"id": session.id, "name": session.name}}
 
     def switch(self, session_id: str) -> dict[str, Any]:
+        return self.runtime.run_mutation("switch session", lambda: self._switch(session_id))
+
+    def _switch(self, session_id: str) -> dict[str, Any]:
+        validation = self._validate_member(session_id)
+        if validation is not None:
+            return validation
         ok = self.runtime.agent.conversations.switch_session(session_id)
         if ok:
             self.runtime.events.emit("session_changed", self.list())
         return {"ok": ok}
 
     def rename(self, session_id: str, name: str) -> dict[str, Any]:
+        return self.runtime.run_mutation("rename session", lambda: self._rename(session_id, name))
+
+    def _rename(self, session_id: str, name: str) -> dict[str, Any]:
         manager = self.runtime.agent.conversations
-        session = next((item for item in manager.sessions if item.id == session_id), None)
-        if session is None:
-            return {"ok": False, "error": "Session not found."}
+        validation = self._validate_member(session_id)
+        if validation is not None:
+            return validation
+        session = next(item for item in manager.sessions if item.id == session_id)
         store = manager.session_store
         if store is not None and not store.rename_session(session_id, name):
-            return {"ok": False, "error": "Failed to rename session."}
+            return _failure(
+                "session_persistence_failed",
+                "Failed to rename session.",
+                retryable=True,
+            )
         session.name = name.strip()
         session.touch()
         manager.save_all(reason="web_session_rename")
@@ -906,12 +1099,22 @@ class SessionService:
         return {"ok": True}
 
     def delete(self, session_id: str) -> dict[str, Any]:
+        return self.runtime.run_mutation("delete session", lambda: self._delete(session_id))
+
+    def _delete(self, session_id: str) -> dict[str, Any]:
         manager = self.runtime.agent.conversations
+        validation = self._validate_member(session_id)
+        if validation is not None:
+            return validation
         if len(manager.sessions) <= 1:
-            return {"ok": False, "error": "Cannot delete the last session."}
+            return _failure("last_session", "Cannot delete the last session.", retryable=False)
         store = manager.session_store
         if store is not None and not store.delete_session(session_id):
-            return {"ok": False, "error": "Failed to delete session."}
+            return _failure(
+                "session_persistence_failed",
+                "Failed to delete session.",
+                retryable=True,
+            )
         manager.sessions = [item for item in manager.sessions if item.id != session_id]
         if manager.active_session_id == session_id:
             manager.active_session_id = manager.sessions[0].id
@@ -933,13 +1136,33 @@ class SessionService:
         return {"keyword": keyword, "results": results}
 
     def export(self, session_id: str, fmt: str = "markdown") -> dict[str, Any]:
+        validation = self._validate_member(session_id)
+        if validation is not None:
+            return validation
         store = self.runtime.agent.conversations.session_store
         if store is None:
-            return {"ok": False, "error": "Session persistence is disabled."}
-        dest = store.export_session(session_id, fmt=fmt)
+            return _failure(
+                "session_persistence_failed",
+                "Session persistence is disabled.",
+                retryable=False,
+            )
+        try:
+            dest = store.export_session(session_id, fmt=fmt)
+        except Exception as exc:
+            return _failure("session_persistence_failed", f"Export failed: {exc}", retryable=True)
         if not dest:
-            return {"ok": False, "error": "Export failed."}
+            return _failure("session_persistence_failed", "Export failed.", retryable=True)
         return {"ok": True, "path": str(dest)}
+
+    def _validate_member(self, session_id: str) -> dict[str, Any] | None:
+        try:
+            SessionStore.validate_session_id(session_id)
+        except InvalidSessionIdError as exc:
+            return _failure("invalid_session_id", str(exc), retryable=False)
+        manager = self.runtime.agent.conversations
+        if not any(item.id == session_id for item in manager.sessions):
+            return _failure("session_not_found", "Session not found.", retryable=False)
+        return None
 
 
 class ChatService:
@@ -990,13 +1213,13 @@ class WorkspaceService:
             max_files=self.runtime.config.ui.get("workspace_max_files", 2000),
             max_diff_bytes=self.runtime.config.ui.get("workspace_diff_max_bytes", 204800),
         )
-        self.refresh()
 
     def snapshot(self, selected_file: str = "") -> dict[str, Any]:
         snapshot = self.monitor.refresh(selected_file)
         data = _snapshot_to_dict(snapshot)
         data["file_count"] = len(snapshot.files)
         data["file_limit"] = self.monitor.max_files
+        data.update(self.runtime._runtime_identity())
         return data
 
     def file_preview(self, relative: str) -> dict[str, Any]:
@@ -1037,6 +1260,12 @@ class WorkspaceService:
         return {"bookmarks": list(self.runtime.config.workspace_bookmarks)}
 
     def add_bookmark(self, name: str, path: str) -> dict[str, Any]:
+        return self.runtime.run_mutation(
+            "add workspace bookmark",
+            lambda: self._add_bookmark(name, path),
+        )
+
+    def _add_bookmark(self, name: str, path: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         if not draft.add_workspace_bookmark(name, path):
             return {"ok": False, "error": "Bookmark name and path are required."}
@@ -1047,6 +1276,12 @@ class WorkspaceService:
         return {"ok": True, **self.bookmarks()}
 
     def remove_bookmark(self, name: str) -> dict[str, Any]:
+        return self.runtime.run_mutation(
+            "remove workspace bookmark",
+            lambda: self._remove_bookmark(name),
+        )
+
+    def _remove_bookmark(self, name: str) -> dict[str, Any]:
         draft = ConfigDraft.from_config(self.runtime.config)
         if not draft.remove_workspace_bookmark(name):
             return {"ok": False, "error": f"Bookmark '{name}' not found."}
@@ -1062,10 +1297,26 @@ class WorkspaceService:
         return data
 
     def move(self, target: str) -> dict[str, Any]:
-        result = self.runtime.agent.move_workspace(target)
-        data = {"ok": result.success, "message": result.message, "root": result.data.get("root")}
-        self.runtime.events.emit("workspace_updated", self.snapshot())
-        return data
+        return self.runtime.run_mutation(
+            "move workspace",
+            lambda: self._move(target),
+        )
+
+    def _move(self, target: str) -> dict[str, Any]:
+        draft = ConfigDraft.from_config(self.runtime.config)
+        validated = self.runtime.config_service._validated_workspace_root(target)
+        if validated is None:
+            return _failure(
+                "invalid_workspace",
+                f"Workspace root is invalid or not writable: {target}",
+                retryable=False,
+            )
+        draft.workspace_root = str(validated)
+        result = self.runtime.config_service._commit_draft(draft, "workspace:move")
+        if result.get("ok"):
+            result["message"] = f"Workspace moved to: {validated}"
+            result["root"] = str(validated)
+        return result
 
 
 class SkillService:
@@ -1073,8 +1324,9 @@ class SkillService:
         self.runtime = runtime
 
     def list(self) -> dict[str, Any]:
+        registry = self.runtime.agent.registry
         tools = []
-        for name, tool in self.runtime.agent.registry.tools.items():
+        for name, tool in registry.tools.items():
             tools.append({
                 "name": name,
                 "description": getattr(tool, "description", ""),
@@ -1082,9 +1334,34 @@ class SkillService:
                 "source": getattr(tool, "source", "builtin"),
                 "parameters": getattr(tool, "parameters", {}),
             })
-        return {"tools": tools}
+        candidates = registry.list_custom_skills() if hasattr(registry, "list_custom_skills") else []
+        warnings = list(getattr(registry, "custom_skill_warnings", []))
+        if warnings:
+            custom = {
+                "status": "error",
+                "files": [str(item.get("relative_path", "")) for item in candidates],
+                "error": "; ".join(warnings),
+            }
+        elif not candidates:
+            custom = {"status": "absent", "files": []}
+        else:
+            digests = {str(item.get("digest", "")) for item in candidates}
+            statuses = {str(item.get("status", "pending")) for item in candidates}
+            custom = {
+                "status": (
+                    "trusted"
+                    if statuses == {"trusted"}
+                    else ("changed" if "changed" in statuses else "untrusted")
+                ),
+                "manifest_digest": next(iter(digests)) if len(digests) == 1 else "",
+                "files": [str(item.get("relative_path", "")) for item in candidates],
+            }
+        return {"tools": tools, "custom": custom, "candidates": candidates}
 
     def reload(self) -> dict[str, Any]:
+        return self.runtime.run_mutation("reload skills", self._reload)
+
+    def _reload(self) -> dict[str, Any]:
         registry = self.runtime.agent.registry
         if not hasattr(registry, "reload_custom_skills"):
             return {"ok": False, "error": "Skill reload is unavailable."}
@@ -1095,6 +1372,48 @@ class SkillService:
         )
         self.runtime.events.emit("skills_updated", self.list())
         return {"ok": True, **self.list()}
+
+    def trust(self, manifest_digest: str) -> dict[str, Any]:
+        return self.runtime.run_mutation(
+            "trust workspace skills",
+            lambda: self._trust(manifest_digest),
+        )
+
+    def _trust(self, manifest_digest: str) -> dict[str, Any]:
+        registry = self.runtime.agent.registry
+        candidates = registry.list_custom_skills() if hasattr(registry, "list_custom_skills") else []
+        if not candidates:
+            return _failure("skills_absent", "No workspace skills were found.", retryable=False)
+        current_digests = {str(item.get("digest", "")) for item in candidates}
+        if not manifest_digest or current_digests != {manifest_digest}:
+            return _failure(
+                "skill_manifest_changed",
+                "The skill manifest changed after review; refresh and review it again.",
+                retryable=True,
+            )
+        try:
+            registry.trust_all(manifest_digest)
+        except Exception as exc:
+            message = str(exc)
+            if "changed" in message.lower() or "digest" in message.lower():
+                return _failure("skill_manifest_changed", message, retryable=True)
+            return _failure("skill_trust_failed", message, retryable=False)
+        payload = self.list()
+        self.runtime.events.emit("skills_updated", payload)
+        return {"ok": True, **payload}
+
+    def revoke(self) -> dict[str, Any]:
+        return self.runtime.run_mutation("revoke workspace skills", self._revoke)
+
+    def _revoke(self) -> dict[str, Any]:
+        registry = self.runtime.agent.registry
+        try:
+            registry.revoke_all()
+        except Exception as exc:
+            return _failure("skill_revoke_failed", str(exc), retryable=False)
+        payload = self.list()
+        self.runtime.events.emit("skills_updated", payload)
+        return {"ok": True, **payload}
 
 
 class DoctorService:
@@ -1129,6 +1448,17 @@ class _PendingApproval:
             if "stop" in str(option).lower():
                 return index
         return self.default_index
+
+
+def _failure(code: str, detail: str, *, retryable: bool) -> dict[str, Any]:
+    """Return the stable error envelope shared by runtime services."""
+    return {
+        "ok": False,
+        "code": code,
+        "error": detail,
+        "detail": detail,
+        "retryable": retryable,
+    }
 
 
 def _snapshot_to_dict(snapshot: WorkspaceSnapshot) -> dict[str, Any]:
@@ -1172,29 +1502,19 @@ def event_stream(runtime: KairoRuntime) -> Iterable[dict[str, Any]]:
 
 
 def _package_version() -> str:
-    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    if pyproject.exists():
-        try:
-            import tomllib
+    from agent._version import __version__
 
-            with open(pyproject, "rb") as handle:
-                return str(tomllib.load(handle)["project"]["version"])
-        except Exception:
-            pass
-    try:
-        from importlib.metadata import version
-
-        return version("kairo-agent")
-    except Exception:
-        return "0.3.3-preview"
+    return __version__
 
 
 def _web_static_version() -> str:
-    package_json = Path(__file__).resolve().parents[1] / "web" / "package.json"
+    from agent.web.assets import static_root
+
+    version_json = static_root() / "version.json"
     try:
         import json
 
-        with open(package_json, encoding="utf-8-sig") as handle:
+        with open(version_json, encoding="utf-8-sig") as handle:
             value = json.load(handle)
         return str(value.get("version", ""))
     except Exception:

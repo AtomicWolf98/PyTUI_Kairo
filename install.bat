@@ -1,12 +1,24 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableExtensions
 
 cd /d "%~dp0"
 
 echo ==========================================
-echo Kairo one-click installer for Windows
+echo Kairo 0.3.3 installer for Windows
 echo ==========================================
 echo.
+
+set "KAIRO_OWNER_ID=kairo-agent-managed-v1"
+if not defined KAIRO_INSTALL_ROOT set "KAIRO_INSTALL_ROOT=%LOCALAPPDATA%\Kairo"
+set "KAIRO_OWNER_FILE=%KAIRO_INSTALL_ROOT%\install-owner.ini"
+set "KAIRO_VENV=%KAIRO_INSTALL_ROOT%\venv"
+set "KAIRO_BIN=%KAIRO_INSTALL_ROOT%\bin"
+
+if not exist "agent\web\static\index.html" (
+    echo [ERROR] Packaged WebUI assets are missing.
+    echo Run "npm --prefix web run build" before installing this checkout.
+    goto :failure
+)
 
 set "PYTHON_CMD="
 python --version >nul 2>&1
@@ -17,136 +29,109 @@ if not defined PYTHON_CMD (
 )
 
 if not defined PYTHON_CMD (
-    echo [ERROR] Python 3.10+ was not found.
-    echo Install Python from https://www.python.org/downloads/ and enable "Add python.exe to PATH".
-    pause
-    exit /b 1
+    echo [ERROR] Python 3.10 or newer was not found.
+    goto :failure
 )
 
-echo [1/6] Using Python:
-%PYTHON_CMD% --version
-
-echo.
-echo [2/6] Removing old Kairo installs and stale commands...
-set "KAIRO_BIN=%LOCALAPPDATA%\Kairo\bin"
-
-if exist "%KAIRO_BIN%\kairo.bat" del /F /Q "%KAIRO_BIN%\kairo.bat" >nul 2>&1
-if exist "%KAIRO_BIN%\kairo.cmd" del /F /Q "%KAIRO_BIN%\kairo.cmd" >nul 2>&1
-if exist "%KAIRO_BIN%\kairo.exe" del /F /Q "%KAIRO_BIN%\kairo.exe" >nul 2>&1
-
-%PYTHON_CMD% -m pip uninstall -y kairo-agent kairo pyTUI >nul 2>&1
-python -m pip uninstall -y kairo-agent kairo pyTUI >nul 2>&1
-py -3 -m pip uninstall -y kairo-agent kairo pyTUI >nul 2>&1
-if exist ".venv\Scripts\python.exe" (
-    call ".venv\Scripts\python.exe" -m pip uninstall -y kairo-agent kairo pyTUI >nul 2>&1
+%PYTHON_CMD% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+if errorlevel 1 (
+    echo [ERROR] Python 3.10 or newer is required.
+    goto :failure
 )
 
-for /f "delims=" %%P in ('where kairo 2^>nul') do (
-    set "FOUND_KAIRO=%%~fP"
-    if /I not "!FOUND_KAIRO!"=="%CD%\kairo" if /I not "!FOUND_KAIRO!"=="%CD%\kairo.py" (
-        echo !FOUND_KAIRO! | find /I "\Scripts\kairo" >nul
-        if not errorlevel 1 (
-            echo Removing stale command: !FOUND_KAIRO!
-            del /F /Q "!FOUND_KAIRO!" >nul 2>&1
-        )
+echo [1/6] Installation root: "%KAIRO_INSTALL_ROOT%"
+echo [2/6] Validating installation ownership...
+
+if exist "%KAIRO_INSTALL_ROOT%" (
+    if not exist "%KAIRO_OWNER_FILE%" (
+        echo [ERROR] The target directory already exists but is not owned by Kairo:
+        echo   "%KAIRO_INSTALL_ROOT%"
+        echo Move it aside or choose a new KAIRO_INSTALL_ROOT. No files were changed.
+        goto :failure
     )
-)
-
-echo Old Kairo cleanup completed.
-
-echo.
-echo [3/6] Creating virtual environment...
-if not exist ".venv" (
-    %PYTHON_CMD% -m venv .venv
+    findstr /X /C:"installation_id=%KAIRO_OWNER_ID%" "%KAIRO_OWNER_FILE%" >nul
     if errorlevel 1 (
-        echo [ERROR] Failed to create .venv.
-        pause
-        exit /b 1
+        echo [ERROR] The installation ownership manifest is invalid.
+        echo No files were changed.
+        goto :failure
     )
 ) else (
-    echo .venv already exists.
+    mkdir "%KAIRO_INSTALL_ROOT%"
+    if errorlevel 1 (
+        echo [ERROR] Could not create the installation root.
+        goto :failure
+    )
+    >"%KAIRO_OWNER_FILE%" echo schema=1
+    >>"%KAIRO_OWNER_FILE%" echo product=kairo-agent
+    >>"%KAIRO_OWNER_FILE%" echo installation_id=%KAIRO_OWNER_ID%
 )
 
-echo.
-echo [4/6] Installing Kairo and dependencies...
-call ".venv\Scripts\python.exe" -m pip install --upgrade pip
+echo [3/6] Creating the managed virtual environment...
+if not exist "%KAIRO_VENV%\Scripts\python.exe" (
+    %PYTHON_CMD% -m venv "%KAIRO_VENV%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to create the managed virtual environment.
+        goto :failure
+    )
+) else (
+    echo Managed virtual environment already exists.
+)
+
+echo [4/6] Installing Kairo into the managed environment...
+"%KAIRO_VENV%\Scripts\python.exe" -m pip install --upgrade pip
 if errorlevel 1 (
     echo [ERROR] Failed to upgrade pip.
-    pause
-    exit /b 1
+    goto :failure
 )
-
-call ".venv\Scripts\python.exe" -m pip install -e .
+"%KAIRO_VENV%\Scripts\python.exe" -m pip install --upgrade "%CD%"
 if errorlevel 1 (
     echo [ERROR] Failed to install Kairo.
-    pause
-    exit /b 1
+    goto :failure
 )
 
-if not exist "config.json" (
-    echo.
-    echo [5/6] Creating config.json from config.example.json...
-    copy /Y "config.example.json" "config.json" >nul
-) else (
-    echo.
-    echo [5/6] config.json already exists.
-)
-
-if not exist "skills" mkdir "skills"
-
-echo.
-echo [6/6] Creating user command shim...
+echo [5/6] Creating the owned command shim...
 if not exist "%KAIRO_BIN%" mkdir "%KAIRO_BIN%"
-
-(
-    echo @echo off
-    echo "%CD%\.venv\Scripts\kairo.exe" %%*
-) > "%KAIRO_BIN%\kairo.bat"
-
-echo Created: "%KAIRO_BIN%\kairo.bat"
-
-echo.
-echo Updating user PATH...
-set "PATH_CHECK=;%PATH%;"
-echo !PATH_CHECK! | find /I ";%KAIRO_BIN%;" >nul
 if errorlevel 1 (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$bin = $env:LOCALAPPDATA + '\Kairo\bin'; $userPath = [Environment]::GetEnvironmentVariable('Path', 'User'); $parts = @(); if ($userPath) { $parts = $userPath -split ';' | Where-Object { $_ -and ($_ -ne $bin) -and ($_ -ne 'System.Object[]') } }; $newParts = @($bin) + @($parts); [Environment]::SetEnvironmentVariable('Path', ($newParts -join ';'), 'User')"
-    if errorlevel 1 (
-        echo [WARNING] Failed to update user PATH automatically.
-        echo Add this directory to your user PATH manually:
-        echo   %KAIRO_BIN%
-    ) else (
-        echo User PATH updated.
-    )
-    set "PATH=%KAIRO_BIN%;%PATH%"
-) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$bin = $env:LOCALAPPDATA + '\Kairo\bin'; $userPath = [Environment]::GetEnvironmentVariable('Path', 'User'); $parts = @(); if ($userPath) { $parts = $userPath -split ';' | Where-Object { $_ -and ($_ -ne $bin) -and ($_ -ne 'System.Object[]') } }; $newParts = @($bin) + @($parts); [Environment]::SetEnvironmentVariable('Path', ($newParts -join ';'), 'User')"
-    echo Current PATH contains Kairo bin; user PATH was refreshed with Kairo first.
+    echo [ERROR] Failed to create the command directory.
+    goto :failure
+)
+>"%KAIRO_BIN%\kairo.bat" echo @echo off
+>>"%KAIRO_BIN%\kairo.bat" echo "%KAIRO_VENV%\Scripts\kairo.exe" %%*
+
+echo Existing commands named "kairo" outside the managed directory are left untouched:
+for /f "delims=" %%P in ('where kairo 2^>nul') do (
+    if /I not "%%~fP"=="%KAIRO_BIN%\kairo.bat" echo   %%~fP
 )
 
-echo.
-echo Verifying installed command...
+if /I "%KAIRO_SKIP_PATH%"=="1" (
+    echo User PATH update skipped because KAIRO_SKIP_PATH=1.
+) else (
+    powershell -NoProfile -Command "$bin = [IO.Path]::GetFullPath($env:KAIRO_INSTALL_ROOT + '\bin'); $userPath = [Environment]::GetEnvironmentVariable('Path', 'User'); $parts = @($userPath -split ';' | Where-Object { $_ -and ([IO.Path]::GetFullPath($_) -ne $bin) }); [Environment]::SetEnvironmentVariable('Path', ((@($bin) + $parts) -join ';'), 'User')"
+    if errorlevel 1 (
+        echo [WARNING] Failed to update the user PATH. Add this directory manually:
+        echo   "%KAIRO_BIN%"
+    )
+)
+
+echo [6/6] Verifying the installed command...
 "%KAIRO_BIN%\kairo.bat" --help | findstr /C:"--web" >nul
 if errorlevel 1 (
-    echo [WARNING] Kairo installed, but the shim did not report --web.
-    echo Try running:
-    echo   "%KAIRO_BIN%\kairo.bat" --web
-) else (
-    echo Verified: installed kairo command supports --web.
+    echo [ERROR] The installed command did not report WebUI support.
+    goto :failure
+)
+"%KAIRO_VENV%\Scripts\python.exe" -c "from importlib.metadata import version; raise SystemExit(0 if version('kairo-agent') == '0.3.3' else 1)"
+if errorlevel 1 (
+    echo [ERROR] The installed package version is not 0.3.3.
+    goto :failure
 )
 
 echo.
-echo ==========================================
-echo Kairo installation completed.
-echo ==========================================
+echo Installed and verified Kairo 0.3.3.
+echo Open a new terminal and run: kairo
+exit /b 0
+
+:failure
 echo.
-echo Open a NEW PowerShell window and run:
-echo   kairo
-echo.
-echo Optional WebUI:
-echo   kairo --web
-echo.
-echo If the current terminal cannot find kairo yet, run:
-echo   "%KAIRO_BIN%\kairo.bat"
-echo.
-pause
+echo Kairo installation failed.
+if /I not "%KAIRO_NONINTERACTIVE%"=="1" pause
+exit /b 1

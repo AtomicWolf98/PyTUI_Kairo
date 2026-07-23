@@ -28,8 +28,10 @@ import {
   patchProvider,
   patchSettings,
   reloadSkills,
+  revokeSkillsTrust,
   switchProfile,
-  testProvider
+  testProvider,
+  trustSkills
 } from "../api";
 import {
   Badge,
@@ -77,6 +79,8 @@ export function SettingsPage() {
   const [tab, setTab] = useState<SettingsTab>("general");
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const pushToast = useRuntimeStore(state => state.pushToast);
+  const busy = useRuntimeStore(state => Boolean(state.status?.task.busy));
+  const degraded = useRuntimeStore(state => state.status?.diagnostics?.degraded_reason || state.status?.lifecycle?.degraded_reason || "");
 
   useEffect(() => {
     if (settings.isError) {
@@ -84,7 +88,7 @@ export function SettingsPage() {
     }
   }, [pushToast, settings.error, settings.isError]);
 
-  const versionLabel = settings.data?.version || "0.3.2-preview";
+  const versionLabel = settings.data?.version || "0.3.3";
 
   return (
     <div className="settings-stage">
@@ -108,9 +112,11 @@ export function SettingsPage() {
           </nav>
         </aside>
         <main className="settings-content">
+          {busy ? <div className="warning-box">A task is running. Runtime settings are read-only until it finishes.</div> : null}
+          {degraded ? <div className="error-banner">Runtime mutations are disabled: {degraded}</div> : null}
           {settings.isLoading ? <SettingsLoading /> : null}
           {settings.isError ? <SettingsError error={settings.error} onRetry={() => settings.refetch()} /> : null}
-          {settings.data ? <SettingsTabView tab={tab} settings={settings.data} /> : null}
+          {settings.data ? <SettingsTabView tab={tab} settings={settings.data} blocked={busy || Boolean(degraded)} /> : null}
         </main>
       </section>
     </div>
@@ -150,7 +156,7 @@ function SettingsError({ error, onRetry }: { error: unknown; onRetry: () => void
   );
 }
 
-function SettingsTabView({ tab, settings }: { tab: SettingsTab; settings: SettingsViewModel }) {
+function SettingsTabView({ tab, settings, blocked }: { tab: SettingsTab; settings: SettingsViewModel; blocked: boolean }) {
   let panel: React.ReactNode;
   if (tab === "providers") panel = <ProvidersPanel settings={settings} />;
   else if (tab === "models") panel = <ModelsPanel settings={settings} />;
@@ -169,7 +175,7 @@ function SettingsTabView({ tab, settings }: { tab: SettingsTab; settings: Settin
           Frontend/backend version mismatch: backend {settings.diagnostics.backend_version || "unknown"}, static build {settings.diagnostics.static_version || "unknown"}. Rebuild WebUI or restart Kairo.
         </div>
       ) : null}
-      {panel}
+      {tab === "export" ? panel : <fieldset className="settings-mutation-gate" disabled={blocked}>{panel}</fieldset>}
     </>
   );
 }
@@ -189,8 +195,8 @@ function useSaveSection(section: string) {
   const pushToast = useRuntimeStore(state => state.pushToast);
   return useMutation({
     mutationFn: (payload: Record<string, unknown>) => patchSettings(section, payload),
-    onSuccess: () => {
-      client.invalidateQueries();
+    onSuccess: async () => {
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: "Settings saved." });
     },
     onError: error => pushToast({ tone: "error", text: String((error as Error).message || error) })
@@ -273,7 +279,7 @@ function ProviderEditor({ provider }: { provider: ProviderSetting }) {
         api_key_env: draft.api_key_env,
         clear_key
       });
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: clear_key ? "Provider key cleared." : "Provider saved." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -292,7 +298,7 @@ function ProviderEditor({ provider }: { provider: ProviderSetting }) {
   async function remove() {
     try {
       await deleteProvider(provider.id);
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: "Provider removed." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -368,7 +374,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
   async function save() {
     try {
       await createProvider(draft);
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: "Provider created." });
       onClose();
     } catch (error) {
@@ -443,7 +449,7 @@ function ModelProfileEditor({ profile, active }: { profile: ConfigProfile; activ
   async function save() {
     try {
       await patchProfile(profile.id, draft);
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: "Model profile saved." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -453,7 +459,7 @@ function ModelProfileEditor({ profile, active }: { profile: ConfigProfile; activ
   async function activate() {
     try {
       const result = await switchProfile(profile.id);
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: result.ok ? "success" : "error", text: result.message });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -463,7 +469,7 @@ function ModelProfileEditor({ profile, active }: { profile: ConfigProfile; activ
   async function remove() {
     try {
       await deleteProfile(profile.id);
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: "Profile deleted." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -543,7 +549,7 @@ function ProfileModal({ settings, onClose }: { settings: SettingsViewModel; onCl
   async function save() {
     try {
       await createProfile(draft);
-      client.invalidateQueries();
+      await refreshSettingsQueries(client);
       pushToast({ tone: "success", text: "Profile created." });
       onClose();
     } catch (error) {
@@ -726,6 +732,7 @@ function SkillsPanel({ settings }: { settings: SettingsViewModel }) {
   const save = useSaveSection("skills");
   const client = useQueryClient();
   const pushToast = useRuntimeStore(state => state.pushToast);
+  const custom = skills.data?.custom;
   useEffect(() => setDraft(settings.skills), [settings.skills]);
   async function reload() {
     try {
@@ -736,11 +743,46 @@ function SkillsPanel({ settings }: { settings: SettingsViewModel }) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
     }
   }
+  async function trust() {
+    const digest = custom?.manifest_digest || "";
+    if (!digest) return;
+    if (!window.confirm("Trust and load the current workspace skills? They run as your local user and can execute arbitrary Python code.")) return;
+    try {
+      await trustSkills(digest);
+      await client.invalidateQueries({ queryKey: ["skills"] });
+      pushToast({ tone: "success", text: "Workspace skills trusted and loaded." });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
+  async function revoke() {
+    if (!window.confirm("Revoke trust and unload all custom skills for this workspace?")) return;
+    try {
+      await revokeSkillsTrust();
+      await client.invalidateQueries({ queryKey: ["skills"] });
+      pushToast({ tone: "success", text: "Workspace skill trust revoked." });
+    } catch (error) {
+      pushToast({ tone: "error", text: String((error as Error).message || error) });
+    }
+  }
   return (
     <Panel title="Skills" kicker="Installed tools and skill policy" action={<><button className="secondary-button" onClick={reload}><RotateCw size={16} /> Reload</button><SaveButton onClick={() => save.mutate(draft)} /></>}>
+      {custom ? (
+        <div className={custom.status === "trusted" ? "warning-box skill-trust-box trusted" : "warning-box skill-trust-box"}>
+          <div>
+            <strong>Workspace skills: {custom.status}</strong>
+            <p>Custom skills execute as your local user. Trust is stored outside the workspace and is invalidated when files change.</p>
+            {custom.manifest_digest ? <code>{custom.manifest_digest}</code> : null}
+            {custom.error ? <span>{custom.error}</span> : null}
+          </div>
+          {custom.status === "trusted"
+            ? <button className="secondary-button danger" onClick={revoke}>Revoke</button>
+            : <button className="primary-button" onClick={trust} disabled={!custom.manifest_digest || custom.status === "absent" || custom.status === "error"}>Trust and load</button>}
+        </div>
+      ) : null}
       <div className="form-grid">
         <TextField label="Skills directory" value={draft.skills_dir} onChange={skills_dir => setDraft({ ...draft, skills_dir })} />
-        <SwitchField label="Require skill hash" checked={draft.require_hash} onChange={require_hash => setDraft({ ...draft, require_hash })} />
+        <SwitchField label="Legacy adjacent hash check" checked={draft.require_hash} onChange={require_hash => setDraft({ ...draft, require_hash })} hint="Compatibility integrity check only; it does not grant trust." />
       </div>
       <div className="skills-grid">
         {(skills.data?.tools || []).map(tool => (
@@ -799,6 +841,11 @@ function ImportExportPanel({ settings }: { settings: SettingsViewModel }) {
   const [importPath, setImportPath] = useState("");
   const [confirmKeys, setConfirmKeys] = useState("");
   const pushToast = useRuntimeStore(state => state.pushToast);
+  const mutationBlocked = useRuntimeStore(state => Boolean(
+    state.status?.task.busy
+    || state.status?.diagnostics?.degraded_reason
+    || state.status?.lifecycle?.degraded_reason
+  ));
   const client = useQueryClient();
 
   async function doExport(withKeys: boolean) {
@@ -817,7 +864,12 @@ function ImportExportPanel({ settings }: { settings: SettingsViewModel }) {
   async function doImport() {
     try {
       await importConfig(importPath);
-      client.invalidateQueries();
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["settings"] }),
+        client.invalidateQueries({ queryKey: ["workspace"] }),
+        client.invalidateQueries({ queryKey: ["sessions"] }),
+        client.invalidateQueries({ queryKey: ["skills"] })
+      ]);
       pushToast({ tone: "success", text: "Config imported." });
     } catch (error) {
       pushToast({ tone: "error", text: String((error as Error).message || error) });
@@ -834,8 +886,8 @@ function ImportExportPanel({ settings }: { settings: SettingsViewModel }) {
       </div>
       <Field label="Import path">
         <div className="inline-form">
-          <input value={importPath} onChange={event => setImportPath(event.target.value)} placeholder="C:\\path\\config.json" />
-          <button className="primary-button" onClick={doImport} disabled={!importPath.trim()}>Import</button>
+          <input value={importPath} onChange={event => setImportPath(event.target.value)} placeholder="C:\\path\\config.json" disabled={mutationBlocked} />
+          <button className="primary-button" onClick={doImport} disabled={mutationBlocked || !importPath.trim()}>Import</button>
         </div>
       </Field>
       {exported ? <textarea className="json-editor advanced" readOnly value={exported} /> : null}
@@ -860,4 +912,13 @@ function Panel({ title, kicker, action, children }: { title: string; kicker: str
 
 function SaveButton({ onClick }: { onClick: () => void }) {
   return <button className="primary-button" onClick={onClick}><Save size={16} /> Save</button>;
+}
+
+async function refreshSettingsQueries(client: ReturnType<typeof useQueryClient>) {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ["settings"] }),
+    client.invalidateQueries({ queryKey: ["workspace"] }),
+    client.invalidateQueries({ queryKey: ["sessions"] }),
+    client.invalidateQueries({ queryKey: ["skills"] })
+  ]);
 }

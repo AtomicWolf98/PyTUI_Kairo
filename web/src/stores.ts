@@ -2,14 +2,20 @@ import { create } from "zustand";
 import type { ChatMessageView, RuntimeEvent, RuntimeStatus, ToolApproval, ToolRunView } from "./types";
 
 type Toast = { id: string; tone: "info" | "success" | "warn" | "error"; text: string };
+export type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
+export type WorkspaceIdentity = { runtimeId: string; revision: number; root: string };
 
 type RuntimeState = {
   status: RuntimeStatus | null;
   messages: ChatMessageView[];
   approvals: ToolApproval[];
   kaiState: string;
+  connection: ConnectionState;
+  workspace: WorkspaceIdentity;
   toasts: Toast[];
   setStatus: (status: RuntimeStatus) => void;
+  setConnection: (connection: ConnectionState) => void;
+  acceptWorkspace: (value: Partial<WorkspaceIdentity>) => boolean;
   setHistory: (messages: Array<Record<string, unknown>>) => void;
   applyEvent: (event: RuntimeEvent) => void;
   pushToast: (toast: Omit<Toast, "id">) => void;
@@ -147,13 +153,51 @@ export function reduceRuntimeMessages(messages: ChatMessageView[], event: Runtim
   return messages;
 }
 
+export function shouldAcceptWorkspace(current: WorkspaceIdentity, incoming: Partial<WorkspaceIdentity>): boolean {
+  const runtimeId = incoming.runtimeId || current.runtimeId;
+  const revision = Number(incoming.revision ?? current.revision);
+  if (current.runtimeId && runtimeId && runtimeId !== current.runtimeId) return true;
+  return revision >= current.revision;
+}
+
 export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   status: null,
   messages: [],
   approvals: [],
   kaiState: "idle",
+  connection: "connecting",
+  workspace: { runtimeId: "", revision: 0, root: "" },
   toasts: [],
-  setStatus: status => set({ status }),
+  setStatus: status => {
+    const incoming = {
+      runtimeId: status.runtime_id || "",
+      revision: Number(status.workspace_revision || 0),
+      root: status.workspace_root || ""
+    };
+    const current = get().workspace;
+    if (!shouldAcceptWorkspace(current, incoming)) return;
+    set({
+      status,
+      workspace: {
+        runtimeId: incoming.runtimeId || current.runtimeId,
+        revision: incoming.revision,
+        root: incoming.root || current.root
+      }
+    });
+  },
+  setConnection: connection => set({ connection }),
+  acceptWorkspace: value => {
+    const current = get().workspace;
+    if (!shouldAcceptWorkspace(current, value)) return false;
+    set({
+      workspace: {
+        runtimeId: value.runtimeId || current.runtimeId,
+        revision: Number(value.revision ?? current.revision),
+        root: value.root || current.root
+      }
+    });
+    return true;
+  },
   setHistory: messages => set({ messages: normalizeHistory(messages) }),
   pushToast: toast => {
     const item = { ...toast, id: nowId("toast") };
@@ -163,7 +207,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
   applyEvent: event => {
     const payload = payloadObject(event.payload);
     if (event.kind === "status") {
-      set({ status: event.payload as RuntimeStatus });
+      get().setStatus(event.payload as RuntimeStatus);
       return;
     }
     if (event.kind === "state") {

@@ -2629,3 +2629,106 @@ textarea,
     grid-column: auto;
   }
 }
+
+/* Runtime connectivity and transactional workspace state. */
+.connection-banner {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 14px;
+  color: var(--warning-text, #f7d89a);
+  background: rgba(150, 103, 28, 0.22);
+  border-bottom: 1px solid rgba(224, 165, 67, 0.35);
+  font-size: 12px;
+}
+
+.settings-mutation-gate {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.skill-trust-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.skill-trust-box > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.skill-trust-box p {
+  margin: 0;
+}
+
+.skill-trust-box code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-revision {
+  display: block;
+  max-width: min(720px, 70vw);
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-move-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.tree-row {
+  gap: 6px;
+  overflow: hidden;
+}
+
+.tree-row > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-indent {
+  width: 14px;
+  flex: 0 0 14px;
+}
+
+.spin {
+  animation: kairo-spin 0.9s linear infinite;
+}
+
+@keyframes kairo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace-move-error {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

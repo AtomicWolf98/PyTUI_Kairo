@@ -23,7 +23,7 @@ from tools.policy import (
     classify_python_scope,
     is_authorized,
 )
-from tools.shell import ShellExecutor
+from tools.shell import PythonExecutor, ShellExecutor
 from tools.web import WebFetchTool
 
 
@@ -248,6 +248,20 @@ class TestCommandScopeClassification(TestCase):
     def test_and_chain_is_system(self):
         self.assertEqual(classify_command_scope("echo a && echo b", self.policy), OperationScope.SYSTEM)
 
+    def test_interpreter_wrappers_are_system_scope(self):
+        commands = [
+            "python -c \"print(1)\"",
+            "py -m pip --version",
+            "powershell -EncodedCommand ZQBjAGgAbwAgAG8AawA=",
+            "pwsh -Command Get-Location",
+            "cmd /c echo ok",
+            "node --eval \"console.log(1)\"",
+            "wscript script.js",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(classify_command_scope(command, self.policy), OperationScope.SYSTEM)
+
 
 class TestPythonScopeClassification(TestCase):
     def setUp(self):
@@ -289,6 +303,43 @@ class TestPythonScopeClassification(TestCase):
     def test_importlib_is_system(self):
         code = "import importlib; importlib.import_module('os')"
         self.assertEqual(classify_python_scope(code, self.policy), OperationScope.SYSTEM)
+
+
+class TestExecutorAutoScope(TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.policy = WorkspacePathPolicy(Path(self.temp_dir.name).resolve())
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_simple_shell_is_never_auto_authorized(self):
+        executor = ShellExecutor.__new__(ShellExecutor)
+        executor.policy = self.policy
+        scope = executor.classify_scope(json.dumps({"command": "echo hello"}))
+        self.assertEqual(scope, OperationScope.SYSTEM)
+        self.assertFalse(is_authorized(AUTHORIZATION_AUTO, scope))
+
+    def test_simple_python_is_never_auto_authorized(self):
+        executor = PythonExecutor.__new__(PythonExecutor)
+        executor.policy = self.policy
+        scope = executor.classify_scope(json.dumps({"code": "print(1 + 1)"}))
+        self.assertEqual(scope, OperationScope.SYSTEM)
+        self.assertFalse(is_authorized(AUTHORIZATION_AUTO, scope))
+
+    def test_destructive_labels_are_preserved(self):
+        shell = ShellExecutor.__new__(ShellExecutor)
+        shell.policy = self.policy
+        python = PythonExecutor.__new__(PythonExecutor)
+        python.policy = self.policy
+        self.assertEqual(
+            shell.classify_scope(json.dumps({"command": "rm -rf /"})),
+            OperationScope.DESTRUCTIVE,
+        )
+        self.assertEqual(
+            python.classify_scope(json.dumps({"code": "import shutil; shutil.rmtree('/tmp/x')"})),
+            OperationScope.DESTRUCTIVE,
+        )
 
 
 class TestConfigAuthorizationAndWorkspace(TestCase):

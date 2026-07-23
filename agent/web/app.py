@@ -6,20 +6,56 @@ import secrets
 import socket
 import webbrowser
 from contextlib import suppress
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from agent._version import __version__
 from agent.config import Config
 from agent.runtime import DoctorService, KairoRuntime, event_to_dict
+from agent.web.assets import static_root
+
+
+_ERROR_STATUS = {
+    "invalid_request": 400,
+    "invalid_session_id": 400,
+    "config_validation_failed": 400,
+    "session_not_found": 404,
+    "approval_not_found": 404,
+    "runtime_busy": 409,
+    "last_session": 409,
+    "max_sessions": 409,
+    "skill_manifest_changed": 409,
+    "session_persistence_failed": 500,
+    "mutation_failed": 500,
+    "runtime_sync_failed": 500,
+    "runtime_degraded": 503,
+    "runtime_closing": 503,
+}
+
+
+def _api_result(result: dict[str, Any], *, default_status: int = 400):
+    """Return stable WebUI errors while preserving successful service payloads."""
+    if result.get("ok"):
+        return result
+    code = str(result.get("code", "") or "invalid_request")
+    message = str(result.get("error") or result.get("message") or "Request failed.")
+    payload = {
+        **result,
+        "ok": False,
+        "code": code,
+        "error": message,
+        "detail": message,
+        "retryable": bool(result.get("retryable", code == "runtime_busy")),
+    }
+    return JSONResponse(payload, status_code=_ERROR_STATUS.get(code, default_status))
 
 
 def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAPI:
     """Create the local-only Kairo WebUI application."""
-    app = FastAPI(title="Kairo WebUI", version="0.3.3-preview")
+    app = FastAPI(title="Kairo WebUI", version=__version__)
     auth_token = token if token is not None else secrets.token_urlsafe(24)
     app.state.kairo_runtime = runtime
     app.state.kairo_token = auth_token
@@ -53,32 +89,24 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     async def api_settings_update(section: str, request: Request):
         payload = await request.json()
         result = runtime.config_service.update_settings(section, payload)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Settings update failed."))
-        return result
+        return _api_result(result)
 
     @app.post("/api/settings/provider")
     async def api_settings_provider_create(request: Request):
         payload = await request.json()
         result = runtime.config_service.save_provider("", payload, create=True)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Provider create failed."))
-        return result
+        return _api_result(result)
 
     @app.patch("/api/settings/provider/{provider_id}")
     async def api_settings_provider_update(provider_id: str, request: Request):
         payload = await request.json()
         result = runtime.config_service.save_provider(provider_id, payload)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Provider update failed."))
-        return result
+        return _api_result(result)
 
     @app.delete("/api/settings/provider/{provider_id}")
     def api_settings_provider_delete(provider_id: str):
         result = runtime.config_service.delete_provider(provider_id)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Provider delete failed."))
-        return result
+        return _api_result(result)
 
     @app.post("/api/settings/provider/{provider_id}/test")
     def api_settings_provider_test(provider_id: str):
@@ -91,24 +119,18 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     async def api_settings_profile_create(request: Request):
         payload = await request.json()
         result = runtime.config_service.save_profile("", payload, create=True)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Profile create failed."))
-        return result
+        return _api_result(result)
 
     @app.patch("/api/settings/profile/{profile_id:path}")
     async def api_settings_profile_update(profile_id: str, request: Request):
         payload = await request.json()
         result = runtime.config_service.save_profile(profile_id, payload)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Profile update failed."))
-        return result
+        return _api_result(result)
 
     @app.delete("/api/settings/profile/{profile_id:path}")
     def api_settings_profile_delete(profile_id: str):
         result = runtime.config_service.delete_profile(profile_id)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Profile delete failed."))
-        return result
+        return _api_result(result)
 
     @app.post("/api/config/export")
     async def api_config_export(request: Request):
@@ -119,36 +141,32 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
             with_keys=bool(payload.get("with_keys", False)),
             confirm=str(payload.get("confirm", "")),
         )
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Config export failed."))
-        return result
+        return _api_result(result)
 
     @app.post("/api/config/import")
     async def api_config_import(request: Request):
         payload = await request.json()
         result = runtime.config_service.import_config(str(payload.get("path", "")))
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Config import failed."))
-        return result
+        return _api_result(result)
 
     @app.patch("/api/config/{section}")
     async def api_config_update(section: str, request: Request):
         payload = await request.json()
         result = runtime.config_service.update(section, payload)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Config update failed."))
-        return result
+        return _api_result(result)
 
     @app.post("/api/config/profile/{profile_id}/switch")
     def api_switch_profile(profile_id: str):
         result = runtime.config_service.switch_profile(profile_id)
-        if not result.get("ok"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Profile not found."))
-        return result
+        return _api_result(result, default_status=404)
 
     @app.get("/api/workspace/snapshot")
     def api_workspace_snapshot(selected_file: str = ""):
-        return runtime.workspace.snapshot(selected_file)
+        result = runtime.workspace.snapshot(selected_file)
+        status = runtime.status()
+        result.setdefault("runtime_id", status.get("runtime_id", ""))
+        result.setdefault("workspace_revision", status.get("workspace_revision", 0))
+        return result
 
     @app.get("/api/workspace/file")
     def api_workspace_file(path: str = ""):
@@ -165,24 +183,18 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     async def api_workspace_bookmark_add(request: Request):
         payload = await request.json()
         result = runtime.workspace.add_bookmark(str(payload.get("name", "")), str(payload.get("path", "")))
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Bookmark save failed."))
-        return result
+        return _api_result(result)
 
     @app.delete("/api/workspace/bookmarks/{name}")
     def api_workspace_bookmark_delete(name: str):
         result = runtime.workspace.remove_bookmark(name)
-        if not result.get("ok"):
-            raise HTTPException(status_code=404, detail=result.get("error", "Bookmark not found."))
-        return result
+        return _api_result(result, default_status=404)
 
     @app.post("/api/workspace/move")
     async def api_workspace_move(request: Request):
         payload = await request.json()
         result = runtime.workspace.move(str(payload.get("target", "")))
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("message", "Workspace move failed."))
-        return result
+        return _api_result(result)
 
     @app.get("/api/sessions")
     def api_sessions():
@@ -191,29 +203,23 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     @app.post("/api/sessions")
     async def api_session_create(request: Request):
         payload = await request.json()
-        return runtime.sessions.create(payload.get("name"))
+        return _api_result(runtime.sessions.create(payload.get("name")))
 
     @app.post("/api/sessions/{session_id}/switch")
     def api_session_switch(session_id: str):
         result = runtime.sessions.switch(session_id)
-        if not result.get("ok"):
-            raise HTTPException(status_code=404, detail="Session not found.")
-        return result
+        return _api_result(result, default_status=404)
 
     @app.patch("/api/sessions/{session_id}")
     async def api_session_rename(session_id: str, request: Request):
         payload = await request.json()
         result = runtime.sessions.rename(session_id, str(payload.get("name", "")))
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Rename failed."))
-        return result
+        return _api_result(result)
 
     @app.delete("/api/sessions/{session_id}")
     def api_session_delete(session_id: str):
         result = runtime.sessions.delete(session_id)
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Delete failed."))
-        return result
+        return _api_result(result)
 
     @app.get("/api/sessions/search")
     def api_session_search(q: str):
@@ -223,9 +229,7 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     async def api_session_export(session_id: str, request: Request):
         payload = await request.json()
         result = runtime.sessions.export(session_id, fmt=str(payload.get("format", "markdown")))
-        if not result.get("ok"):
-            raise HTTPException(status_code=400, detail=result.get("error", "Export failed."))
-        return result
+        return _api_result(result)
 
     @app.get("/api/chat/history")
     def api_chat_history():
@@ -235,9 +239,7 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     async def api_chat(request: Request):
         payload = await request.json()
         result = runtime.submit_message(str(payload.get("message", "")))
-        if not result.get("ok"):
-            raise HTTPException(status_code=409, detail=result.get("error", "Chat submit failed."))
-        return result
+        return _api_result(result, default_status=409)
 
     @app.post("/api/chat/stop")
     def api_chat_stop():
@@ -247,9 +249,7 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
     async def api_tool_approval(request: Request):
         payload = await request.json()
         result = runtime.resolve_approval(str(payload.get("id", "")), int(payload.get("choice", 0)))
-        if not result.get("ok"):
-            raise HTTPException(status_code=404, detail=result.get("error", "Approval not found."))
-        return result
+        return _api_result(result, default_status=404)
 
     @app.get("/api/skills")
     def api_skills():
@@ -257,7 +257,20 @@ def create_web_app(runtime: KairoRuntime, *, token: str | None = None) -> FastAP
 
     @app.post("/api/skills/reload")
     def api_skills_reload():
-        return runtime.skills.reload()
+        return _api_result(runtime.skills.reload())
+
+    @app.post("/api/skills/trust")
+    async def api_skills_trust(request: Request):
+        payload = await request.json()
+        if not hasattr(runtime.skills, "trust"):
+            return _api_result({"ok": False, "code": "invalid_request", "error": "Skill trust is unavailable."})
+        return _api_result(runtime.skills.trust(str(payload.get("manifest_digest", ""))))
+
+    @app.delete("/api/skills/trust")
+    def api_skills_revoke():
+        if not hasattr(runtime.skills, "revoke"):
+            return _api_result({"ok": False, "code": "invalid_request", "error": "Skill trust is unavailable."})
+        return _api_result(runtime.skills.revoke())
 
     @app.post("/api/doctor")
     async def api_doctor(request: Request):
@@ -317,17 +330,14 @@ def run_web(config: Config, *, host: str | None = None, port: int | None = None,
 
 
 def _mount_static(app: FastAPI, token: str) -> None:
-    root = Path(__file__).resolve().parents[2]
-    dist = root / "web" / "dist"
-    public = root / "web" / "public"
-    static_root = dist if dist.exists() else public
-    assets = static_root / "assets"
+    root = static_root()
+    assets = root / "assets"
     if assets.exists():
         app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
 
     @app.get("/{path:path}")
     def spa(path: str = ""):
-        index = static_root / "index.html"
+        index = root / "index.html"
         if index.exists():
             return FileResponse(index)
         return HTMLResponse("<!doctype html><title>Kairo</title><div id='root'>Kairo WebUI assets are missing.</div>")

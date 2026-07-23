@@ -25,4 +25,22 @@ describe("local auth token bootstrap", () => {
     expect(api.token).toBe("stored-token");
     expect(window.location.search).toBe("");
   });
+
+  it("preserves structured runtime error metadata", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: "Finish the active task first.",
+      code: "runtime_busy",
+      retryable: true
+    }), { status: 409, headers: { "content-type": "application/json" } })));
+    const api = await import("./api");
+
+    await expect(api.getStatus()).rejects.toMatchObject({
+      name: "ApiError",
+      message: "Finish the active task first.",
+      status: 409,
+      code: "runtime_busy",
+      retryable: true
+    });
+    vi.unstubAllGlobals();
+  });
 });

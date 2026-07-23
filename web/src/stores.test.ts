@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduceRuntimeMessages } from "./stores";
+import { reduceRuntimeMessages, shouldAcceptWorkspace } from "./stores";
 import type { ChatMessageView, RuntimeEvent } from "./types";
 
 function event(kind: string, payload: unknown): RuntimeEvent {
@@ -60,5 +60,18 @@ describe("runtime message reducer", () => {
     expect(messages[0].tools?.map(tool => tool.id)).toEqual(["call-a", "call-b"]);
     expect(messages[0].tools?.[0].result).toBe("A");
     expect(messages[0].tools?.[1].status).toBe("running");
+  });
+});
+
+describe("workspace revision guard", () => {
+  it("rejects stale responses from the same runtime", () => {
+    const current = { runtimeId: "runtime-a", revision: 7, root: "C:/new" };
+    expect(shouldAcceptWorkspace(current, { runtimeId: "runtime-a", revision: 6, root: "C:/old" })).toBe(false);
+    expect(shouldAcceptWorkspace(current, { runtimeId: "runtime-a", revision: 7, root: "C:/new" })).toBe(true);
+  });
+
+  it("accepts the first state from a restarted runtime", () => {
+    const current = { runtimeId: "runtime-a", revision: 99, root: "C:/old" };
+    expect(shouldAcceptWorkspace(current, { runtimeId: "runtime-b", revision: 1, root: "C:/new" })).toBe(true);
   });
 });

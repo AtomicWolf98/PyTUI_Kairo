@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,11 @@ from agent.token_tracker import TokenTracker
 RUNTIME_STATE_NAME = "kairo_runtime_state"
 INDEX_VERSION = 1
 SESSION_VERSION = 1
+SESSION_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+class InvalidSessionIdError(ValueError):
+    """Raised when a session identifier is not a canonical UUID hex value."""
 
 
 def _format_timestamp(value: datetime) -> str:
@@ -37,7 +43,7 @@ class SessionStore:
         self._config_path = Path(config_path).expanduser().resolve()
         storage = Path(storage_dir)
         if storage.is_absolute():
-            self._storage_dir = storage
+            self._storage_dir = storage.expanduser().resolve()
         else:
             self._storage_dir = (self._config_path.parent / storage).resolve()
         self._index_path = self._storage_dir / "index.json"
@@ -54,8 +60,24 @@ class SessionStore:
     def _ensure_storage(self) -> None:
         self._storage_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def is_valid_session_id(session_id: object) -> bool:
+        return isinstance(session_id, str) and SESSION_ID_PATTERN.fullmatch(session_id) is not None
+
+    @classmethod
+    def validate_session_id(cls, session_id: object) -> str:
+        if not cls.is_valid_session_id(session_id):
+            raise InvalidSessionIdError("Session id must be 32 lowercase hexadecimal characters.")
+        return str(session_id)
+
     def _session_path(self, session_id: str) -> Path:
-        return self._storage_dir / f"{session_id}.json"
+        validated = self.validate_session_id(session_id)
+        path = (self._storage_dir / f"{validated}.json").resolve()
+        try:
+            path.relative_to(self._storage_dir.resolve())
+        except ValueError as exc:
+            raise InvalidSessionIdError("Session path resolves outside the session storage directory.") from exc
+        return path
 
     def _atomic_write(self, path: Path, data: Dict[str, Any]) -> None:
         tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -96,6 +118,7 @@ class SessionStore:
         reason: str = "",
     ) -> None:
         """Persist a single session to disk and update the index."""
+        self.validate_session_id(session.id)
         if not isinstance(session.history, list) or not session.history:
             raise ValueError("Session history must not be empty")
         if session.history[0].get("role") != "system":
@@ -154,7 +177,19 @@ class SessionStore:
     def _update_index(self, session: ConversationSession, *, is_active: bool) -> None:
         index = self._load_index() or {"version": INDEX_VERSION, "active_session_id": "", "sessions": []}
         index["version"] = INDEX_VERSION
-        sessions = index.setdefault("sessions", [])
+        raw_sessions = index.get("sessions", [])
+        sessions = [
+            item
+            for item in raw_sessions
+            if (
+                isinstance(item, dict)
+                and self.is_valid_session_id(item.get("id"))
+                and str(item.get("file", f"{item['id']}.json")) == f"{item['id']}.json"
+            )
+        ] if isinstance(raw_sessions, list) else []
+        index["sessions"] = sessions
+        if not self.is_valid_session_id(index.get("active_session_id")):
+            index["active_session_id"] = ""
 
         updated = {
             "id": session.id,
@@ -218,10 +253,26 @@ class SessionStore:
         indexed_ids: set = set()
 
         if index is not None:
-            active_session_id = str(index.get("active_session_id", ""))
+            raw_active_id = str(index.get("active_session_id", ""))
+            if raw_active_id and self.is_valid_session_id(raw_active_id):
+                active_session_id = raw_active_id
+            elif raw_active_id:
+                self._warnings.append(f"Invalid active session id in index: {raw_active_id!r}")
             for item in index.get("sessions", []):
-                if isinstance(item, dict) and item.get("id"):
-                    indexed_ids.add(item["id"])
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                session_id = str(item["id"])
+                if not self.is_valid_session_id(session_id):
+                    self._warnings.append(f"Invalid session id in index: {session_id!r}; skipping")
+                    continue
+                expected_file = f"{session_id}.json"
+                indexed_file = str(item.get("file", expected_file))
+                if indexed_file != expected_file:
+                    self._warnings.append(
+                        f"Session index file mismatch for {session_id}: {indexed_file!r}; skipping"
+                    )
+                    continue
+                indexed_ids.add(session_id)
 
         # Scan for orphan session files when index is missing or empty.
         if not indexed_ids and self._storage_dir.exists():
@@ -229,6 +280,9 @@ class SessionStore:
                 if path.name == "index.json":
                     continue
                 session_id = path.stem
+                if not self.is_valid_session_id(session_id):
+                    self._warnings.append(f"Invalid orphan session filename: {path.name!r}; skipping")
+                    continue
                 indexed_ids.add(session_id)
                 self._warnings.append(f"Recovered session file without index entry: {path.name}")
 
@@ -289,6 +343,13 @@ class SessionStore:
 
         if not isinstance(data, dict):
             raise ValueError("session file is not a JSON object")
+        data_session_id = str(data.get("id", ""))
+        if not self.is_valid_session_id(path.stem):
+            raise InvalidSessionIdError(f"Invalid session filename: {path.name!r}")
+        if data_session_id != path.stem:
+            raise InvalidSessionIdError(
+                f"Session id {data_session_id!r} does not match filename {path.name!r}"
+            )
 
         history = data.get("history", [])
         if not history or history[0].get("role") != "system":
@@ -339,7 +400,7 @@ class SessionStore:
         updated_at = _parse_timestamp(data["updated_at"]) if "updated_at" in data else utc_now()
 
         session = ConversationSession(
-            id=data.get("id", path.stem),
+            id=data_session_id,
             name=data.get("name", "Conversation"),
             history=history,
             token_tracker=token_tracker,
@@ -384,6 +445,8 @@ class SessionStore:
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
+            if not isinstance(data, dict) or data.get("id") != session_id:
+                raise InvalidSessionIdError("Session file id does not match the requested session.")
             data["name"] = clean
             data["updated_at"] = _format_timestamp(datetime.now(timezone.utc))
             self._atomic_write(path, data)
@@ -426,6 +489,8 @@ class SessionStore:
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
+            if not isinstance(data, dict) or data.get("id") != session_id:
+                raise InvalidSessionIdError("Session file id does not match the requested session.")
         except Exception as exc:
             self._warnings.append(f"Failed to read session for export: {exc}")
             return None
@@ -489,7 +554,14 @@ class SessionStore:
 
     def reveal_session_path(self, session_id: str) -> Optional[Path]:
         path = self._session_path(session_id)
-        return path if path.exists() else None
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return path if isinstance(data, dict) and data.get("id") == session_id else None
+        except Exception:
+            return None
 
     def session_metadata(self, session_id: str) -> Optional[tuple]:
         """Return ``(name, path)`` for the given session, or None if missing."""
@@ -499,6 +571,8 @@ class SessionStore:
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
+            if not isinstance(data, dict) or data.get("id") != session_id:
+                return None
             return (data.get("name", session_id), path)
         except Exception:
             return None
