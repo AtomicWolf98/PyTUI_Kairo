@@ -13,9 +13,9 @@ from kairo_kernel.services.configuration import (
     ConfigField,
     ConfigPatch,
     ConfigSchema,
-    ConfigValueKind,
     ConfigurationParticipant,
     ConfigurationService,
+    ConfigValueKind,
 )
 from kairo_kernel.services.conversations import ConversationService
 from kairo_kernel.services.diagnostics import (
