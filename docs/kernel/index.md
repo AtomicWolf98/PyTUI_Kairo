@@ -59,5 +59,5 @@ this compact example. See `examples/kernel/` for complete offline programs.
 - [Machine schemas](schema/README.md)
 
 The implementation currently advertises `KERNEL_API_VERSION = "1.0"` and
-`EVENT_SCHEMA_VERSION = 1`. The project metadata currently requires Python
-3.10 or newer.
+`EVENT_SCHEMA_VERSION = 1`. The Alpha package metadata requires Python 3.11
+or newer.

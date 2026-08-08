@@ -46,9 +46,8 @@ These are implementation facts at baseline `c770dfd`, not planned behavior.
 15. `BlobStore`, resource and prompt ports, capabilities, and structured
     observability exist as components but are not surfaced/wired by the default
     `KairoKernel` composition.
-16. The current top-level setuptools package discovery includes `agent*` and
-    `tools*`, not `kairo_kernel*`; an installed wheel may omit the new kernel
-    package until packaging metadata is updated.
+16. The Alpha wheel now discovers only `kairo_kernel*`; the legacy source-tree
+    packages remain outside the Alpha distribution and are not migrated.
 17. JSON schemas document the current Python/wire shapes, but there is no built-in
     loader that constructs `KernelConfig` from `config-v1.json`.
 18. SQLite uses one connection and one operation lock, so it provides correctness
