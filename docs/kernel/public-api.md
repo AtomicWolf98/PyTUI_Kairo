@@ -15,7 +15,7 @@ boundaries.
 | `workspace_root` | required non-empty path; resolved during build |
 | `database_path` | `.kairo/kernel.db`; relative paths are rooted in the workspace; `:memory:` is supported |
 | `kernel_id` | generated when absent |
-| `package_version` | `0.1.0` |
+| `package_version` | current distribution version (`0.4.0a1`) |
 | `profiles`, `provider_roles`, `default_profile_id` | immutable provider configuration |
 | `default_session_id` | none; otherwise permits `TurnRequest.session_id=None` |
 | `config_values`, `config_schema` | initial configuration service state |

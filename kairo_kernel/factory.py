@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from kairo_kernel._version import __version__
 from kairo_kernel.contracts.identifiers import KernelId, ProfileId, SecretId, SessionId
 from kairo_kernel.contracts.json import JsonObject
 from kairo_kernel.contracts.providers import ProviderProfile
@@ -69,7 +70,7 @@ class KernelConfig:
     workspace_root: str
     database_path: str = ".kairo/kernel.db"
     kernel_id: KernelId | None = None
-    package_version: str = "0.1.0"
+    package_version: str = __version__
     profiles: tuple[ProviderProfile, ...] = ()
     provider_roles: tuple[ProviderRoleMapping, ...] = ()
     default_profile_id: ProfileId | None = None
