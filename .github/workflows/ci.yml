@@ -1,16 +1,20 @@
-name: CI
+name: Kairo Kernel CI
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  python:
+  kernel:
+    name: Kernel / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,86 +23,22 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest
-      # The legacy codebase still has broad style/type debt. Keep correctness
-      # linting global and expand typed modules without hiding failures.
-      - run: python -m ruff check --select E9,F63,F7,F82 agent tools kairo.py main.py tests
-      - run: >-
-          python -m mypy --follow-imports=skip
-          tools/skill_trust.py agent/session_store.py agent/web/assets.py agent/_version.py
-          tools/release_check.py tools/installed_web_smoke.py
+      - run: python -m pytest tests/kernel --cov=kairo_kernel --cov-report=term-missing
+      - run: python -m ruff check kairo_kernel tests/kernel
+      - run: python -m mypy kairo_kernel
 
-  web-and-wheel:
+  alpha-wheel:
+    name: Alpha wheel
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: npm ci --prefix web
-      - run: npm test --prefix web
-      - run: npm run typecheck --prefix web
-      - run: npm run build --prefix web
-      - run: python -m pip install --upgrade pip build
+      - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m build
-      - run: python tools/release_check.py --wheel dist/kairo_agent-0.3.3-py3-none-any.whl
-      - run: python -m pytest tests/test_release_packaging.py
-      - run: python -m venv --system-site-packages "${RUNNER_TEMP}/kairo-smoke"
-      - run: "${RUNNER_TEMP}/kairo-smoke/bin/python" -m pip install --no-deps --force-reinstall dist/kairo_agent-0.3.3-py3-none-any.whl
-      - run: cd "${RUNNER_TEMP}" && "${RUNNER_TEMP}/kairo-smoke/bin/kairo" --help
-      - run: cd "${RUNNER_TEMP}" && "${RUNNER_TEMP}/kairo-smoke/bin/python" -m tools.installed_web_smoke
-
-  windows-installer:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: npm ci --prefix web
-      - run: npm run build --prefix web
-      - name: Verify owned install and repeat upgrade
-        shell: pwsh
-        run: |
-          $external = Join-Path $env:RUNNER_TEMP "external-bin"
-          New-Item -ItemType Directory -Path $external | Out-Null
-          $externalShim = Join-Path $external "kairo.cmd"
-          Set-Content -LiteralPath $externalShim -Value "@echo external"
-          $before = (Get-FileHash -LiteralPath $externalShim -Algorithm SHA256).Hash
-          $env:PATH = "$external;$env:PATH"
-          $env:KAIRO_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP "kairo-owned"
-          $env:KAIRO_NONINTERACTIVE = "1"
-          $env:KAIRO_SKIP_PATH = "1"
-          cmd /c install.bat
-          if ($LASTEXITCODE -ne 0) { throw "initial installer run failed" }
-          cmd /c install.bat
-          if ($LASTEXITCODE -ne 0) { throw "repeat installer run failed" }
-          $after = (Get-FileHash -LiteralPath $externalShim -Algorithm SHA256).Hash
-          if ($before -ne $after) { throw "external kairo command was modified" }
-          & "$env:KAIRO_INSTALL_ROOT\bin\kairo.bat" --help
-          if ($LASTEXITCODE -ne 0) { throw "installed shim failed" }
-      - name: Reject an unowned target
-        shell: pwsh
-        run: |
-          $env:KAIRO_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP "unowned-target"
-          $env:KAIRO_NONINTERACTIVE = "1"
-          $env:KAIRO_SKIP_PATH = "1"
-          New-Item -ItemType Directory -Path $env:KAIRO_INSTALL_ROOT | Out-Null
-          Set-Content -LiteralPath (Join-Path $env:KAIRO_INSTALL_ROOT "sentinel.txt") -Value "keep"
-          cmd /c install.bat
-          if ($LASTEXITCODE -eq 0) { throw "installer accepted an unowned target" }
-          if ((Get-Content -LiteralPath (Join-Path $env:KAIRO_INSTALL_ROOT "sentinel.txt")) -ne "keep") {
-            throw "installer modified the unowned target"
-          }
+      - run: python -m twine check dist/*
+      - run: KAIRO_WHEEL=dist/kairo_kernel-0.4.0a1-py3-none-any.whl python -m pytest tests/kernel/packaging
+      - run: python -m pip_audit .

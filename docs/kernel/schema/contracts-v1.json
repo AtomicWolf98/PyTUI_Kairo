@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kairo.local/schema/contracts-v1.json",
+  "title": "Kairo Kernel tagged Contract v1",
+  "description": "Deterministic output of Contract.to_json(). Service-local dataclasses are outside this wire contract.",
+  "oneOf": [
+    {"$ref": "#/$defs/TurnRequest"},
+    {"$ref": "#/$defs/TurnAccepted"},
+    {"$ref": "#/$defs/TurnSnapshot"},
+    {"$ref": "#/$defs/TurnResult"},
+    {"$ref": "#/$defs/Message"},
+    {"$ref": "#/$defs/InteractionRequest"},
+    {"$ref": "#/$defs/InteractionResponse"},
+    {"$ref": "#/$defs/ProviderProfile"},
+    {"$ref": "#/$defs/ToolDescriptor"},
+    {"$ref": "#/$defs/ToolResult"},
+    {"$ref": "#/$defs/SessionRecord"},
+    {"$ref": "#/$defs/ConfigSnapshot"},
+    {"$ref": "#/$defs/MemoryEntry"},
+    {"$ref": "#/$defs/KernelError"}
+  ],
+  "x-kairo-contract-types": [
+    "TextBlock", "ReasoningBlock", "ImageBlock", "AudioBlock", "FileBlock", "ResourceBlock", "ToolCallBlock", "ToolResultBlock", "Message",
+    "KernelCapabilities", "ContextStats", "KernelStatus", "ShutdownRequest", "ShutdownReport",
+    "TurnRequest", "TurnAccepted", "TurnSnapshot", "TurnResult", "CancelReceipt",
+    "InteractionChoice", "InteractionRequest", "InteractionResponse", "InteractionReceipt",
+    "ProviderProfile", "ProviderRequest", "ProviderUsage", "ProviderFailure", "ProviderStreamEvent",
+    "ToolDescriptor", "ToolInvocation", "ToolExecutionContext", "ToolOutputChunk", "ToolResult",
+    "SessionRecord", "SessionSummary", "ConfigSnapshot", "WorkspaceRecord", "MemoryEntry", "MemoryQuery", "SecretDescriptor", "SecretInput", "ResourceDescriptor", "ResourceRead", "PromptDescriptor", "PromptRenderRequest", "PromptRenderResult", "TraceContext", "LogRecord", "MetricRecord", "SpanRecord", "KernelError"
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "object",
+      "required": ["$datetime"],
+      "additionalProperties": false,
+      "properties": {"$datetime": {"type": "string", "format": "date-time"}}
+    },
+    "jsonValue": {
+      "oneOf": [
+        {"type": ["null", "boolean", "number", "string"]},
+        {"$ref": "#/$defs/jsonArray"},
+        {"$ref": "#/$defs/jsonObject"}
+      ]
+    },
+    "jsonArray": {
+      "type": "object",
+      "required": ["$json_array"],
+      "additionalProperties": false,
+      "properties": {"$json_array": {"type": "array", "items": {"$ref": "#/$defs/jsonValue"}}}
+    },
+    "jsonObject": {
+      "type": "object",
+      "required": ["$json_object"],
+      "additionalProperties": false,
+      "properties": {
+        "$json_object": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/jsonValue"}],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "tuple": {
+      "type": "object",
+      "required": ["$tuple"],
+      "additionalProperties": false,
+      "properties": {"$tuple": {"type": "array"}}
+    },
+    "contentTuple": {
+      "type": "object",
+      "required": ["$tuple"],
+      "additionalProperties": false,
+      "properties": {"$tuple": {"type": "array", "items": {"$ref": "#/$defs/contentBlock"}}}
+    },
+    "contentBlock": {
+      "oneOf": [
+        {"$ref": "#/$defs/TextBlock"}, {"$ref": "#/$defs/ReasoningBlock"},
+        {"$ref": "#/$defs/ImageBlock"}, {"$ref": "#/$defs/AudioBlock"},
+        {"$ref": "#/$defs/FileBlock"}, {"$ref": "#/$defs/ResourceBlock"},
+        {"$ref": "#/$defs/ToolCallBlock"}, {"$ref": "#/$defs/ToolResultBlock"}
+      ]
+    },
+    "TextBlock": {
+      "type": "object", "required": ["$type", "text"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.TextBlock"}, "text": {"type": "string"}}
+    },
+    "ReasoningBlock": {
+      "type": "object", "required": ["$type", "text", "redacted"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.ReasoningBlock"}, "text": {"type": "string"}, "redacted": {"type": "boolean"}}
+    },
+    "ImageBlock": {
+      "type": "object", "required": ["$type", "media_type", "uri", "base64_data", "alt_text"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.ImageBlock"}, "media_type": {"type": "string"}, "uri": {"type": "string"}, "base64_data": {"type": "string"}, "alt_text": {"type": "string"}}
+    },
+    "AudioBlock": {
+      "type": "object", "required": ["$type", "media_type", "uri", "base64_data", "transcript"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.AudioBlock"}, "media_type": {"type": "string"}, "uri": {"type": "string"}, "base64_data": {"type": "string"}, "transcript": {"type": "string"}}
+    },
+    "FileBlock": {
+      "type": "object", "required": ["$type", "name", "media_type", "uri", "size_bytes", "sha256"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.FileBlock"}, "name": {"type": "string"}, "media_type": {"type": "string"}, "uri": {"type": "string"}, "size_bytes": {"type": ["integer", "null"]}, "sha256": {"type": "string"}}
+    },
+    "ResourceBlock": {
+      "type": "object", "required": ["$type", "resource_id", "uri", "name", "description", "media_type"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.ResourceBlock"}, "resource_id": {"type": "string"}, "uri": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "media_type": {"type": "string"}}
+    },
+    "ToolCallBlock": {
+      "type": "object", "required": ["$type", "tool_call_id", "name", "arguments"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.ToolCallBlock"}, "tool_call_id": {"type": "string"}, "name": {"type": "string"}, "arguments": {"$ref": "#/$defs/jsonObject"}}
+    },
+    "ToolResultBlock": {
+      "type": "object", "required": ["$type", "tool_call_id", "name", "status", "content"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.ToolResultBlock"}, "tool_call_id": {"type": "string"}, "name": {"type": "string"}, "status": {"enum": ["succeeded", "failed", "rejected", "cancelled"]}, "content": {"$ref": "#/$defs/contentTuple"}}
+    },
+    "Message": {
+      "type": "object", "required": ["$type", "message_id", "role", "kind", "content", "name"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.content.Message"}, "message_id": {"type": "string"}, "role": {"enum": ["system", "user", "assistant", "tool"]}, "kind": {"enum": ["chat", "plan", "summary", "runtime_state"]}, "content": {"$ref": "#/$defs/contentTuple"}, "name": {"type": "string"}}
+    },
+    "TurnRequest": {
+      "type": "object", "required": ["$type", "text", "session_id", "client_request_id", "metadata"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.turns.TurnRequest"}, "text": {"type": "string", "minLength": 1}, "session_id": {"type": ["string", "null"]}, "client_request_id": {"type": "string"}, "metadata": {"$ref": "#/$defs/jsonObject"}}
+    },
+    "TurnAccepted": {
+      "type": "object", "required": ["$type", "turn_id", "session_id", "accepted_at"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.turns.TurnAccepted"}, "turn_id": {"type": "string"}, "session_id": {"type": "string"}, "accepted_at": {"$ref": "#/$defs/timestamp"}}
+    },
+    "TurnSnapshot": {
+      "type": "object", "required": ["$type", "turn_id", "session_id", "status", "phase", "started_at", "finished_at", "cancel_requested"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.turns.TurnSnapshot"}, "turn_id": {"type": "string"}, "session_id": {"type": "string"}, "status": {"enum": ["accepted", "running", "waiting_input", "stopping", "succeeded", "cancelled", "failed"]}, "phase": {"type": ["string", "null"]}, "started_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}, "finished_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}, "cancel_requested": {"type": "boolean"}}
+    },
+    "TurnResult": {
+      "type": "object", "required": ["$type", "turn_id", "session_id", "status", "messages", "started_at", "finished_at", "error_message"], "additionalProperties": false,
+      "properties": {"$type": {"const": "kairo_kernel.contracts.turns.TurnResult"}, "turn_id": {"type": "string"}, "session_id": {"type": "string"}, "status": {"enum": ["succeeded", "cancelled", "failed"]}, "messages": {"type": "object", "required": ["$tuple"], "properties": {"$tuple": {"type": "array", "items": {"$ref": "#/$defs/Message"}}}, "additionalProperties": false}, "started_at": {"$ref": "#/$defs/timestamp"}, "finished_at": {"$ref": "#/$defs/timestamp"}, "error_message": {"type": "string"}}
+    },
+    "InteractionRequest": {"type": "object", "required": ["$type", "interaction_id", "turn_id", "session_id", "kind", "prompt", "choices", "expires_at", "safe_default"], "properties": {"$type": {"const": "kairo_kernel.contracts.interactions.InteractionRequest"}, "interaction_id": {"type": "string"}, "turn_id": {"type": "string"}, "session_id": {"type": "string"}, "kind": {"enum": ["tool_approval", "plan_approval", "text_input"]}, "prompt": {"type": "string"}, "choices": {"$ref": "#/$defs/tuple"}, "expires_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}, "safe_default": {"type": "string"}}, "additionalProperties": false},
+    "InteractionResponse": {"type": "object", "required": ["$type", "interaction_id", "turn_id", "action", "text"], "properties": {"$type": {"const": "kairo_kernel.contracts.interactions.InteractionResponse"}, "interaction_id": {"type": "string"}, "turn_id": {"type": "string"}, "action": {"type": "string"}, "text": {"type": "string"}}, "additionalProperties": false},
+    "ProviderProfile": {"type": "object", "required": ["$type", "profile_id", "label", "provider", "model", "base_url", "context_window", "max_output_tokens", "temperature", "secret_id"], "properties": {"$type": {"const": "kairo_kernel.contracts.providers.ProviderProfile"}, "profile_id": {"type": "string"}, "label": {"type": "string"}, "provider": {"type": "string"}, "model": {"type": "string"}, "base_url": {"type": "string"}, "context_window": {"type": "integer"}, "max_output_tokens": {"type": "integer"}, "temperature": {"type": "number"}, "secret_id": {"type": "string"}}, "additionalProperties": false},
+    "ToolDescriptor": {"type": "object", "required": ["$type", "name", "description", "parameters_schema", "permissions", "source", "manifest_digest"], "properties": {"$type": {"const": "kairo_kernel.contracts.tools.ToolDescriptor"}, "name": {"type": "string"}, "description": {"type": "string"}, "parameters_schema": {"$ref": "#/$defs/jsonObject"}, "permissions": {"$ref": "#/$defs/tuple"}, "source": {"type": "string"}, "manifest_digest": {"type": "string"}}, "additionalProperties": false},
+    "ToolResult": {"type": "object", "required": ["$type", "tool_call_id", "name", "status", "content", "started_at", "finished_at", "error_message"], "properties": {"$type": {"const": "kairo_kernel.contracts.tools.ToolResult"}, "tool_call_id": {"type": "string"}, "name": {"type": "string"}, "status": {"enum": ["succeeded", "failed", "rejected", "cancelled"]}, "content": {"$ref": "#/$defs/contentTuple"}, "started_at": {"$ref": "#/$defs/timestamp"}, "finished_at": {"$ref": "#/$defs/timestamp"}, "error_message": {"type": "string"}}, "additionalProperties": false},
+    "SessionRecord": {"type": "object", "required": ["$type", "session_id", "name", "messages", "created_at", "updated_at", "compression_count"], "properties": {"$type": {"const": "kairo_kernel.contracts.support.SessionRecord"}, "session_id": {"type": "string"}, "name": {"type": "string"}, "messages": {"type": "object", "required": ["$tuple"], "properties": {"$tuple": {"type": "array", "items": {"$ref": "#/$defs/Message"}}}, "additionalProperties": false}, "created_at": {"$ref": "#/$defs/timestamp"}, "updated_at": {"$ref": "#/$defs/timestamp"}, "compression_count": {"type": "integer", "minimum": 0}}, "additionalProperties": false},
+    "ConfigSnapshot": {"type": "object", "required": ["$type", "revision", "values", "redacted"], "properties": {"$type": {"const": "kairo_kernel.contracts.support.ConfigSnapshot"}, "revision": {"type": "integer"}, "values": {"$ref": "#/$defs/jsonObject"}, "redacted": {"type": "boolean"}}, "additionalProperties": false},
+    "MemoryEntry": {"type": "object", "required": ["$type", "memory_id", "namespace", "key", "content", "created_at", "updated_at", "tags"], "properties": {"$type": {"const": "kairo_kernel.contracts.support.MemoryEntry"}, "memory_id": {"type": "string"}, "namespace": {"type": "string"}, "key": {"type": "string"}, "content": {"$ref": "#/$defs/contentTuple"}, "created_at": {"$ref": "#/$defs/timestamp"}, "updated_at": {"$ref": "#/$defs/timestamp"}, "tags": {"$ref": "#/$defs/tuple"}}, "additionalProperties": false},
+    "KernelError": {"type": "object", "required": ["$type", "code", "message", "retryable", "operation", "details", "turn_id", "interaction_id"], "properties": {"$type": {"const": "kairo_kernel.errors.KernelError"}, "code": {"type": "string"}, "message": {"type": "string"}, "retryable": {"type": "boolean"}, "operation": {"type": "string"}, "details": {"$ref": "#/$defs/jsonObject"}, "turn_id": {"type": ["string", "null"]}, "interaction_id": {"type": ["string", "null"]}}, "additionalProperties": false}
+  }
+}

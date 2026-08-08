@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kairo.local/schema/config-v1.json",
+  "title": "Kairo KernelConfig v1 interchange shape",
+  "description": "Documentation/interchange schema. The Python API currently requires explicit conversion to KernelConfig and immutable JsonObject values.",
+  "type": "object",
+  "required": ["workspace_root"],
+  "additionalProperties": false,
+  "properties": {
+    "workspace_root": {"type": "string", "minLength": 1},
+    "database_path": {"type": "string", "minLength": 1, "default": ".kairo/kernel.db"},
+    "kernel_id": {"type": ["string", "null"], "default": null},
+    "package_version": {"type": "string", "default": "0.1.0"},
+    "profiles": {"type": "array", "items": {"$ref": "#/$defs/providerProfile"}, "default": []},
+    "provider_roles": {"type": "array", "items": {"$ref": "#/$defs/providerRole"}, "default": []},
+    "default_profile_id": {"type": ["string", "null"], "default": null},
+    "default_session_id": {"type": ["string", "null"], "default": null},
+    "config_values": {"type": "object", "default": {}},
+    "engine_options": {"$ref": "#/$defs/engineOptions"},
+    "mcp_servers": {"type": "array", "items": {"$ref": "#/$defs/mcpServer"}, "default": []},
+    "connect_mcp_on_start": {"type": "boolean", "default": false},
+    "skills_directory": {"type": "string", "minLength": 1, "default": ".kairo/skills"},
+    "trust_directory": {"type": "string", "minLength": 1, "default": ".kairo/trust"},
+    "event_buffer_size": {"type": "integer", "minimum": 1, "default": 1000},
+    "event_queue_size": {"type": "integer", "minimum": 1, "default": 256},
+    "shutdown_timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "default": 5.0},
+    "enable_builtin_tools": {"type": "boolean", "default": true}
+  },
+  "$defs": {
+    "pair": {
+      "type": "array",
+      "prefixItems": [{"type": "string"}, {"type": "string"}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "providerProfile": {
+      "type": "object",
+      "required": ["profile_id", "label", "provider", "model", "base_url", "context_window", "max_output_tokens", "temperature"],
+      "additionalProperties": false,
+      "properties": {
+        "profile_id": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "provider": {"enum": ["openai_responses", "openai_chat", "anthropic"]},
+        "model": {"type": "string", "minLength": 1},
+        "base_url": {"type": "string", "pattern": "^https?://"},
+        "context_window": {"type": "integer", "minimum": 1},
+        "max_output_tokens": {"type": "integer", "minimum": 1},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "secret_id": {"type": "string", "default": ""}
+      }
+    },
+    "providerRole": {
+      "type": "object",
+      "required": ["role", "profile_id"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {"type": "string", "minLength": 1},
+        "profile_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "engineOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "authorization_mode": {"enum": ["manual", "auto", "yolo"], "default": "manual"},
+        "plan_mode": {"type": "boolean", "default": false},
+        "thinking_mode": {"type": "boolean", "default": true},
+        "context_trigger_percent": {"type": "number", "minimum": 0, "maximum": 100, "default": 85},
+        "context_target_percent": {"type": "number", "minimum": 0, "maximum": 100, "default": 60},
+        "preserve_recent_turns": {"type": "integer", "minimum": 0, "default": 4},
+        "interaction_timeout_seconds": {"type": "number", "minimum": 0, "default": 3600},
+        "max_tool_rounds": {"type": "integer", "minimum": 0, "default": 32},
+        "stop_saves_partial": {"type": "boolean", "default": true}
+      },
+      "default": {}
+    },
+    "mcpServer": {
+      "type": "object",
+      "required": ["name", "transport"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "transport": {"enum": ["stdio", "http"]},
+        "command": {"type": "string", "default": ""},
+        "arguments": {"type": "array", "items": {"type": "string"}, "default": []},
+        "url": {"type": "string", "default": ""},
+        "environment": {"type": "array", "items": {"$ref": "#/$defs/pair"}, "default": []},
+        "environment_allowlist": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "default": []},
+        "headers": {"type": "array", "items": {"$ref": "#/$defs/pair"}, "default": []},
+        "protocol_version": {"type": "string", "default": "2026-07-28"}
+      },
+      "allOf": [
+        {"if": {"properties": {"transport": {"const": "stdio"}}}, "then": {"required": ["command"], "properties": {"command": {"minLength": 1}}}},
+        {"if": {"properties": {"transport": {"const": "http"}}}, "then": {"required": ["url"], "properties": {"url": {"pattern": "^https?://"}}}}
+      ]
+    }
+  },
+  "examples": [
+    {
+      "workspace_root": ".",
+      "database_path": ".kairo/kernel.db",
+      "profiles": [],
+      "engine_options": {"authorization_mode": "manual"}
+    }
+  ]
+}
