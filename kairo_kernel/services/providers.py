@@ -115,13 +115,13 @@ class ProviderService:
         validation = _validate_profile(profile)
         if validation is not None:
             return KernelResult.failure(validation)
-        secret_check = await self._check_secret_ref(profile)
-        if secret_check is not None:
-            return KernelResult.failure(secret_check)
         async with self._lock:
             conflict = self._conflict(expected_revision, "provider.create")
             if conflict is not None:
                 return conflict
+            secret_check = await self._check_secret_ref(profile)
+            if secret_check is not None:
+                return KernelResult.failure(secret_check)
             if any(item.profile_id == profile.profile_id for item in self._snapshot.profiles):
                 return _provider_failure(ErrorCode.CONFLICT, "Provider profile already exists.", "provider.create")
             candidate = ProviderCatalogSnapshot(
@@ -139,13 +139,13 @@ class ProviderService:
         validation = _validate_profile(profile)
         if validation is not None:
             return KernelResult.failure(validation)
-        secret_check = await self._check_secret_ref(profile)
-        if secret_check is not None:
-            return KernelResult.failure(secret_check)
         async with self._lock:
             conflict = self._conflict(expected_revision, "provider.update")
             if conflict is not None:
                 return conflict
+            secret_check = await self._check_secret_ref(profile)
+            if secret_check is not None:
+                return KernelResult.failure(secret_check)
             if all(item.profile_id != profile.profile_id for item in self._snapshot.profiles):
                 return _provider_failure(ErrorCode.NOT_FOUND, "Provider profile was not found.", "provider.update")
             profiles = tuple(profile if item.profile_id == profile.profile_id else item for item in self._snapshot.profiles)
@@ -253,17 +253,21 @@ class ProviderService:
         return KernelResult.success(SecretRef(stored.value.secret_id))
 
     async def delete_secret(self, reference: SecretRef) -> KernelResult[bool]:
-        snapshot = await self.snapshot()
-        if any(profile.secret_id == str(reference.secret_id) for profile in snapshot.profiles):
-            return _bool_failure(ErrorCode.CONFLICT, "Secret is still referenced by a provider profile.", "provider.secret.delete")
-        deleted = await self._secrets.delete(reference.secret_id)
-        if not deleted.ok:
-            return _bool_failure(
-                deleted.error.code if deleted.error is not None else ErrorCode.CONFIG_PERSISTENCE_FAILED,
-                "Secret could not be deleted.",
-                "provider.secret.delete",
-            )
-        return deleted
+        async with self._lock:
+            if any(profile.secret_id == str(reference.secret_id) for profile in self._snapshot.profiles):
+                return _bool_failure(
+                    ErrorCode.CONFLICT,
+                    "Secret is still referenced by a provider profile.",
+                    "provider.secret.delete",
+                )
+            deleted = await self._secrets.delete(reference.secret_id)
+            if not deleted.ok:
+                return _bool_failure(
+                    deleted.error.code if deleted.error is not None else ErrorCode.CONFIG_PERSISTENCE_FAILED,
+                    "Secret could not be deleted.",
+                    "provider.secret.delete",
+                )
+            return deleted
 
     async def _check_secret_ref(self, profile: ProviderProfile) -> KernelError | None:
         if not profile.secret_id:

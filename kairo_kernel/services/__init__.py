@@ -7,7 +7,16 @@ from kairo_kernel.services.capabilities import (
     CapabilityService,
     default_capabilities,
 )
-from kairo_kernel.services.configuration import ConfigurationService
+from kairo_kernel.services.configuration import (
+    ConfigBackup,
+    ConfigChange,
+    ConfigField,
+    ConfigPatch,
+    ConfigSchema,
+    ConfigValueKind,
+    ConfigurationParticipant,
+    ConfigurationService,
+)
 from kairo_kernel.services.conversations import ConversationService
 from kairo_kernel.services.diagnostics import (
     DiagnosticCheck,
@@ -31,15 +40,39 @@ from kairo_kernel.services.observability import (
     redact_fields,
     redact_text,
 )
-from kairo_kernel.services.providers import ProviderService
+from kairo_kernel.services.providers import (
+    InMemoryProviderCatalog,
+    ProviderCatalogRepository,
+    ProviderCatalogSnapshot,
+    ProviderProbeResult,
+    ProviderRoleMapping,
+    ProviderService,
+    SecretRef,
+    profile_with_secret,
+)
 from kairo_kernel.services.sessions import SessionService
-from kairo_kernel.services.workspaces import WorkspaceService
+from kairo_kernel.services.workspaces import (
+    InMemoryWorkspaceBookmarks,
+    WorkspaceBookmark,
+    WorkspaceBookmarkRepository,
+    WorkspaceParticipant,
+    WorkspacePreview,
+    WorkspaceService,
+    WorkspaceState,
+)
 
 __all__ = [
     "Capability",
     "CapabilityMatrix",
     "CapabilityReporterPort",
     "CapabilityService",
+    "ConfigBackup",
+    "ConfigChange",
+    "ConfigField",
+    "ConfigPatch",
+    "ConfigSchema",
+    "ConfigValueKind",
+    "ConfigurationParticipant",
     "ConfigurationService",
     "ConversationService",
     "DiagnosticCheck",
@@ -47,21 +80,34 @@ __all__ = [
     "DiagnosticProbePort",
     "DiagnosticReport",
     "DiagnosticService",
+    "InMemoryProviderCatalog",
     "InMemoryStructuredSink",
+    "InMemoryWorkspaceBookmarks",
     "McpProbePort",
     "MemoryService",
     "OpenTelemetryAdapter",
     "OpenTelemetryBackend",
     "ProbeResult",
+    "ProviderCatalogRepository",
+    "ProviderCatalogSnapshot",
     "ProviderHealthPort",
     "ProviderProbePort",
     "ProviderProfileProbe",
+    "ProviderProbeResult",
+    "ProviderRoleMapping",
     "ProviderService",
+    "SecretRef",
     "SessionService",
     "StructuredObservability",
     "StructuredSink",
+    "WorkspaceBookmark",
+    "WorkspaceBookmarkRepository",
+    "WorkspaceParticipant",
+    "WorkspacePreview",
     "WorkspaceService",
+    "WorkspaceState",
     "default_capabilities",
+    "profile_with_secret",
     "redact_fields",
     "redact_text",
 ]

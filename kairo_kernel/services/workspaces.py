@@ -177,22 +177,23 @@ class WorkspaceService:
                 if not validated.ok:
                     return _copy_failure(validated, "workspace.move")
                 old = WorkspaceRecord(lease.snapshot.root, lease.snapshot.revision)
-                candidate = WorkspaceRecord(resolved, old.revision + 1, old.root)
+                assert validated.value is not None
+                candidate = WorkspaceRecord(validated.value.root, old.revision + 1, old.root)
                 applied: list[WorkspaceParticipant] = []
-                persisted = False
+                persistence_attempted = False
                 try:
+                    persistence_attempted = True
                     persisted_result = await self._repository.apply(candidate)
                     if not persisted_result.ok:
                         raise _TransactionFailure(persisted_result.error)
-                    persisted = True
                     for participant in self._participants:
-                        await participant.apply_workspace(candidate)
                         applied.append(participant)
+                        await participant.apply_workspace(candidate)
                     snapshot = await self._leases.update(lease, candidate.root)
                     bookmarks = await self._bookmarks.list()
                     return KernelResult.success(WorkspaceState(snapshot.root, snapshot.revision, bookmarks))
                 except Exception as exc:
-                    rollback_ok = await self._rollback_move(old, tuple(applied), persisted)
+                    rollback_ok = await self._rollback_move(old, tuple(applied), persistence_attempted)
                     if not rollback_ok:
                         await self._mark_degraded("Workspace rollback failed.")
                         return _failure(
@@ -252,13 +253,13 @@ class WorkspaceService:
                 new_bookmarks = mutate(old_bookmarks)
                 old = WorkspaceRecord(lease.snapshot.root, lease.snapshot.revision)
                 candidate = WorkspaceRecord(old.root, old.revision + 1, old.root)
-                persisted = False
+                persistence_attempted = False
                 bookmark_changed = False
                 try:
+                    persistence_attempted = True
                     result = await self._repository.apply(candidate)
                     if not result.ok:
                         raise _TransactionFailure(result.error)
-                    persisted = True
                     await self._bookmarks.replace(new_bookmarks)
                     bookmark_changed = True
                     snapshot = await self._leases.update(lease, old.root)
@@ -270,7 +271,7 @@ class WorkspaceService:
                             await self._bookmarks.replace(old_bookmarks)
                         except Exception:
                             rollback_ok = False
-                    if persisted:
+                    if persistence_attempted:
                         restored = await self._repository.rollback(old)
                         rollback_ok = rollback_ok and restored.ok
                     if not rollback_ok:
@@ -304,7 +305,7 @@ class WorkspaceService:
         self,
         old: WorkspaceRecord,
         applied: tuple[WorkspaceParticipant, ...],
-        persisted: bool,
+        persistence_attempted: bool,
     ) -> bool:
         ok = True
         for participant in reversed(applied):
@@ -312,7 +313,7 @@ class WorkspaceService:
                 await participant.rollback_workspace(old)
             except Exception:
                 ok = False
-        if persisted:
+        if persistence_attempted:
             restored = await self._repository.rollback(old)
             ok = ok and restored.ok
         return ok

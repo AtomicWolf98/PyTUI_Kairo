@@ -178,8 +178,10 @@ class ConfigurationService:
         return json.dumps(thaw_json(snapshot.values), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
     async def backup(self) -> KernelResult[ConfigBackup]:
-        snapshot = await self._leases.snapshot()
-        saved = await self._repository.save(snapshot, create_backup=True)
+        lease = await self._leases.read()
+        async with lease:
+            snapshot = lease.snapshot
+            saved = await self._repository.save(snapshot, create_backup=True)
         if not saved.ok:
             return KernelResult.failure(
                 KernelError(
@@ -211,7 +213,14 @@ class ConfigurationService:
                 candidate = ConfigSnapshot(old.revision + 1, restored.value.values, redacted=False)
                 validation = self._validate(candidate.values, candidate.revision)
                 if not validation.ok:
-                    await self._repository.restore(old.revision)
+                    rollback = await self._repository.restore(old.revision)
+                    if not rollback.ok:
+                        await self._mark_degraded("Configuration rollback failed.")
+                        return _config_failure(
+                            ErrorCode.KERNEL_DEGRADED,
+                            "Configuration restore failed and recovery was incomplete.",
+                            "config.restore",
+                        )
                     return validation
                 return await self._commit_locked(lease, old, candidate, "config.restore")
 
@@ -250,19 +259,17 @@ class ConfigurationService:
         operation: str,
     ) -> KernelResult[ConfigSnapshot]:
         applied: list[ConfigurationParticipant] = []
-        persisted = False
         try:
             saved = await self._repository.save(candidate, create_backup=True)
             if not saved.ok:
                 raise _ConfigTransactionFailure(saved.error)
-            persisted = True
             for participant in self._participants:
-                await participant.apply_configuration(candidate)
                 applied.append(participant)
+                await participant.apply_configuration(candidate)
             await self._leases.update(lease, candidate)
             return KernelResult.success(self._redact(candidate))
         except Exception as exc:
-            rollback_ok = await self._rollback(old, tuple(applied), persisted)
+            rollback_ok = await self._rollback(old, tuple(applied))
             if not rollback_ok:
                 await self._mark_degraded("Configuration rollback failed.")
                 return _config_failure(
@@ -283,7 +290,6 @@ class ConfigurationService:
         self,
         old: ConfigSnapshot,
         applied: tuple[ConfigurationParticipant, ...],
-        persisted: bool,
     ) -> bool:
         ok = True
         for participant in reversed(applied):
@@ -291,9 +297,8 @@ class ConfigurationService:
                 await participant.rollback_configuration(old)
             except Exception:
                 ok = False
-        if persisted:
-            restored = await self._repository.restore(old.revision)
-            ok = ok and restored.ok
+        restored = await self._repository.restore(old.revision)
+        ok = ok and restored.ok
         return ok
 
     async def _mark_degraded(self, reason: str) -> None:
