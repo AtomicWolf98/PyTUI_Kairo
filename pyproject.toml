@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "kairo-kernel"
 dynamic = ["version"]
 description = "Frontend-neutral kernel for the Kairo agent"
-readme = "README.md"
+readme = "docs/kernel/index.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
