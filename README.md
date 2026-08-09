@@ -1,10 +1,16 @@
-﻿﻿# Kairo
+﻿# Kairo
 
-Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, runtime configuration panels, and local config-first key management.
+Kairo is a terminal-native AI coding agent. Since 0.4.0a2 it ships as two packages: `kairo-kernel` (frontend-neutral kernel: kernel API 1.1, sessions, workspace review, context management, provider profiles, MCP, and config/change-event streams) and `kairo-tui` (the Textual frontend).
 
-Kairo 是一个终端原生 AI coding agent，提供 Textual 全屏 TUI、plain 兼容模式、会话持久化、workspace 审查、上下文管理、OpenAI-compatible 模型配置、运行时配置面板，以及本地配置优先的 key 管理。
+Kairo 是一个终端原生 AI coding agent。自 0.4.0a2 起拆分为两个包：`kairo-kernel`（前端无关内核：kernel API 1.1、会话、workspace 审查、上下文管理、provider 配置、MCP，以及配置/变更事件流）与 `kairo-tui`（Textual 前端）。
 
-Current version / 当前版本：**0.3.3**
+Current version / 当前版本：**0.4.0a2**
+
+## Two-Package Layout / 双包结构
+
+`kairo-tui [WORKSPACE]` launches the Textual interface over the `kairo-kernel` public API. Options: `--config PATH` (global config-v1.json), `--theme NAME`, `--reduced-motion`, `--safe-mode`, and `--headless-smoke`. The legacy `kairo --tui` entry jumps to kairo-tui 0.4.0a2 and prints an install hint (`python -m pip install kairo-tui`) when the package is missing. Legacy `config.json` and sessions are not migrated in this phase.
+
+`kairo-tui [WORKSPACE]` 通过 `kairo-kernel` 公共 API 启动 Textual 界面。选项：`--config PATH`（全局 config-v1.json）、`--theme NAME`、`--reduced-motion`、`--safe-mode` 和 `--headless-smoke`。旧入口 `kairo --tui` 跳转到 kairo-tui 0.4.0a2；未安装时打印安装提示（`python -m pip install kairo-tui`）。本阶段不迁移旧版 `config.json` 与会话。
 
 ## WebUI Preview / WebUI 预览
 
@@ -28,7 +34,7 @@ Kairo 0.3.3 对可选本地浏览器工作台进行稳定性收口：更安全�
 
 ## Highlights / 核心能力
 
-- Animated Textual TUI with Kai mascot, reduced-motion mode, and plain terminal fallback.
+- Animated Textual TUI (`kairo-tui`) with reduced-motion mode; the legacy `kairo` command keeps the plain terminal fallback.
 - Slash command palette reduced to 18 workflow-oriented commands in 0.2.7-beta.
 - `/settings` manages providers, models, API keys, model roles, config validation, backup, restore, import, and export.
 - `/sessions` manages persisted conversations, including switch, search, rename, delete, export, and reveal path.
@@ -38,7 +44,7 @@ Kairo 0.3.3 对可选本地浏览器工作台进行稳定性收口：更安全�
 - Strict OpenAI-compatible message packing keeps provider payloads to a single leading `system` message.
 - Esc stops the current Textual generation cooperatively; plain mode still uses `Ctrl+C`.
 
-- Textual 动态 TUI、Kai 吉祥物、低动态模式和 plain 终端 fallback。
+- 动态 Textual TUI（`kairo-tui`）与低动态模式；旧版 `kairo` 命令保留 plain 终端 fallback。
 - 0.2.7-beta 将 slash 命令收敛为 18 条工作流入口。
 - `/settings` 管理 provider、model、API key、模型角色、配置校验、备份、恢复、导入和导出。
 - `/sessions` 管理持久化会话，包括切换、搜索、重命名、删除、导出和显示路径。

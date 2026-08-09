@@ -1,110 +1,95 @@
-"""Validate Kairo release metadata and wheel payloads."""
+"""Validate Kairo 0.4.0a2 release metadata and wheel payloads (kernel + TUI)."""
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
+import tomllib
 import zipfile
 from email.parser import Parser
 from pathlib import Path
 
-import tomllib
-
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE = "0.4.0a2"
+
+# distribution name -> (version-module source, pyproject, expected wheel prefix)
+PACKAGES = {
+    "kairo-kernel": (ROOT / "kairo_kernel" / "_version.py",
+                     ROOT / "pyproject.toml",
+                     "kairo_kernel-0.4.0a2-py3-none-any.whl"),
+    "kairo-tui": (ROOT / "frontends" / "tui" / "kairo_tui" / "_version.py",
+                  ROOT / "frontends" / "tui" / "pyproject.toml",
+                  "kairo_tui-0.4.0a2-py3-none-any.whl"),
+}
 
 
-def source_version() -> str:
-    text = (ROOT / "agent" / "_version.py").read_text(encoding="utf-8")
-    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+def source_version() -> str:            # kernel
+    return _module_version(PACKAGES["kairo-kernel"][0])
+
+
+def tui_version() -> str:              # TUI
+    return _module_version(PACKAGES["kairo-tui"][0])
+
+
+def _module_version(path: Path) -> str:
+    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']',
+                      path.read_text(encoding="utf-8"), re.MULTILINE)
     if not match:
-        raise RuntimeError("agent/_version.py does not define __version__")
+        raise RuntimeError(f"{path} does not define __version__")
     return match.group(1)
 
 
 def check_source_tree() -> str:
-    version = source_version()
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dynamic = pyproject["project"].get("dynamic", [])
-    version_attr = pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"]
-    if "version" not in dynamic or version_attr != "agent._version.__version__":
-        raise RuntimeError("pyproject.toml must derive its version from agent._version.__version__")
-
-    for relative in ("web/package.json", "web/package-lock.json"):
-        payload = json.loads((ROOT / relative).read_text(encoding="utf-8"))
-        if payload["version"] != version:
-            raise RuntimeError(f"{relative} version {payload['version']!r} does not match {version!r}")
-
-    static = ROOT / "agent" / "web" / "static"
-    if not (static / "index.html").is_file():
-        raise RuntimeError("agent/web/static/index.html is missing; run npm --prefix web run build")
-    metadata = json.loads((static / "version.json").read_text(encoding="utf-8"))
-    if metadata.get("version") != version:
-        raise RuntimeError("built WebUI version does not match the package version")
-    _check_html_assets((static / "index.html").read_text(encoding="utf-8"), static)
-    return version
+    versions = {name: _module_version(version) for name, (version, _, _) in PACKAGES.items()}
+    if set(versions.values()) != {RELEASE}:
+        raise RuntimeError(f"expected version {RELEASE}; got {versions}")
+    expected_attr = {
+        "kairo-kernel": "kairo_kernel._version.__version__",
+        "kairo-tui": "kairo_tui._version.__version__",
+    }
+    for name, (_, pyproject, _) in PACKAGES.items():
+        project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        dynamic = project["project"].get("dynamic", [])
+        attr = project["tool"]["setuptools"]["dynamic"]["version"]["attr"]
+        if "version" not in dynamic or attr != expected_attr[name]:
+            raise RuntimeError(f"{name} pyproject must derive its version from {expected_attr[name]}")
+    return RELEASE
 
 
-def check_wheel(wheel: Path, expected_version: str) -> None:
+def check_wheel(wheel: Path, expected_version: str, namespace: str) -> None:
+    """The wheel must carry ONLY ``namespace/`` + its own ``.dist-info/``."""
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
-        static_prefix = "agent/web/static/"
-        index_name = f"{static_prefix}index.html"
-        version_name = f"{static_prefix}version.json"
-        if index_name not in names or version_name not in names:
-            raise RuntimeError(f"{wheel.name} does not contain packaged WebUI entry points")
-
-        metadata_names = [name for name in names if name.endswith(".dist-info/METADATA")]
-        if len(metadata_names) != 1:
+        dist_infos = [name for name in names if name.endswith(".dist-info/METADATA")]
+        if len(dist_infos) != 1:
             raise RuntimeError(f"{wheel.name} has an unexpected METADATA layout")
-        package_metadata = Parser().parsestr(archive.read(metadata_names[0]).decode("utf-8"))
-        if package_metadata.get("Version") != expected_version:
+        metadata = Parser().parsestr(archive.read(dist_infos[0]).decode("utf-8"))
+        if metadata.get("Version") != expected_version:
             raise RuntimeError(
-                f"{wheel.name} metadata version {package_metadata.get('Version')!r} "
-                f"does not match {expected_version!r}"
+                f"{wheel.name} metadata version {metadata.get('Version')!r} does not match {expected_version!r}"
             )
-
-        static_metadata = json.loads(archive.read(version_name).decode("utf-8"))
-        if static_metadata.get("version") != expected_version:
-            raise RuntimeError(f"{wheel.name} contains mismatched WebUI release metadata")
-
-        html = archive.read(index_name).decode("utf-8")
-        referenced = _asset_references(html)
-        expected_assets = {f"agent/web/static{asset}" for asset in referenced}
-        missing = sorted(expected_assets - names)
-        if missing:
-            raise RuntimeError(f"{wheel.name} is missing referenced assets: {', '.join(missing)}")
-        packaged_assets = {name for name in names if name.startswith(f"{static_prefix}assets/") and not name.endswith("/")}
-        stale = sorted(packaged_assets - expected_assets)
-        if stale:
-            raise RuntimeError(f"{wheel.name} contains stale unreferenced assets: {', '.join(stale)}")
-
-
-def _asset_references(html: str) -> list[str]:
-    return sorted(set(re.findall(r'(?:src|href)=["\'](/assets/[^"\']+)["\']', html)))
-
-
-def _check_html_assets(html: str, static: Path) -> None:
-    referenced = _asset_references(html)
-    if not referenced:
-        raise RuntimeError("built WebUI does not reference any hashed assets")
-    missing = [asset for asset in referenced if not (static / asset.lstrip("/")).is_file()]
-    if missing:
-        raise RuntimeError(f"built WebUI is missing referenced assets: {', '.join(missing)}")
+        allowed = (f"{namespace}/", f"{namespace}-{expected_version}.dist-info/")
+        offenders = sorted(name for name in names if not name.startswith(allowed))
+        if offenders:
+            raise RuntimeError(f"{wheel.name} contains unexpected entries: {', '.join(offenders)}")
+        for forbidden in ("agent/", "tools/", "web/", "tests/"):
+            if any(name.startswith(forbidden) for name in names):
+                raise RuntimeError(f"{wheel.name} must not ship legacy {forbidden.strip('/')} content")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--wheel", type=Path)
+    parser.add_argument("--wheel", action="append", type=Path)
     args = parser.parse_args(argv)
     try:
         version = check_source_tree()
-        if args.wheel:
-            check_wheel(args.wheel.resolve(), version)
+        for wheel in args.wheel or []:
+            namespace = wheel.name.split("-", 1)[0]
+            check_wheel(wheel.resolve(), version, namespace)
     except (OSError, KeyError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
         print(f"release-check: {exc}", file=sys.stderr)
         return 1
-    print(f"release-check: Kairo {version} source and payload metadata are consistent")
+    print(f"release-check: Kairo {version} ({' + '.join(sorted(PACKAGES))}) sources and wheel payloads are consistent")
     return 0
 
 

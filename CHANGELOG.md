@@ -1,4 +1,39 @@
-﻿﻿# Changelog / 更新记录
+﻿# Changelog / 更新记录
+
+## [0.4.0a2]
+
+### Added / New
+
+- Kernel API **1.1**：新增 `preferences` / `commands` / `active_turns` / `capabilities` 门面与 `workspace tree|changed_files|diff`、MCP 类型化调用（`call_tool` / `read_resource` / `render_prompt`）。
+  Kernel API **1.1**: adds the `preferences`, `commands`, `active_turns`, and `capabilities` façades, `workspace tree|changed_files|diff`, and typed MCP calls (`call_tool` / `read_resource` / `render_prompt`).
+- 变更事件：providers/memory/config/workspace/skills 变更均通过 `kernel.events()` 广播；engine 在文件修改后发出 `WORKSPACE_CHANGED`。
+  Change events: provider, memory, config, workspace, and skill changes broadcast over `kernel.events()`; the engine emits `WORKSPACE_CHANGED` after file-modifying tool calls.
+- `KernelConfigStore` 以原子写维护版本化全局配置文档；`DocumentProviderCatalog` 持久化 profile/role 变更。
+  `KernelConfigStore` maintains the versioned global config document with atomic writes; `DocumentProviderCatalog` persists profile/role mutations.
+- engine 支持每轮覆盖 `authorization_mode`（`ENABLE_AUTO` / `ENABLE_YOLO` 交互动作直通到 ToolGate，由 `AuthorizationPolicy` 强制执行）。
+  The engine resolves per-turn `authorization_mode` overrides (`ENABLE_AUTO` / `ENABLE_YOLO` interaction actions pass through to the ToolGate, enforced by `AuthorizationPolicy`).
+- `KernelDependencies.tools` / `provider_catalog` 接受嵌入方覆盖；factory 将本地与 MCP 工具组合为 `CompositeToolRegistry`，`ProviderRouter` 支持混合 provider kinds。
+  `KernelDependencies.tools` / `provider_catalog` accept embedder overrides; the factory composes local and MCP tools into a `CompositeToolRegistry`, and the `ProviderRouter` supports mixed provider kinds.
+
+### Fixed / 修复
+
+- 公共 MCP 调用统一走 ToolGate：manual/auto 需人工批准、yolo 直通，调用带超时且断连/超时均失败关闭；工作区移动在有 turn 运行时返回可重试的 `KERNEL_BUSY`，工作区修订号仅在写/执行工具成功后递增。
+  Public MCP calls now pass through the ToolGate (manual/auto require approval, yolo executes directly, every call is timeout-bounded and fails closed); workspace moves return retryable `KERNEL_BUSY` while a turn is active, and the workspace revision advances only on write/execute tool success.
+- `KernelConfigStore.update(expected_revision, transform)` 以单进程锁 + 乐观修订号协调配置写入；`contracts.commands` / `contracts.preferences` 与 `ports.PreferencesPort` 进入公共导出，`PreferencesPatch.clear_profile_id` 可显式清除 profile 覆盖。
+  `KernelConfigStore.update(expected_revision, transform)` coordinates config writes with a single-process lock and optimistic revisions; `contracts.commands`, `contracts.preferences` and `ports.PreferencesPort` are public exports, and `PreferencesPatch.clear_profile_id` explicitly clears the profile override.
+
+### TUI / 发行 (TUI / Release)
+
+- 新增独立 `kairo-tui` 0.4.0a2 包与 `kairo-tui` CLI（Textual 前端，依赖 `kairo-kernel==0.4.0a2`）。
+  Adds the standalone `kairo-tui` 0.4.0a2 package and `kairo-tui` CLI (Textual frontend, depends on `kairo-kernel==0.4.0a2`).
+- 旧入口 `kairo --tui` 兼容跳转到 kairo-tui 0.4.0a2；未安装时打印安装提示（`python -m pip install kairo-tui`），绝不静默回退 plain。
+  The legacy `kairo --tui` entry jumps to kairo-tui 0.4.0a2; a missing install prints an install hint (`python -m pip install kairo-tui`) — never a silent plain fallback.
+- 移除旧 `agent/ui/` Textual 实现，保留纯 `agent/tui_widgets.py`。
+  The old `agent/ui/` Textual implementation is removed; the plain `agent/tui_widgets.py` is kept.
+- 新增官方尺寸矩阵（80x24 / 100x30 / 140x40 / 200x50）、Textual Pilot 驱动测试与确定性 `--headless-smoke` 冒烟测试。
+  Adds the official size matrix (80x24 / 100x30 / 140x40 / 200x50), Textual Pilot-driven tests, and the deterministic `--headless-smoke` smoke check.
+- wheel 拆分：`kairo_kernel-0.4.0a2`（仅内核）与 `kairo_tui-0.4.0a2`（仅 TUI）两种 payload 分开构建；两者均为本地产物，不发布到 PyPI。
+  Wheels are split: `kairo_kernel-0.4.0a2` (kernel-only) and `kairo_tui-0.4.0a2` (TUI-only) payloads build separately; both are local-only and not published to PyPI.
 
 ## [0.3.3]
 
