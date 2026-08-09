@@ -9,7 +9,7 @@ from kairo_kernel.contracts.enums import AuthorizationMode, LifecycleState
 from kairo_kernel.contracts.identifiers import KernelId, ProfileId, SessionId, TurnId
 from kairo_kernel.contracts.json import Contract
 
-KERNEL_API_VERSION = "1.0"
+KERNEL_API_VERSION = "1.1"
 EVENT_SCHEMA_VERSION = 1
 
 
@@ -19,6 +19,7 @@ class KernelCapabilities(Contract):
     event_schema_version: int = EVENT_SCHEMA_VERSION
     content_types: tuple[str, ...] = ("text", "reasoning", "image", "audio", "file", "resource", "tool_call", "tool_result")
     features: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

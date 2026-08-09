@@ -2,6 +2,7 @@
 
 from kairo_kernel.ports.control import CancellationToken, EventPort, EventSubscription, KernelLifecyclePort, TurnPort
 from kairo_kernel.ports.interactions import InteractionPort
+from kairo_kernel.ports.preferences import PreferencesPort
 from kairo_kernel.ports.providers import ProviderPort
 from kairo_kernel.ports.repositories import ConfigRepositoryPort, SessionRepositoryPort, WorkspaceRepositoryPort
 from kairo_kernel.ports.services import MemoryPort, ObservabilityPort, PromptPort, ResourcePort, SecretPort
@@ -17,6 +18,7 @@ __all__ = [
     "KernelLifecyclePort",
     "MemoryPort",
     "ObservabilityPort",
+    "PreferencesPort",
     "PromptPort",
     "ProviderPort",
     "ResourcePort",

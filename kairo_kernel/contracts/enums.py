@@ -112,6 +112,8 @@ class EventType(ContractEnum):
     CONFIG_CHANGED = "config_changed"
     WORKSPACE_CHANGED = "workspace_changed"
     SKILLS_CHANGED = "skills_changed"
+    PROVIDER_CHANGED = "provider_changed"
+    MEMORY_CHANGED = "memory_changed"
     NOTICE = "notice"
 
 

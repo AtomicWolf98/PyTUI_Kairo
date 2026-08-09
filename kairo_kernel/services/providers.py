@@ -103,9 +103,35 @@ class ProviderService:
             return KernelResult.failure(validation)
         return KernelResult.success(service)
 
+    async def load_from_repository(self) -> KernelResult[ProviderCatalogSnapshot]:
+        """Reload the persisted catalog, validating before swapping the live snapshot."""
+
+        loaded = await self._repository.load()
+        if not loaded.ok or loaded.value is None:
+            error = loaded.error
+            return KernelResult.failure(
+                KernelError(
+                    error.code if error is not None else ErrorCode.CONFIG_PERSISTENCE_FAILED,
+                    error.message if error is not None else "Provider catalog could not be loaded.",
+                    error.retryable if error is not None else False,
+                    "provider.open",
+                )
+            )
+        validation = _validate_catalog(loaded.value)
+        if validation is not None:
+            return KernelResult.failure(validation)
+        async with self._lock:
+            self._snapshot = loaded.value
+        return KernelResult.success(loaded.value)
+
     async def snapshot(self) -> ProviderCatalogSnapshot:
         async with self._lock:
             return self._snapshot
+
+    def register_probe(self, provider: str, probe: ProviderProbePort) -> None:
+        """Attach a probe for a provider kind after construction (composition root use)."""
+
+        self._probes[provider] = probe
 
     async def create_profile(
         self,

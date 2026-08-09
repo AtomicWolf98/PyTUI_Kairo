@@ -113,13 +113,13 @@ def _field_value(field: Field[object], value: object) -> object:
 
 
 def _encode(value: object) -> JsonValue:
+    if isinstance(value, Enum):
+        name = f"{type(value).__module__}.{type(value).__qualname__}"
+        return JsonObject.from_pairs(("$enum", name), ("value", cast(str, value.value)))
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, datetime):
         return JsonObject.from_pairs(("$datetime", value.isoformat()))
-    if isinstance(value, Enum):
-        name = f"{type(value).__module__}.{type(value).__qualname__}"
-        return JsonObject.from_pairs(("$enum", name), ("value", cast(str, value.value)))
     if isinstance(value, Contract):
         if not is_dataclass(value):
             raise TypeError(f"Contract {type(value).__name__} must be a dataclass.")

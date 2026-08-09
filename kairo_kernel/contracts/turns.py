@@ -8,6 +8,7 @@ from datetime import datetime
 from kairo_kernel.contracts.content import Message
 from kairo_kernel.contracts.enums import TurnPhase, TurnStatus
 from kairo_kernel.contracts.identifiers import SessionId, TurnId
+from kairo_kernel.contracts.interactions import InteractionRequest
 from kairo_kernel.contracts.json import Contract, JsonObject
 
 
@@ -61,4 +62,14 @@ class CancelReceipt(Contract):
     turn_id: TurnId
     requested: bool
     already_terminal: bool = False
+
+
+@dataclass(frozen=True)
+class ActiveTurn(Contract):
+    turn_id: TurnId
+    session_id: SessionId
+    status: TurnStatus
+    phase: TurnPhase | None = None
+    started_at: datetime | None = None
+    pending_interaction: InteractionRequest | None = None
 

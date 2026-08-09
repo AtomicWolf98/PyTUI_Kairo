@@ -8,6 +8,8 @@ import kairo_kernel
 BANNED_ROOTS = {
     "agent",
     "fastapi",
+    "keyring",
+    "platformdirs",
     "rich",
     "textual",
     "tools",

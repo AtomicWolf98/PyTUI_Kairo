@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from kairo_kernel.contracts.enums import ErrorCode
+from kairo_kernel.contracts.identifiers import SessionId, TurnId
 from kairo_kernel.contracts.support import WorkspaceRecord
 from kairo_kernel.errors import KernelError, KernelResult
 from kairo_kernel.runtime.workspace import WorkspaceLeaseManager
@@ -80,6 +81,7 @@ def service_for(
     participants: tuple[WorkspaceParticipant, ...] = (),
     degraded: FakeDegraded | None = None,
     preview_limit: int = 8,
+    active_turns: object | None = None,
 ) -> tuple[WorkspaceService, FakeWorkspaceRepository]:
     repository = FakeWorkspaceRepository(root)
     service = WorkspaceService(
@@ -88,6 +90,7 @@ def service_for(
         bookmarks=bookmarks,
         participants=participants,
         degraded=degraded,
+        active_turns=active_turns,
         preview_limit_bytes=preview_limit,
         preview_child_limit=2,
     )
@@ -139,6 +142,27 @@ async def test_move_uses_bookmark_and_turn_snapshot_isolation(tmp_path: Path) ->
     assert moved.value.root == str(target.resolve())
     assert moved.value.revision == 1
     assert repository.record == WorkspaceRecord(str(target.resolve()), 1, str(tmp_path.resolve()))
+
+
+async def test_move_returns_busy_while_turns_active(tmp_path: Path) -> None:
+    target = tmp_path / "next"
+    target.mkdir()
+    active: tuple[tuple[SessionId, TurnId], ...] = ()
+
+    async def fake_active_turns() -> tuple[tuple[SessionId, TurnId], ...]:
+        return active
+
+    service, _ = service_for(tmp_path, active_turns=fake_active_turns)
+    active = ((SessionId("session-1"), TurnId("turn-1")),)
+    busy = await service.move(str(target), 0)
+    assert busy.error is not None and busy.error.code is ErrorCode.KERNEL_BUSY
+    assert busy.error.retryable
+    assert (await service.snapshot()).root == str(tmp_path.resolve())  # unchanged
+
+    active = ()
+    moved = await service.move(str(target), 0)
+    assert moved.ok and moved.value is not None
+    assert moved.value.root == str(target.resolve())
 
 
 async def test_move_rolls_back_and_rollback_failure_marks_degraded(tmp_path: Path) -> None:

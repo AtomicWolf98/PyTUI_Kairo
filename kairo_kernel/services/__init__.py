@@ -7,6 +7,15 @@ from kairo_kernel.services.capabilities import (
     CapabilityService,
     default_capabilities,
 )
+from kairo_kernel.services.commands import CommandService, CommandServices
+from kairo_kernel.services.config_document import (
+    CONFIG_DOCUMENT_VERSION,
+    DocumentProviderCatalog,
+    KernelConfigDocument,
+    KernelConfigStore,
+    document_from_json,
+    document_to_json,
+)
 from kairo_kernel.services.configuration import (
     ConfigBackup,
     ConfigChange,
@@ -40,6 +49,7 @@ from kairo_kernel.services.observability import (
     redact_fields,
     redact_text,
 )
+from kairo_kernel.services.preferences import PreferencesService
 from kairo_kernel.services.providers import (
     InMemoryProviderCatalog,
     ProviderCatalogRepository,
@@ -52,20 +62,30 @@ from kairo_kernel.services.providers import (
 )
 from kairo_kernel.services.sessions import SessionService
 from kairo_kernel.services.workspaces import (
+    ChangedFile,
+    ChangedFiles,
     InMemoryWorkspaceBookmarks,
     WorkspaceBookmark,
     WorkspaceBookmarkRepository,
+    WorkspaceDiff,
+    WorkspaceEntry,
     WorkspaceParticipant,
     WorkspacePreview,
     WorkspaceService,
     WorkspaceState,
+    WorkspaceTree,
 )
 
 __all__ = [
+    "CONFIG_DOCUMENT_VERSION",
     "Capability",
     "CapabilityMatrix",
     "CapabilityReporterPort",
     "CapabilityService",
+    "ChangedFile",
+    "ChangedFiles",
+    "CommandService",
+    "CommandServices",
     "ConfigBackup",
     "ConfigChange",
     "ConfigField",
@@ -80,13 +100,17 @@ __all__ = [
     "DiagnosticProbePort",
     "DiagnosticReport",
     "DiagnosticService",
+    "DocumentProviderCatalog",
     "InMemoryProviderCatalog",
     "InMemoryStructuredSink",
     "InMemoryWorkspaceBookmarks",
+    "KernelConfigDocument",
+    "KernelConfigStore",
     "McpProbePort",
     "MemoryService",
     "OpenTelemetryAdapter",
     "OpenTelemetryBackend",
+    "PreferencesService",
     "ProbeResult",
     "ProviderCatalogRepository",
     "ProviderCatalogSnapshot",
@@ -102,11 +126,16 @@ __all__ = [
     "StructuredSink",
     "WorkspaceBookmark",
     "WorkspaceBookmarkRepository",
+    "WorkspaceDiff",
+    "WorkspaceEntry",
     "WorkspaceParticipant",
     "WorkspacePreview",
     "WorkspaceService",
     "WorkspaceState",
+    "WorkspaceTree",
     "default_capabilities",
+    "document_from_json",
+    "document_to_json",
     "profile_with_secret",
     "redact_fields",
     "redact_text",

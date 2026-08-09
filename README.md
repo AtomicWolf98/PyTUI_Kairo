@@ -1,4 +1,4 @@
-﻿# Kairo
+﻿﻿# Kairo
 
 Kairo is a terminal-native AI coding agent with an animated Textual TUI, plain terminal fallback, persisted sessions, workspace review, context management, OpenAI-compatible model profiles, runtime configuration panels, and local config-first key management.
 

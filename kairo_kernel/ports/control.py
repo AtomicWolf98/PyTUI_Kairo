@@ -6,7 +6,13 @@ from typing import Protocol
 
 from kairo_kernel.contracts.events import EventReplay, KernelEvent
 from kairo_kernel.contracts.identifiers import TurnId
-from kairo_kernel.contracts.lifecycle import KernelCapabilities, KernelStatus, ShutdownReport, ShutdownRequest
+from kairo_kernel.contracts.lifecycle import (
+    KernelCapabilities,
+    KernelStatus,
+    LifecycleState,
+    ShutdownReport,
+    ShutdownRequest,
+)
 from kairo_kernel.contracts.turns import CancelReceipt, TurnAccepted, TurnRequest, TurnResult, TurnSnapshot
 from kairo_kernel.errors import KernelResult
 
@@ -43,7 +49,7 @@ class TurnPort(Protocol):
 
 
 class KernelLifecyclePort(Protocol):
-    async def start(self) -> KernelResult[KernelStatus]: ...
+    async def start(self) -> KernelResult[LifecycleState]: ...
 
     async def status(self) -> KernelStatus: ...
 

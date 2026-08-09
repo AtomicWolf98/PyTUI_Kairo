@@ -11,7 +11,7 @@
     "kernel_id": {"type": "string", "minLength": 1},
     "sequence": {"type": "integer", "minimum": 1},
     "timestamp": {"$ref": "#/$defs/timestamp"},
-    "event_type": {"enum": ["lifecycle", "turn", "message", "tool", "interaction", "usage", "context", "session_changed", "config_changed", "workspace_changed", "skills_changed", "notice"]},
+    "event_type": {"enum": ["lifecycle", "turn", "message", "tool", "interaction", "usage", "context", "session_changed", "config_changed", "workspace_changed", "skills_changed", "provider_changed", "memory_changed", "notice"]},
     "payload": {"$ref": "#/$defs/payload"},
     "schema_version": {"const": 1},
     "turn_sequence": {"type": ["integer", "null"], "minimum": 1},
@@ -26,7 +26,7 @@
     {"if": {"properties": {"event_type": {"const": "tool"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/tool"}}}},
     {"if": {"properties": {"event_type": {"const": "interaction"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/interaction"}}}},
     {"if": {"properties": {"event_type": {"const": "usage"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/usage"}}}},
-    {"if": {"properties": {"event_type": {"enum": ["context", "session_changed", "config_changed", "workspace_changed", "skills_changed"]}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/change"}}}},
+    {"if": {"properties": {"event_type": {"enum": ["context", "session_changed", "config_changed", "workspace_changed", "skills_changed", "provider_changed", "memory_changed"]}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/change"}}}},
     {"if": {"properties": {"event_type": {"const": "notice"}}}, "then": {"properties": {"payload": {"$ref": "#/$defs/notice"}}}}
   ],
   "$defs": {

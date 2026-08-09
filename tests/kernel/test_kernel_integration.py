@@ -35,7 +35,7 @@ def _provider(*, block: bool = False) -> FakeProvider:
 
 
 def test_root_exports_are_stable() -> None:
-    assert KERNEL_API_VERSION == "1.0"
+    assert KERNEL_API_VERSION == "1.1"
     assert {"KairoKernel", "KernelConfig", "KernelDependencies", "build_kernel", "KERNEL_API_VERSION"} <= set(
         kairo_kernel.__all__
     )

@@ -15,7 +15,7 @@ boundaries.
 | `workspace_root` | required non-empty path; resolved during build |
 | `database_path` | `.kairo/kernel.db`; relative paths are rooted in the workspace; `:memory:` is supported |
 | `kernel_id` | generated when absent |
-| `package_version` | current distribution version (`0.4.0a1`) |
+| `package_version` | current distribution version (`0.4.0a2`) |
 | `profiles`, `provider_roles`, `default_profile_id` | immutable provider configuration |
 | `default_session_id` | none; otherwise permits `TurnRequest.session_id=None` |
 | `config_values`, `config_schema` | initial configuration service state |
@@ -38,6 +38,8 @@ boundaries.
 | `await kernel.cancel(turn_id, reason="")` | `KernelResult[CancelReceipt]` |
 | `await kernel.shutdown(ShutdownRequest | None)` | `KernelResult[ShutdownReport]`; successful shutdown is idempotent |
 | `await kernel.mark_degraded(reason)` | transitions to degraded and emits a lifecycle event |
+| `await kernel.active_turns()` | `tuple[ActiveTurn, ...]` snapshot of in-flight turns: id, session, status, phase, started_at, pending interaction |
+| `await kernel.capabilities()` | `KernelCapabilities` derived from the composed services; unavailable integrations are omitted from `features` and explained in `limitations` |
 
 Before `start`, reads and mutations return `kernel_not_running`. During stopping
 or after stop they return `kernel_closing`. In degraded state reads remain
@@ -87,12 +89,29 @@ Mutations use optimistic `expected_revision`. Failed runtime synchronization is
 rolled back; failed rollback marks the service and kernel degraded when wired to
 a degraded signal.
 
+### `kernel.preferences`
+
+- `snapshot()`, `patch(PreferencesPatch)` (mutation-gated, optimistic
+  `expected_revision`, emits a config change event)
+
+Runtime preferences seed from `KernelConfig.engine_options`; they are
+process-local and are not written back to the configuration document.
+
+### `kernel.commands`
+
+- `catalog()` and `parse(text)` are synchronous
+- `execute(parsed, session_id=None)` is fail-closed: outcomes carry typed
+  `KernelError` payloads instead of raising
+
+Mutating commands are lifecycle-gated per `KernelCommand.mutates`.
+
 ### `kernel.workspace`
 
 - `snapshot()`, `preview(relative_path=".")`
-- `move(target, expected_revision)`
+- `move(target, expected_revision)` — returns retryable `KERNEL_BUSY` while any turn is active
 - `save_bookmark(WorkspaceBookmark, expected_revision)`
 - `remove_bookmark(name, expected_revision)`
+- `tree(relative_path=".", limit=200)`, `changed_files()`, `diff(relative_path, max_bytes=65536)`
 
 Preview canonicalizes the path, rejects workspace/symlink escape, limits bytes
 and directory entries, and returns a frozen `WorkspacePreview`.
@@ -117,9 +136,17 @@ Trust is bound to a digest of the workspace skill directory.
 
 - synchronous `catalog()`
 - asynchronous `connect()` and `refresh()`
+- typed `call_tool(qualified_name, arguments)`, `read_resource(qualified_name)`, `render_prompt(qualified_name, arguments)`
 
-The façade exposes catalog management, not individual MCP tool/resource/prompt
-calls. Those operations currently exist on the underlying `McpClient`.
+MCP catalog tools are bridged into the engine tool registry via
+`CompositeToolRegistry`, so `kernel.tools.list()` includes MCP entries.
+
+All three MCP calls pass through the facade ToolGate: the runtime mode is
+resolved from preferences, external scope in manual/auto raises a
+`TOOL_APPROVAL` interaction (approved via `kernel.interactions.respond`;
+safe default reject), yolo executes directly, each call is bounded by
+`KernelConfig.mcp_call_timeout_seconds`, and timeout/disconnect fail closed
+as `RESOURCE_EXHAUSTED` (retryable) / `PROVIDER_CLIENT`.
 
 ### `kernel.diagnostics`, `kernel.tools`
 
@@ -138,3 +165,18 @@ probes are reported as `skipped`.
 
 Frontends should keep the last global event sequence, reconnect with that value,
 and refresh state if `EventReplay.gap` is true or `SubscriberOverflow` is raised.
+
+### Configuration document and provider persistence
+
+`KernelConfigStore(path)` (`kairo_kernel/services/config_document.py`) loads
+and atomically saves the versioned global config document
+(`KernelConfigDocument`: profiles, role routing, MCP servers, theme,
+keybindings, recent workspaces). The kernel resolves no platformdirs path —
+the embedding frontend chooses the file location.
+
+`store.update(expected_revision, transform)` mutates the document under a
+single-process lock and advances its persisted `revision`; stale writers
+receive `CONFLICT`.
+`DocumentProviderCatalog(store)` persists provider profile/role mutations
+through that document; the default factory catalog stays in-memory unless
+`KernelDependencies.provider_catalog` is supplied.

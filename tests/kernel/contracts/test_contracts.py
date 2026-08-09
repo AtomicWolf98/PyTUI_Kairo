@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+from kairo_kernel.contracts.commands import CommandArgument, CommandOutcome, KernelCommand, ParsedCommand
 from kairo_kernel.contracts.content import (
     AudioBlock,
     FileBlock,
@@ -78,6 +79,7 @@ from kairo_kernel.contracts.lifecycle import (
     ShutdownReport,
     ShutdownRequest,
 )
+from kairo_kernel.contracts.preferences import PreferencesPatch, PreferencesSnapshot
 from kairo_kernel.contracts.providers import (
     ProviderFailure,
     ProviderProfile,
@@ -258,12 +260,54 @@ def _specimens() -> tuple[Contract, ...]:
         KernelError(code=ErrorCode.INTERNAL, message="failed"),
         KernelResult.success(TurnAccepted(TurnId("turn-1"), SessionId("session-1"), NOW)),
     )
-    return content + provider + tools + lifecycle + turns + interactions + support + event_payloads + events + (EventReplay(events, 1, len(events)),) + errors
+    commands = (
+        CommandArgument("path", required=True, greedy=True),
+        KernelCommand(
+            "/run",
+            "Run a task",
+            "Run a task with one argument",
+            (CommandArgument("path", required=True),),
+            mutates=True,
+            needs_session=True,
+        ),
+        ParsedCommand("/run", ("task",)),
+        CommandOutcome("/run", "done", SessionId("session-1")),
+    )
+    preferences = (
+        PreferencesSnapshot(0, authorization_mode=AuthorizationMode.AUTO, plan_mode=True, profile_id=ProfileId("p/m")),
+        PreferencesPatch(0, plan_mode=True, clear_profile_id=True),
+    )
+    return content + provider + tools + lifecycle + turns + interactions + support + event_payloads + events + (EventReplay(events, 1, len(events)),) + errors + commands + preferences
 
 
 @pytest.mark.parametrize("specimen", _specimens(), ids=lambda value: type(value).__name__)
 def test_every_contract_round_trips(specimen: Contract) -> None:
     assert type(specimen).from_json(specimen.to_json()) == specimen
+
+
+def test_contract_enum_round_trips_as_enum_not_str() -> None:
+    message = Message(MessageId("message-1"), MessageRole.USER, MessageKind.CHAT, (TEXT,))
+    decoded_value = Message.from_json_value(message.to_json_value())
+    assert decoded_value.role is MessageRole.USER
+    assert decoded_value.kind is MessageKind.CHAT
+    decoded = Message.from_json(message.to_json())
+    assert decoded.role is MessageRole.USER
+    assert decoded.kind is MessageKind.CHAT
+
+
+def test_contract_enum_encodes_with_enum_marker() -> None:
+    encoded = Message(MessageId("message-1"), MessageRole.USER, MessageKind.CHAT, (TEXT,)).to_json_value()
+    role = encoded.get("role")
+    assert isinstance(role, JsonObject)
+    assert role.get("$enum") == "kairo_kernel.contracts.enums.MessageRole"
+    assert role.get("value") == "user"
+
+
+def test_plain_str_round_trips_as_str() -> None:
+    text = TextBlock("hello")
+    decoded = TextBlock.from_json_value(text.to_json_value())
+    assert type(decoded.text) is str
+    assert decoded.text == "hello"
 
 
 def test_contracts_are_immutable() -> None:
@@ -345,5 +389,11 @@ def test_kernel_imports_are_ui_and_framework_free() -> None:
 def test_public_import_smoke() -> None:
     import kairo_kernel
 
-    assert kairo_kernel.contracts.KERNEL_API_VERSION == "1.0"
+    assert kairo_kernel.contracts.KERNEL_API_VERSION == "1.1"
     assert inspect.isclass(kairo_kernel.KernelError)
+    assert inspect.isclass(kairo_kernel.contracts.commands.KernelCommand)
+    assert inspect.isclass(kairo_kernel.contracts.commands.CommandOutcome)
+    assert inspect.isclass(kairo_kernel.contracts.preferences.PreferencesPatch)
+    assert inspect.isclass(kairo_kernel.contracts.preferences.PreferencesSnapshot)
+    assert inspect.isclass(kairo_kernel.ports.preferences.PreferencesPort)
+    assert kairo_kernel.ports.PreferencesPort is kairo_kernel.ports.preferences.PreferencesPort

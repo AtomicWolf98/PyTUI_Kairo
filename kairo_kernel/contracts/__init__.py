@@ -2,6 +2,12 @@
 
 # ruff: noqa: F401,F403
 
+from kairo_kernel.contracts.commands import (
+    CommandArgument,
+    CommandOutcome,
+    KernelCommand,
+    ParsedCommand,
+)
 from kairo_kernel.contracts.content import (
     AudioBlock,
     ContentBlock,
@@ -35,6 +41,7 @@ from kairo_kernel.contracts.json import (
     thaw_json,
 )
 from kairo_kernel.contracts.lifecycle import *  # noqa: F403
+from kairo_kernel.contracts.preferences import PreferencesPatch, PreferencesSnapshot
 from kairo_kernel.contracts.providers import *  # noqa: F403
 from kairo_kernel.contracts.support import *  # noqa: F403
 from kairo_kernel.contracts.tools import *  # noqa: F403

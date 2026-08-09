@@ -40,3 +40,5 @@ auth*.json
 .idea/
 !web/dist/
 !web/dist/**
+.superpowers/
+.pytest-review-*/

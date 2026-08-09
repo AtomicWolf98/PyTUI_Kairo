@@ -28,7 +28,13 @@ class SkillRegistry:
             raise ValueError("Skills directory must stay inside the workspace.") from error
         self.trust_store = trust_store
         self._active: tuple[SkillPackage, ...] = ()
+        self._revision = 0
         self._lock = asyncio.Lock()
+
+    @property
+    def revision(self) -> int:
+        """Process-local count of successful trust/reload/revoke mutations."""
+        return self._revision
 
     async def inspect(self) -> SkillInventory:
         if not self.skills_root.exists():
@@ -57,6 +63,7 @@ class SkillRegistry:
         async with self._lock:
             revoked = await asyncio.to_thread(self.trust_store.revoke, self.workspace)
             self._active = ()
+            self._revision += 1
             return revoked
 
     async def active(self) -> tuple[SkillPackage, ...]:
@@ -64,6 +71,7 @@ class SkillRegistry:
             return self._active
 
     async def _reload_locked(self) -> SkillInventory:
+        self._revision += 1
         before = await asyncio.to_thread(snapshot_directory, self.skills_root)
         trusted = self.trust_store.trusted_digest(self.workspace)
         if before.digest != trusted:

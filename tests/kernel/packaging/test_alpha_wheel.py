@@ -14,7 +14,7 @@ import pytest
 from kairo_kernel._version import __version__
 
 ROOT = Path(__file__).parents[3]
-EXPECTED_WHEEL = "kairo_kernel-0.4.0a1-py3-none-any.whl"
+EXPECTED_WHEEL = "kairo_kernel-0.4.0a2-py3-none-any.whl"
 
 
 def wheel_path() -> Path:
@@ -39,7 +39,7 @@ def test_project_metadata_defines_kernel_only_alpha_distribution() -> None:
     assert set(metadata["optional-dependencies"]) == {"openai", "anthropic", "mcp", "otel", "all", "dev"}
     assert setuptools["packages"]["find"]["include"] == ["kairo_kernel", "kairo_kernel.*"]
     assert setuptools["dynamic"]["version"]["attr"] == "kairo_kernel._version.__version__"
-    assert __version__ == "0.4.0a1"
+    assert __version__ == "0.4.0a2"
 
 
 def test_wheel_contains_only_kernel_and_distribution_metadata() -> None:
@@ -49,7 +49,7 @@ def test_wheel_contains_only_kernel_and_distribution_metadata() -> None:
 
     assert "kairo_kernel/py.typed" in names
     assert "kairo_kernel/_version.py" in names
-    assert all(name.startswith(("kairo_kernel/", "kairo_kernel-0.4.0a1.dist-info/")) for name in names)
+    assert all(name.startswith(("kairo_kernel/", "kairo_kernel-0.4.0a2.dist-info/")) for name in names)
     assert not any(name.endswith("entry_points.txt") for name in names)
     assert not any(name.startswith(("agent/", "tools/", "tests/", "web/")) for name in names)
     assert "kairo.py" not in names
@@ -58,12 +58,12 @@ def test_wheel_contains_only_kernel_and_distribution_metadata() -> None:
 
 def test_wheel_metadata_has_version_python_dependencies_and_extras() -> None:
     with zipfile.ZipFile(wheel_path()) as archive:
-        raw = archive.read("kairo_kernel-0.4.0a1.dist-info/METADATA").decode("utf-8")
+        raw = archive.read("kairo_kernel-0.4.0a2.dist-info/METADATA").decode("utf-8")
     metadata = email.message_from_string(raw)
     requirements = metadata.get_all("Requires-Dist", [])
 
     assert metadata["Name"] == "kairo-kernel"
-    assert metadata["Version"] == "0.4.0a1"
+    assert metadata["Version"] == "0.4.0a2"
     assert metadata["Requires-Python"] == ">=3.11"
     assert any(requirement.startswith("aiosqlite") and "extra" not in requirement for requirement in requirements)
     assert any(requirement.startswith("httpx") and "extra" not in requirement for requirement in requirements)
@@ -102,8 +102,8 @@ def test_wheel_installs_and_imports_outside_source_tree(tmp_path: Path) -> None:
     )
 
     lines = completed.stdout.strip().splitlines()
-    assert lines[0] == "0.4.0a1"
-    assert lines[1] == "0.4.0a1"
+    assert lines[0] == "0.4.0a2"
+    assert lines[1] == "0.4.0a2"
     assert "site-packages" in lines[2].replace("\\", "/")
     assert not lines[2].lower().startswith(str(ROOT / "kairo_kernel").lower())
 

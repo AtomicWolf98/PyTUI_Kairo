@@ -32,13 +32,22 @@ from kairo_kernel.contracts.enums import (
     TurnPhase,
     TurnStatus,
 )
-from kairo_kernel.contracts.events import EventPayload, InteractionEvent, MessageEvent, ToolEvent, TurnEvent, UsageEvent
+from kairo_kernel.contracts.events import (
+    ChangeEvent,
+    EventPayload,
+    InteractionEvent,
+    MessageEvent,
+    ToolEvent,
+    TurnEvent,
+    UsageEvent,
+)
 from kairo_kernel.contracts.identifiers import InteractionId, MessageId, TurnId
 from kairo_kernel.contracts.interactions import InteractionChoice, InteractionRequest, InteractionResponse
 from kairo_kernel.contracts.lifecycle import ContextStats
 from kairo_kernel.contracts.providers import ProviderFailure, ProviderRequest, ProviderStreamEvent, ProviderUsage
 from kairo_kernel.contracts.support import SessionRecord
 from kairo_kernel.contracts.tools import (
+    ToolDescriptor,
     ToolExecutionContext,
     ToolInvocation,
     ToolOutputChunk,
@@ -49,12 +58,14 @@ from kairo_kernel.engine.context import ContextPacker, estimate_context_tokens
 from kairo_kernel.engine.models import EngineOptions, RunSnapshot
 from kairo_kernel.errors import KernelError, KernelResult
 from kairo_kernel.ports.interactions import InteractionPort
+from kairo_kernel.ports.preferences import PreferencesPort
 from kairo_kernel.ports.providers import ProviderPort
 from kairo_kernel.ports.repositories import SessionRepositoryPort
 from kairo_kernel.ports.tools import AuthorizationPolicyPort, ToolRegistryPort
 from kairo_kernel.runtime.cancellation import CancellationSource
 from kairo_kernel.runtime.events import EventBus
 from kairo_kernel.runtime.turns import SessionTurnSupervisor, TurnLease
+from kairo_kernel.runtime.workspace import WorkspaceLeaseManager
 
 
 class _EngineFailure(RuntimeError):
@@ -93,6 +104,7 @@ class _Run:
     input_tokens: int = 0
     output_tokens: int = 0
     compression_count: int = 0
+    authorization_override: AuthorizationMode | None = None
     output_messages: list[Message] = field(default_factory=list)
 
 
@@ -110,6 +122,8 @@ class TurnEngine:
         authorization: AuthorizationPolicyPort,
         options: EngineOptions = EngineOptions(),
         supervisor: SessionTurnSupervisor | None = None,
+        preferences: PreferencesPort | None = None,
+        workspace_leases: WorkspaceLeaseManager | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -119,8 +133,31 @@ class TurnEngine:
         self.authorization = authorization
         self.options = options
         self.supervisor = supervisor or SessionTurnSupervisor()
+        self.preferences = preferences
+        self.workspace_leases = workspace_leases
         self._runs: dict[TurnId, _Run] = {}
         self._lock = asyncio.Lock()
+
+    async def _resolve_options(self) -> EngineOptions:
+        """Overlay preferences and the current workspace onto build-time options."""
+
+        options = self.options
+        if self.preferences is not None:
+            snapshot = await self.preferences.snapshot()
+            options = replace(
+                options,
+                profile_id=snapshot.profile_id or options.profile_id,
+                authorization_mode=snapshot.authorization_mode,
+                plan_mode=snapshot.plan_mode,
+                thinking_mode=snapshot.thinking_mode,
+                context_trigger_percent=snapshot.context_trigger_percent,
+                context_target_percent=snapshot.context_target_percent,
+                preserve_recent_turns=snapshot.preserve_recent_turns,
+            )
+        if self.workspace_leases is not None:
+            workspace = await self.workspace_leases.snapshot()
+            options = replace(options, workspace_root=workspace.root, workspace_revision=workspace.revision)
+        return options
 
     async def submit(self, request: TurnRequest) -> KernelResult[TurnAccepted]:
         session_id = request.session_id or self.options.default_session_id
@@ -143,7 +180,8 @@ class TurnEngine:
                 loaded.error
                 or KernelError(ErrorCode.SESSION_NOT_FOUND, "Session not found.", operation="turn.submit")
             )
-        resolved = await self.provider.resolve_profile(self.options.profile_id, "chat")
+        options = await self._resolve_options()
+        resolved = await self.provider.resolve_profile(options.profile_id, "chat")
         if not resolved.ok or resolved.value is None:
             await lease.release()
             return KernelResult.failure(
@@ -158,7 +196,7 @@ class TurnEngine:
                 KernelError(ErrorCode.INTERNAL, f"Tool discovery failed: {exc}", operation="turn.submit")
             )
         accepted_at = _now()
-        snapshot = RunSnapshot(turn_id, session_id, loaded.value, resolved.value, descriptors, self.options, accepted_at)
+        snapshot = RunSnapshot(turn_id, session_id, loaded.value, resolved.value, descriptors, options, accepted_at)
         future: asyncio.Future[TurnResult] = asyncio.get_running_loop().create_future()
         run = _Run(snapshot, lease, CancellationSource(), future, compression_count=loaded.value.compression_count)
         async with self._lock:
@@ -559,7 +597,7 @@ class TurnEngine:
             return result
         invocation = replace(provisional, scope=classified.value)
         await self._emit_tool(run, "requested", invocation)
-        mode = run.snapshot.options.authorization_mode
+        mode = run.authorization_override or run.snapshot.options.authorization_mode
         authorized = await self.authorization.is_authorized(mode, invocation.scope)
         if not authorized:
             response = await self._request_interaction(
@@ -596,12 +634,20 @@ class TurnEngine:
                 )
                 await self._emit_tool(run, "completed", invocation, result=result)
                 return result
+            if response.action in (InteractionAction.ENABLE_AUTO, InteractionAction.ENABLE_YOLO):
+                mode = (
+                    AuthorizationMode.AUTO
+                    if response.action is InteractionAction.ENABLE_AUTO
+                    else AuthorizationMode.YOLO
+                )
+                run.authorization_override = mode
+                await self._apply_authorization(run, mode)
         await self._transition(run, TurnPhase.RUNNING_TOOL)
         await self._emit_tool(run, "started", invocation)
         sink = _EngineToolSink(self, run, invocation)
         context = ToolExecutionContext(
             run.snapshot.options.workspace_root,
-            run.snapshot.options.authorization_mode.value,
+            mode.value,
         )
         try:
             result = await tool.execute(invocation, context, run.cancellation.token, sink)
@@ -618,6 +664,17 @@ class TurnEngine:
                 str(exc),
             )
         await self._emit_tool(run, "completed", invocation, result=result)
+        if (
+            result.status is ToolExecutionStatus.SUCCEEDED
+            and self.workspace_leases is not None
+            and _mutates_workspace(run.snapshot.tools, call.name)
+        ):
+            workspace = await self.workspace_leases.bump_revision()
+            await self._emit(
+                run,
+                EventType.WORKSPACE_CHANGED,
+                ChangeEvent(workspace.revision, call.name, "Workspace files changed."),
+            )
         return result
 
     async def _request_interaction(
@@ -651,6 +708,19 @@ class TurnEngine:
             response = InteractionResponse(request.interaction_id, request.turn_id, safe_default)
         await self._emit(run, EventType.INTERACTION, InteractionEvent("resolved", response=response))
         return response
+
+    async def _apply_authorization(self, run: _Run, mode: AuthorizationMode) -> None:
+        """Persist ENABLE_AUTO / ENABLE_YOLO for future turns and notify subscribers."""
+
+        if self.preferences is None:
+            return
+        applied = await self.preferences.apply_authorization(mode)
+        if applied.ok and applied.value is not None:
+            await self._emit(
+                run,
+                EventType.CONFIG_CHANGED,
+                ChangeEvent(applied.value.revision, "preferences", f"Authorization mode is now {mode.value}."),
+            )
 
     async def _commit(self, run: _Run, history: tuple[Message, ...]) -> None:
         record = SessionRecord(
@@ -809,6 +879,16 @@ class _EngineToolSink:
         if chunk.tool_call_id != self.invocation.tool_call_id:
             raise ValueError("Tool output correlation does not match invocation.")
         await self.engine._emit_tool(self.run, "output", self.invocation, output=chunk)
+
+
+_WORKSPACE_MUTATING_PERMISSIONS = ("write", "execute")
+
+
+def _mutates_workspace(descriptors: tuple[ToolDescriptor, ...], name: str) -> bool:
+    descriptor = next((item for item in descriptors if item.name == name), None)
+    return descriptor is not None and any(
+        permission in _WORKSPACE_MUTATING_PERMISSIONS for permission in descriptor.permissions
+    )
 
 
 def _provider_error(failure: ProviderFailure, turn_id: TurnId) -> KernelError:

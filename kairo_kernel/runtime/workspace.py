@@ -74,6 +74,12 @@ class WorkspaceLeaseManager:
             self._snapshot = WorkspaceSnapshot(root, self._snapshot.revision + 1)
             return self._snapshot
 
+    async def bump_revision(self) -> WorkspaceSnapshot:
+        """Atomically advance the revision by one without changing the root."""
+        lease = await self.write()
+        async with lease:
+            return await self.update(lease, lease.snapshot.root)
+
     async def snapshot(self) -> WorkspaceSnapshot:
         async with self._condition:
             return self._snapshot

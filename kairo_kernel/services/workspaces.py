@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypeVar
 
 from kairo_kernel.contracts.enums import ErrorCode
+from kairo_kernel.contracts.identifiers import SessionId, TurnId
 from kairo_kernel.contracts.support import WorkspaceRecord
 from kairo_kernel.errors import KernelError, KernelResult
 from kairo_kernel.ports.repositories import WorkspaceRepositoryPort
@@ -41,6 +42,47 @@ class WorkspacePreview:
     truncated: bool = False
 
 
+@dataclass(frozen=True)
+class WorkspaceEntry:
+    name: str
+    relative_path: str
+    is_directory: bool
+    size_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class WorkspaceTree:
+    root: str
+    revision: int
+    relative_path: str
+    entries: tuple[WorkspaceEntry, ...]
+    truncated: bool = False
+
+
+@dataclass(frozen=True)
+class ChangedFile:
+    relative_path: str
+    status: str  # "modified" | "added" | "deleted" | "renamed" | "untracked"
+
+
+@dataclass(frozen=True)
+class ChangedFiles:
+    root: str
+    revision: int
+    is_git_repository: bool
+    files: tuple[ChangedFile, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkspaceDiff:
+    root: str
+    revision: int
+    relative_path: str
+    status: str
+    unified_diff: str
+    truncated: bool = False
+
+
 class WorkspaceBookmarkRepository(Protocol):
     async def list(self) -> tuple[WorkspaceBookmark, ...]: ...
 
@@ -59,6 +101,9 @@ class DegradedSignal(Protocol):
 
 class BookmarkMutation(Protocol):
     def __call__(self, current: tuple[WorkspaceBookmark, ...]) -> tuple[WorkspaceBookmark, ...]: ...
+
+
+ActiveTurns = Callable[[], Awaitable[tuple[tuple[SessionId, TurnId], ...]]]
 
 
 class InMemoryWorkspaceBookmarks:
@@ -83,6 +128,7 @@ class WorkspaceService:
         bookmarks: WorkspaceBookmarkRepository | None = None,
         participants: tuple[WorkspaceParticipant, ...] = (),
         degraded: DegradedSignal | None = None,
+        active_turns: ActiveTurns | None = None,
         preview_limit_bytes: int = 256 * 1024,
         preview_child_limit: int = 500,
     ) -> None:
@@ -91,6 +137,7 @@ class WorkspaceService:
         self._bookmarks = bookmarks or InMemoryWorkspaceBookmarks()
         self._participants = participants
         self._degraded = degraded
+        self._active_turns = active_turns
         self._preview_limit_bytes = max(1, preview_limit_bytes)
         self._preview_child_limit = max(1, preview_child_limit)
         self._degraded_reason = ""
@@ -160,6 +207,96 @@ class WorkspaceService:
             except (OSError, RuntimeError, ValueError) as exc:
                 return _failure(ErrorCode.WORKSPACE_INVALID, "Workspace preview is unavailable.", "workspace.preview", exc)
 
+    async def tree(self, relative_path: str = ".", *, limit: int = 200) -> KernelResult[WorkspaceTree]:
+        lease = await self._leases.read()
+        async with lease:
+            try:
+                root = Path(lease.snapshot.root).resolve(strict=True)
+                target = (root / relative_path).resolve(strict=True)
+                target.relative_to(root)
+                if not target.is_dir():
+                    return _failure(
+                        ErrorCode.WORKSPACE_INVALID, "Workspace tree target is not a directory.", "workspace.tree"
+                    )
+                entries: list[WorkspaceEntry] = []
+                truncated = False
+                for child in sorted(target.iterdir(), key=lambda item: item.name.casefold()):
+                    if len(entries) >= max(1, limit):
+                        truncated = True
+                        break
+                    entries.append(
+                        WorkspaceEntry(
+                            child.name,
+                            child.relative_to(root).as_posix(),
+                            child.is_dir(),
+                            0 if child.is_dir() else child.stat().st_size,
+                        )
+                    )
+                return KernelResult.success(
+                    WorkspaceTree(
+                        str(root),
+                        lease.snapshot.revision,
+                        target.relative_to(root).as_posix() or ".",
+                        tuple(entries),
+                        truncated,
+                    )
+                )
+            except (OSError, RuntimeError, ValueError):
+                return _failure(ErrorCode.WORKSPACE_INVALID, "Workspace tree is unavailable.", "workspace.tree")
+
+    async def changed_files(self) -> KernelResult[ChangedFiles]:
+        lease = await self._leases.read()
+        async with lease:
+            root = lease.snapshot.root
+            revision = lease.snapshot.revision
+        result = await _git(root, "status", "--porcelain=v1", "-z")
+        if result.error is not None:
+            return KernelResult.failure(result.error)
+        assert result.value is not None
+        code, output = result.value
+        if code == 128:
+            return KernelResult.success(ChangedFiles(root, revision, False))
+        if code != 0:
+            return _failure(ErrorCode.WORKSPACE_INVALID, "git status failed.", "workspace.changed_files")
+        return KernelResult.success(ChangedFiles(root, revision, True, _parse_porcelain(output)))
+
+    async def diff(self, relative_path: str, *, max_bytes: int = 65_536) -> KernelResult[WorkspaceDiff]:
+        lease = await self._leases.read()
+        async with lease:
+            try:
+                root = Path(lease.snapshot.root).resolve(strict=True)
+                target = (root / relative_path).resolve(strict=True)
+                target.relative_to(root)
+            except (OSError, RuntimeError, ValueError):
+                return _failure(ErrorCode.WORKSPACE_INVALID, "Workspace diff path is invalid.", "workspace.diff")
+            revision = lease.snapshot.revision
+            root_text = str(root)
+            relative = target.relative_to(root).as_posix()
+        status_result = await _git(root_text, "status", "--porcelain=v1", "-z", "--", relative)
+        if status_result.error is not None:
+            return KernelResult.failure(status_result.error)
+        assert status_result.value is not None
+        code, status_output = status_result.value
+        if code == 128:
+            return _failure(ErrorCode.WORKSPACE_INVALID, "Workspace is not a git repository.", "workspace.diff")
+        if code != 0:
+            return _failure(ErrorCode.WORKSPACE_INVALID, "git status failed.", "workspace.diff")
+        statuses = {entry.relative_path: entry.status for entry in _parse_porcelain(status_output)}
+        status = statuses.get(relative, "modified")
+        if status == "untracked":
+            return KernelResult.success(WorkspaceDiff(root_text, revision, relative, status, ""))
+        diff_result = await _git(root_text, "diff", "HEAD", "--", relative)
+        if diff_result.error is not None:
+            return KernelResult.failure(diff_result.error)
+        assert diff_result.value is not None
+        code, diff_output = diff_result.value
+        if code != 0:
+            return _failure(ErrorCode.WORKSPACE_INVALID, "git diff failed.", "workspace.diff")
+        limit = max(1, max_bytes)
+        truncated = len(diff_output) > limit
+        text = diff_output[:limit].decode("utf-8", errors="replace")
+        return KernelResult.success(WorkspaceDiff(root_text, revision, relative, status, text, truncated))
+
     async def move(self, target: str, expected_revision: int) -> KernelResult[WorkspaceState]:
         if self._degraded_reason:
             return _failure(ErrorCode.KERNEL_DEGRADED, "Workspace mutations are disabled.", "workspace.move")
@@ -169,6 +306,9 @@ class WorkspaceService:
         async with self._mutation_lock:
             lease = await self._leases.write()
             async with lease:
+                busy = await self._active_turn_check()
+                if busy is not None:
+                    return busy
                 conflict = self._revision_conflict(lease, expected_revision, "workspace.move")
                 if conflict is not None:
                     return conflict
@@ -301,6 +441,19 @@ class WorkspaceService:
             return None
         return _failure(ErrorCode.CONFLICT, "Workspace revision has changed.", operation)
 
+    async def _active_turn_check(self) -> KernelResult[WorkspaceState] | None:
+        if self._active_turns is None:
+            return None
+        active = await self._active_turns()
+        if active:
+            return _failure(
+                ErrorCode.KERNEL_BUSY,
+                "Cannot move the workspace while a turn is active.",
+                "workspace.move",
+                retryable=True,
+            )
+        return None
+
     async def _rollback_move(
         self,
         old: WorkspaceRecord,
@@ -347,6 +500,57 @@ def _failure(
     message: str,
     operation: str,
     cause: BaseException | None = None,
+    *,
+    retryable: bool = False,
 ) -> KernelResult[ResultT]:
     del cause
-    return KernelResult.failure(KernelError(code, message, operation=operation))
+    return KernelResult.failure(KernelError(code, message, retryable, operation))
+
+
+_GIT_TIMEOUT_SECONDS = 10.0
+
+
+async def _git(root: str, *arguments: str) -> KernelResult[tuple[int, bytes]]:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            root,
+            *arguments,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except (FileNotFoundError, OSError):
+        return _failure(ErrorCode.WORKSPACE_INVALID, "The git executable was not found.", "workspace.git")
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), _GIT_TIMEOUT_SECONDS)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        return _failure(ErrorCode.WORKSPACE_INVALID, "git timed out.", "workspace.git")
+    return KernelResult.success((int(process.returncode or 0), stdout))
+
+
+def _parse_porcelain(raw: bytes) -> tuple[ChangedFile, ...]:
+    entries = raw.decode("utf-8", errors="replace").split("\0")
+    files: list[ChangedFile] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry.strip():
+            continue
+        status = entry[:2]
+        path = entry[3:]
+        if "R" in status or "C" in status:
+            index += 1  # rename/copy records carry the source path in a second entry
+            files.append(ChangedFile(path, "renamed"))
+        elif status == "??":
+            files.append(ChangedFile(path, "untracked"))
+        elif "A" in status:
+            files.append(ChangedFile(path, "added"))
+        elif "D" in status:
+            files.append(ChangedFile(path, "deleted"))
+        else:
+            files.append(ChangedFile(path, "modified"))
+    return tuple(files)

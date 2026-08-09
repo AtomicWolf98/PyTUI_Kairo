@@ -9,7 +9,7 @@ from kairo_kernel.contracts.enums import AuthorizationMode, ErrorCode, ToolExecu
 from kairo_kernel.contracts.tools import ToolDescriptor, ToolExecutionContext, ToolInvocation, ToolResult
 from kairo_kernel.errors import KernelError, KernelResult
 from kairo_kernel.ports.control import CancellationToken
-from kairo_kernel.ports.tools import ToolOutputSink, ToolPort
+from kairo_kernel.ports.tools import ToolOutputSink, ToolPort, ToolRegistryPort
 from kairo_kernel.tools.policy import AuthorizationPolicy
 
 
@@ -80,4 +80,34 @@ class BuiltinToolRegistry:
         return KernelResult.success(tool)
 
     async def reload(self) -> KernelResult[tuple[ToolDescriptor, ...]]:
+        return KernelResult.success(await self.list())
+
+
+class CompositeToolRegistry:
+    """Merge several registries; earlier registries win name collisions."""
+
+    def __init__(self, registries: tuple[ToolRegistryPort, ...]) -> None:
+        if not registries:
+            raise ValueError("CompositeToolRegistry requires at least one registry.")
+        self._registries = registries
+
+    async def list(self) -> tuple[ToolDescriptor, ...]:
+        descriptors: dict[str, ToolDescriptor] = {}
+        for registry in self._registries:
+            for descriptor in await registry.list():
+                descriptors.setdefault(descriptor.name, descriptor)
+        return tuple(descriptors.values())
+
+    async def get(self, name: str) -> KernelResult[ToolPort]:
+        for registry in self._registries:
+            result = await registry.get(name)
+            if result.ok:
+                return result
+        return KernelResult.failure(KernelError(ErrorCode.TOOL_NOT_FOUND, f"Tool not found: {name}"))
+
+    async def reload(self) -> KernelResult[tuple[ToolDescriptor, ...]]:
+        for registry in self._registries:
+            reloaded = await registry.reload()
+            if reloaded.error is not None:
+                return KernelResult.failure(reloaded.error)
         return KernelResult.success(await self.list())
