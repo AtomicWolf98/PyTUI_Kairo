@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.resolve()))
 
 from agent.commands import get_command_map
 from agent.config import Config
-from agent.bootstrap import build_agent, build_registry
+from agent.bootstrap import build_agent
 from agent.tui_widgets import input_framed_with_dock
 
 
@@ -154,6 +154,41 @@ def run_plain(agent):
         agent.shutdown()
 
 
+def run_new_tui(args) -> int:
+    """Compat jump: legacy Textual entry launches the kairo-tui package.
+
+    Translates the legacy flags that map onto kairo-tui; a missing install is a
+    hard error with an install hint — never a silent plain fallback.
+    """
+    try:
+        from kairo_tui.app import KairoTuiApp
+        from kairo_tui.cli import CliOptions
+    except ImportError as exc:
+        print(
+            "[Kairo] kairo-tui 0.4.0a2 is not installed; run "
+            f"`python -m pip install kairo-tui` (import error: {exc})",
+            file=sys.stderr,
+        )
+        return 2
+    if args.plan or args.think or args.auto or args.authorization:
+        print(
+            "[Kairo] Note: --plan/--think/--auto/--authorization are not translated "
+            "to kairo-tui; use /mode inside the new TUI.",
+            file=sys.stderr,
+        )
+    print("[Kairo] Launching kairo-tui 0.4.0a2 (legacy --tui entry).")
+    options = CliOptions(
+        workspace=None,  # legacy CLI has no positional; kairo-tui defaults to cwd
+        config_path=None if args.config == "config.json" else args.config,
+        theme=args.theme,
+        reduced_motion=bool(args.reduced_motion or args.no_animation),
+        safe_mode=False,      # not a legacy flag
+        headless_smoke=False,  # not a legacy flag
+    )
+    KairoTuiApp.from_options(options).run()
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kairo - an animated terminal-native coding agent.")
     parser.add_argument("--config", default="config.json", help="Path to config.json file.")
@@ -162,7 +197,7 @@ def main():
     parser.add_argument("--plan", action="store_true", help="Start directly in Plan Mode (drafts plans before actions).")
     parser.add_argument("--think", action="store_true", help="Start directly in Thinking Mode (display reasoning).")
     parser.add_argument("--plain", action="store_true", help="Use the compatible non-Textual interface.")
-    parser.add_argument("--tui", action="store_true", help="Force the Textual interface even in non-TTY environments.")
+    parser.add_argument("--tui", action="store_true", help="Launch the kairo-tui Textual interface even in non-TTY environments.")
     parser.add_argument("--web", action="store_true", help="Start the local browser WebUI.")
     parser.add_argument("--web-host", "--host", dest="web_host", default=None, help="Host for --web (default: config web.host / 127.0.0.1).")
     parser.add_argument("--web-port", "--port", dest="web_port", type=int, default=None, help="Port for --web (default: config web.port / 8765; 0 picks a free port).")
@@ -185,8 +220,6 @@ def main():
 
     if args.theme:
         config.ui["theme"] = args.theme
-    reduced_motion = args.reduced_motion or bool(config.ui.get("reduced_motion"))
-    animation = not args.no_animation and config.ui.get("animation") != "none"
 
     if args.web:
         from agent.web import run_web
@@ -198,18 +231,9 @@ def main():
             open_browser=not args.no_browser,
         )
     elif should_use_textual(args, config):
-        try:
-            from agent.ui import KairoApp
-        except ImportError as exc:
-            print(f"[Kairo] Textual unavailable ({exc}); falling back to plain mode.")
-            run_plain(build_agent(config))
-            return
-        KairoApp(
-            config,
-            build_registry(config),
-            animation=animation,
-            reduced_motion=reduced_motion,
-        ).run()
+        # Cutover (tui_plan.md step 5): the old agent/ui Textual implementation
+        # is gone; --tui and the auto-TTY path jump to the kairo-tui package.
+        raise SystemExit(run_new_tui(args))
     else:
         run_plain(build_agent(config))
 
