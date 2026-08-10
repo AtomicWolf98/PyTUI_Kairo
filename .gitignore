@@ -1,7 +1,7 @@
 __pycache__/
 node_modules/
 web/node_modules/
-web/dist/
+web/dist/*
 web/tsconfig.tsbuildinfo
 *.py[cod]
 *.egg-info/
@@ -10,7 +10,9 @@ web/tsconfig.tsbuildinfo
 .coverage
 htmlcov/
 build/
-dist/
+dist/*
+!dist/kairo_kernel-0.4.0a2-py3-none-any.whl
+!dist/kairo_tui-0.4.0a2-py3-none-any.whl
 # Local configuration and secrets
 config*.json
 !config.example.json
@@ -38,7 +40,7 @@ auth*.json
 .DS_Store
 .vscode/
 .idea/
-!web/dist/
+!web/dist/*
 !web/dist/**
 .superpowers/
 .pytest-review-*/
