@@ -219,15 +219,23 @@ def test_submit_streams_bubbles(chat_app_factory) -> None:
 
 
 def test_header_shows_session_and_badge(chat_app_factory) -> None:
-    provider = FakeProvider((_content("Hello "), _content("world"), _completed()), delay=0.3)
+    """Header shows the running badge while the (gated) turn is in flight, then
+    succeeded after release -- deterministic, no wall-clock delay."""
+    started, release = asyncio.Event(), asyncio.Event()
+    provider = GatedProvider(
+        (_content("Hello "), _content("world"), _completed()),
+        started=started,
+        release=release,
+    )
     app = chat_app_factory(provider=provider)
 
     async def drive() -> None:
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             await _submit_via_composer(pilot, app, "hi")
+            await _wait_for(pilot, lambda: started.is_set(), description="provider stream started")
             header = app.query_one("#chat-header", Static)
-            await _wait_for(pilot, lambda: "running" in str(header.content))
+            await _wait_for(pilot, lambda: "running" in str(header.content), description="header shows running")
             # The pump only re-reads the session list on a replay gap, so the
             # store never sees create(); seed it the way recovery would.
             summaries = (await app.kernel.sessions.list()).value or ()
@@ -235,7 +243,8 @@ def test_header_shows_session_and_badge(chat_app_factory) -> None:
             await pilot.pause()
             assert "Chat" in str(header.content)
             assert "running" in str(header.content)
-            await _wait_for(pilot, lambda: "succeeded" in str(header.content))
+            release.set()
+            await _wait_for(pilot, lambda: "succeeded" in str(header.content), description="header shows succeeded")
             assert "succeeded" in str(header.content)
 
     asyncio.run(drive())
@@ -637,9 +646,19 @@ def test_stop_from_tool_card_cancels_turn(chat_app_factory) -> None:
             await pilot.pause()
             await _submit_via_composer(pilot, app, "read the file")
             timeline = app.query_one("#chat-timeline", VerticalScroll)
-            await _wait_for(pilot, lambda: timeline.query("#tool-read_file-stop"))
+            await _wait_for(
+                pilot,
+                lambda: timeline.query("#tool-read_file-stop"),
+                polls=200,
+                description="tool stop button appears",
+            )
             await pilot.click("#tool-read_file-stop")
-            await _wait_for(pilot, lambda: "cancelled" in app.store.state.turn_status.values())
+            await _wait_for(
+                pilot,
+                lambda: "cancelled" in app.store.state.turn_status.values(),
+                polls=200,
+                description="turn reached cancelled",
+            )
             assert not app.store.state.active_turns
             assert tool.calls == 0
 

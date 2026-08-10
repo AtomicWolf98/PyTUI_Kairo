@@ -327,9 +327,16 @@ class KairoTuiApp(App[None]):
         self.exit()
 
     def _refresh_store_widgets(self) -> None:
-        self.query_one("#topbar", TopBar).render_status(self.store.state)
-        composer = self.query_one("#composer", Composer)
-        composer.disabled = not self.store.state.setup_complete
+        # Store callbacks may fire while the app is tearing down (the pump folds
+        # shutdown events after app.exit()); the widgets are gone by then, so a
+        # strict query would raise NoMatches inside a worker. Optional queries
+        # make the refresh a no-op on the detached default screen.
+        topbar = self.query_one_optional("#topbar", TopBar)
+        composer = self.query_one_optional("#composer", Composer)
+        if topbar is not None:
+            topbar.render_status(self.store.state)
+        if composer is not None:
+            composer.disabled = not self.store.state.setup_complete
         # Mount the page only when it actually changes (never remount Setup on
         # every store dispatch — that would reset its step state).
         if self.store.state.page is not self._current_page:
