@@ -4,7 +4,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo ==========================================
-echo Kairo 0.3.3 installer for Windows
+echo Kairo 0.4.0a2 installer for Windows (kernel + TUI)
 echo ==========================================
 echo.
 
@@ -14,9 +14,17 @@ set "KAIRO_OWNER_FILE=%KAIRO_INSTALL_ROOT%\install-owner.ini"
 set "KAIRO_VENV=%KAIRO_INSTALL_ROOT%\venv"
 set "KAIRO_BIN=%KAIRO_INSTALL_ROOT%\bin"
 
-if not exist "agent\web\static\index.html" (
-    echo [ERROR] Packaged WebUI assets are missing.
-    echo Run "npm --prefix web run build" before installing this checkout.
+set "KERNEL_WHEEL=dist\kairo_kernel-0.4.0a2-py3-none-any.whl"
+set "TUI_WHEEL=dist\kairo_tui-0.4.0a2-py3-none-any.whl"
+
+if not exist "%KERNEL_WHEEL%" (
+    echo [ERROR] Kernel wheel not found: %KERNEL_WHEEL%
+    echo Build it first with: python -m build
+    goto :failure
+)
+if not exist "%TUI_WHEEL%" (
+    echo [ERROR] TUI wheel not found: %TUI_WHEEL%
+    echo Build it first with: python -m build frontends/tui --outdir dist
     goto :failure
 )
 
@@ -29,13 +37,13 @@ if not defined PYTHON_CMD (
 )
 
 if not defined PYTHON_CMD (
-    echo [ERROR] Python 3.10 or newer was not found.
+    echo [ERROR] Python 3.11 or newer was not found.
     goto :failure
 )
 
-%PYTHON_CMD% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"
+%PYTHON_CMD% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
 if errorlevel 1 (
-    echo [ERROR] Python 3.10 or newer is required.
+    echo [ERROR] Python 3.11 or newer is required.
     goto :failure
 )
 
@@ -62,7 +70,7 @@ if exist "%KAIRO_INSTALL_ROOT%" (
         goto :failure
     )
     >"%KAIRO_OWNER_FILE%" echo schema=1
-    >>"%KAIRO_OWNER_FILE%" echo product=kairo-agent
+    >>"%KAIRO_OWNER_FILE%" echo product=kairo-kernel+tui
     >>"%KAIRO_OWNER_FILE%" echo installation_id=%KAIRO_OWNER_ID%
 )
 
@@ -77,15 +85,15 @@ if not exist "%KAIRO_VENV%\Scripts\python.exe" (
     echo Managed virtual environment already exists.
 )
 
-echo [4/6] Installing Kairo into the managed environment...
+echo [4/6] Installing Kairo kernel and TUI wheels...
 "%KAIRO_VENV%\Scripts\python.exe" -m pip install --upgrade pip
 if errorlevel 1 (
     echo [ERROR] Failed to upgrade pip.
     goto :failure
 )
-"%KAIRO_VENV%\Scripts\python.exe" -m pip install --upgrade "%CD%"
+"%KAIRO_VENV%\Scripts\python.exe" -m pip install --upgrade "%KERNEL_WHEEL%" "%TUI_WHEEL%"
 if errorlevel 1 (
-    echo [ERROR] Failed to install Kairo.
+    echo [ERROR] Failed to install the Kairo wheels.
     goto :failure
 )
 
@@ -95,12 +103,12 @@ if errorlevel 1 (
     echo [ERROR] Failed to create the command directory.
     goto :failure
 )
->"%KAIRO_BIN%\kairo.bat" echo @echo off
->>"%KAIRO_BIN%\kairo.bat" echo "%KAIRO_VENV%\Scripts\kairo.exe" %%*
+>"%KAIRO_BIN%\kairo-tui.bat" echo @echo off
+>>"%KAIRO_BIN%\kairo-tui.bat" echo "%KAIRO_VENV%\Scripts\kairo-tui.exe" %%*
 
-echo Existing commands named "kairo" outside the managed directory are left untouched:
-for /f "delims=" %%P in ('where kairo 2^>nul') do (
-    if /I not "%%~fP"=="%KAIRO_BIN%\kairo.bat" echo   %%~fP
+echo Existing commands named "kairo-tui" outside the managed directory are left untouched:
+for /f "delims=" %%P in ('where kairo-tui 2^>nul') do (
+    if /I not "%%~fP"=="%KAIRO_BIN%\kairo-tui.bat" echo   %%~fP
 )
 
 if /I "%KAIRO_SKIP_PATH%"=="1" (
@@ -114,20 +122,20 @@ if /I "%KAIRO_SKIP_PATH%"=="1" (
 )
 
 echo [6/6] Verifying the installed command...
-"%KAIRO_BIN%\kairo.bat" --help | findstr /C:"--web" >nul
+"%KAIRO_VENV%\Scripts\kairo-tui.exe" --headless-smoke | findstr /C:"KAIRO_TUI_SMOKE_OK" >nul
 if errorlevel 1 (
-    echo [ERROR] The installed command did not report WebUI support.
+    echo [ERROR] The headless smoke check did not pass.
     goto :failure
 )
-"%KAIRO_VENV%\Scripts\python.exe" -c "from importlib.metadata import version; raise SystemExit(0 if version('kairo-agent') == '0.3.3' else 1)"
+"%KAIRO_VENV%\Scripts\python.exe" -c "from importlib.metadata import version; raise SystemExit(0 if version('kairo-tui') == '0.4.0a2' and version('kairo-kernel') == '0.4.0a2' else 1)"
 if errorlevel 1 (
-    echo [ERROR] The installed package version is not 0.3.3.
+    echo [ERROR] The installed package versions are not 0.4.0a2.
     goto :failure
 )
 
 echo.
-echo Installed and verified Kairo 0.3.3.
-echo Open a new terminal and run: kairo
+echo Installed and verified Kairo 0.4.0a2 (kernel + TUI).
+echo Open a new terminal and run: kairo-tui
 exit /b 0
 
 :failure
