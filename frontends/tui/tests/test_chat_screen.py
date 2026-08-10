@@ -25,6 +25,7 @@ from kairo_kernel.contracts.enums import (
     MessageRole,
     ProviderFailureKind,
     ProviderStreamKind,
+    TurnStatus,
 )
 from kairo_kernel.contracts.events import KernelEvent, MessageEvent
 from kairo_kernel.contracts.identifiers import EventId, KernelId, MessageId, SessionId, ToolCallId, TurnId
@@ -44,7 +45,7 @@ from kairo_tui.keyring_store import SecretStore
 from kairo_tui.screens.chat import MediaCard, PlanEditModal
 from kairo_tui.store import ChatMessage, EventAction, RecoveryAction, SessionAction, SessionsAction
 from kairo_tui.widgets import Composer
-from tests.support.fakes import NOW_PROFILE, FakeProvider, FakeTool, FakeToolRegistry
+from tests.support.fakes import NOW_PROFILE, FakeProvider, FakeTool, FakeToolRegistry, GatedProvider
 
 
 @pytest.fixture
@@ -188,11 +189,12 @@ def _reasoning_event(sequence: int, message_id: str, text: str, action: str) -> 
     )
 
 
-async def _wait_for(pilot, predicate, *, polls: int = 60, delay: float = 0.05) -> None:
+async def _wait_for(pilot, predicate, *, polls: int = 60, delay: float = 0.05, description: str = "condition") -> None:
     for _ in range(polls):
         await pilot.pause(delay)
         if predicate():
             return
+    raise AssertionError(f"timed out waiting for: {description}")
 
 
 def test_submit_streams_bubbles(chat_app_factory) -> None:
@@ -580,14 +582,24 @@ def test_approve_once_executes_tool(chat_app_factory) -> None:
             await pilot.pause()
             await _submit_via_composer(pilot, app, "read the file")
             timeline = app.query_one("#chat-timeline", VerticalScroll)
-            await _wait_for(pilot, lambda: timeline.query("#tool-read_file-approve"))
+            await _wait_for(
+                pilot,
+                lambda: timeline.query("#tool-read_file-approve"),
+                polls=200,
+                description="tool approval card appears",
+            )
             await pilot.click("#tool-read_file-approve")
-            await _wait_for(pilot, lambda: tool.calls == 1)
+            await _wait_for(pilot, lambda: tool.calls == 1, polls=200, description="tool executed once")
             text = timeline.query_one(".tool-card-text", Static)
-            await _wait_for(pilot, lambda: "succeeded" in str(text.content))
+            await _wait_for(pilot, lambda: "succeeded" in str(text.content), polls=200, description="tool card shows succeeded")
             assert tool.calls == 1
             # The pending controls are removed once the interaction is resolved.
-            await _wait_for(pilot, lambda: not timeline.query("#tool-read_file-approve"))
+            await _wait_for(
+                pilot,
+                lambda: not timeline.query("#tool-read_file-approve"),
+                polls=200,
+                description="approval controls removed",
+            )
 
     asyncio.run(drive())
 
@@ -704,16 +716,21 @@ def test_countdown_display_only_never_auto_responds(chat_app_factory) -> None:
                 pilot,
                 lambda: timeline.query(".tool-countdown")
                 and "expires in" in str(timeline.query_one(".tool-countdown", Static).content),
+                polls=200,
+                description="countdown card appears",
             )
             countdown = timeline.query_one(".tool-countdown", Static)
+            countdown_text = str(countdown.content)
             before = _countdown_seconds(countdown.content)
             assert len(await app.kernel.interactions.pending()) == 1
-            # Wait past a 1 s tick for the display-only re-render.
+            # Wait past a 1 s tick for the display-only re-render. The tick
+            # updates the SAME widget, so compare against the captured string.
             await _wait_for(
                 pilot,
-                lambda: str(timeline.query_one(".tool-countdown", Static).content) != str(countdown.content),
+                lambda: str(timeline.query_one(".tool-countdown", Static).content) != countdown_text,
                 polls=80,
                 delay=0.1,
+                description="countdown tick re-rendered",
             )
             after = _countdown_seconds(timeline.query_one(".tool-countdown", Static).content)
             assert after < before
@@ -732,7 +749,13 @@ def _joined(content) -> str:
 def test_two_sessions_run_in_parallel(chat_app_factory) -> None:
     """Two sessions run turns concurrently; the header shows both tasks; each
     session's timeline shows only its own bubbles."""
-    provider = FakeProvider((_content("A says hi"), _completed()), (_content("B says yo"), _completed()), delay=0.4)
+    started, release = asyncio.Event(), asyncio.Event()
+    provider = GatedProvider(
+        (_content("A says hi"), _completed()),
+        (_content("B says yo"), _completed()),
+        started=started,
+        release=release,
+    )
     app = chat_app_factory(provider=provider)
 
     async def drive() -> None:
@@ -750,22 +773,28 @@ def test_two_sessions_run_in_parallel(chat_app_factory) -> None:
             app.store.dispatch(SessionAction(session_b))
             await _submit_via_composer(pilot, app, "hi B")
             header = app.query_one("#chat-header", Static)
-            # Both turns overlap in time: the header showed 2 concurrent tasks.
-            await _wait_for(pilot, lambda: "(2 tasks)" in str(header.content))
+            # Both turns overlap deterministically (gated): 2 concurrent tasks.
+            await _wait_for(
+                pilot,
+                lambda: "(2 tasks)" in str(header.content),
+                description="header shows 2 concurrent tasks",
+            )
+            release.set()
             await _wait_for(
                 pilot,
                 lambda: sum(1 for status in app.store.state.turn_status.values() if status == "succeeded") == 2,
+                description="both turns succeeded",
             )
             assert not app.store.state.active_turns
             # Each session's timeline carries its own assistant bubble.
             timeline = app.query_one("#chat-timeline", VerticalScroll)
             await pilot.click(f"#session-{session_a}")
-            await _wait_for(pilot, lambda: len(timeline.query(".msg-assistant")) == 1)
+            await _wait_for(pilot, lambda: len(timeline.query(".msg-assistant")) == 1, description="session A bubble rendered")
             assistant = timeline.query_one(".msg-assistant", Static)
             assert isinstance(assistant.content, Markdown)
             assert assistant.content.markup == "A says hi"
             await pilot.click(f"#session-{session_b}")
-            await _wait_for(pilot, lambda: len(timeline.query(".msg-assistant")) == 1)
+            await _wait_for(pilot, lambda: len(timeline.query(".msg-assistant")) == 1, description="session B bubble rendered")
             assistant = timeline.query_one(".msg-assistant", Static)
             assert isinstance(assistant.content, Markdown)
             assert assistant.content.markup == "B says yo"
@@ -812,8 +841,10 @@ def test_stop_one_turn_other_continues(chat_app_factory) -> None:
 
 def test_switching_sessions_does_not_cancel_background_turn(chat_app_factory) -> None:
     """Clicking another session's chip rebinds the timeline without a kernel call:
-    session A's turn keeps RUNNING and then completes on its own."""
-    provider = FakeProvider((_content("slow done"), _completed()), delay=0.5)
+    session A's turn stays RUNNING across the switch (gate-controlled) and then
+    completes after release -- deterministic, no wall-clock delay anywhere."""
+    started, release = asyncio.Event(), asyncio.Event()
+    provider = GatedProvider(started=started, release=release)
     app = chat_app_factory(provider=provider)
 
     async def drive() -> None:
@@ -828,22 +859,37 @@ def test_switching_sessions_does_not_cancel_background_turn(chat_app_factory) ->
             app.store.dispatch(SessionsAction((await app.kernel.sessions.list()).value or ()))
             app.store.dispatch(SessionAction(session_a))
             await _submit_via_composer(pilot, app, "slow turn")
-            await _wait_for(pilot, lambda: app.store.state.active_turns)
-            running = app.store.state.active_turns[0]
-            assert str(running.session_id) == session_a
-            # The store (event-folded) and the kernel snapshot reflect the same turn.
+            await _wait_for(pilot, lambda: started.is_set(), description="provider stream started")
+            await _wait_for(
+                pilot,
+                lambda: any(str(t.session_id) == session_a for t in app.store.state.active_turns),
+                description=f"turn for session {session_a} is active",
+            )
+            running = next(t for t in app.store.state.active_turns if str(t.session_id) == session_a)
             kernel_active = await app.kernel.active_turns()
             assert any(str(turn.turn_id) == str(running.turn_id) for turn in kernel_active)
-            # Switch to B via its header chip — no kernel call, turn unaffected.
+            # Switch to B via its header chip -- no kernel call, turn unaffected.
             await pilot.click(f"#session-{session_b}")
             assert app.store.state.active_session_id == session_b
-            assert app.store.state.active_turns  # A's turn is still RUNNING
-            assert str(app.store.state.active_turns[0].session_id) == session_a
-            chip_b = app.query_one(f"#session-{session_b}", Button)
-            await _wait_for(pilot, lambda: chip_b.variant == "primary")  # active chip highlighted
-            # The background turn completes on its own.
-            await _wait_for(pilot, lambda: not app.store.state.active_turns)
-            assert "succeeded" in app.store.state.turn_status.values()
+            assert any(str(t.session_id) == session_a for t in app.store.state.active_turns)
+            # The chip strip is rebuilt asynchronously (remove + remount), so the
+            # highlighted chip must be re-queried on every poll -- a reference
+            # captured before the rebuild is a detached widget that never changes.
+            def chip_b_primary() -> bool:
+                chip = app.query_one_optional(f"#session-{session_b}")
+                return chip is not None and chip.variant == "primary"
+
+            await _wait_for(pilot, chip_b_primary, description="session B chip highlighted")
+            # No kernel.cancel was ever called.
+            assert "cancelled" not in app.store.state.turn_status.values()
+            # Release the gate: A's turn completes on its own.
+            release.set()
+            await _wait_for(
+                pilot,
+                lambda: app.store.state.turn_status.get(str(running.turn_id)) == TurnStatus.SUCCEEDED.value,
+                description=f"turn {running.turn_id} reached succeeded",
+            )
+            assert not app.store.state.active_turns
             assert (await app.kernel.active_turns()) == ()
 
     asyncio.run(drive())

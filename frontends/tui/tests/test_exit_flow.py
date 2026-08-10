@@ -21,7 +21,7 @@ from kairo_tui.bootstrap import BootstrapOptions, build_running_kernel
 from kairo_tui.keyring_store import SecretStore
 from kairo_tui.screens.exit_modal import ExitWithTurnsModal
 from kairo_tui.store import SessionAction
-from tests.support.fakes import FakeProvider
+from tests.support.fakes import FakeProvider, GatedProvider
 
 
 @pytest.fixture
@@ -102,19 +102,57 @@ def test_exit_stop_all_cancels_and_exits(app_with_provider) -> None:
     asyncio.run(drive())
 
 
-def test_exit_wait_completes_after_turn_finishes(app_with_provider) -> None:
-    app = app_with_provider(delay=0.2)
+def test_exit_wait_when_turn_finishes_after_choice(workspace) -> None:
+    """exit-wait waits on the kernel; releasing the gated provider completes
+    the turn and the app shuts down -- no store callback is involved."""
+    started, release = asyncio.Event(), asyncio.Event()
+    bootstrap = build_running_kernel(
+        BootstrapOptions(workspace_root=str(workspace), config_path=workspace.parent / "config-v1.json"),
+        secret_store=SecretStore(None),
+        provider=GatedProvider(started=started, release=release),
+    )
+    app = KairoTuiApp(bootstrap)
 
     async def drive() -> None:
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             await _submit_blocking_turn(app)
-            await pilot.pause()
+            await _wait_for(pilot, lambda: started.is_set())
             app.run_worker(app.request_exit())
-            await pilot.pause()
-            assert isinstance(app.screen, ExitWithTurnsModal)
+            await _wait_for(pilot, lambda: isinstance(app.screen, ExitWithTurnsModal))
             await pilot.click("#exit-wait")
             await pilot.pause()
+            # The turn has not finished yet: the app must still be running.
+            assert app.kernel.state.value == "running"
+            release.set()
+            await _wait_for(pilot, lambda: app.kernel.state.value == "stopped")
+            assert app.kernel.state.value == "stopped"
+
+    asyncio.run(drive())
+
+
+def test_exit_wait_when_turn_finishes_before_choice(workspace) -> None:
+    """The turn ends between the modal opening and the user's click; exit-wait
+    must still shut down (kernel.wait returns immediately for a finished turn)."""
+    started, release = asyncio.Event(), asyncio.Event()
+    bootstrap = build_running_kernel(
+        BootstrapOptions(workspace_root=str(workspace), config_path=workspace.parent / "config-v1.json"),
+        secret_store=SecretStore(None),
+        provider=GatedProvider(started=started, release=release),
+    )
+    app = KairoTuiApp(bootstrap)
+
+    async def drive() -> None:
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            await _submit_blocking_turn(app)
+            await _wait_for(pilot, lambda: started.is_set())
+            app.run_worker(app.request_exit())
+            await _wait_for(pilot, lambda: isinstance(app.screen, ExitWithTurnsModal))
+            # Finish the turn before the click; the store learns via events.
+            release.set()
+            await _wait_for(pilot, lambda: app.store.state.active_turns == ())
+            await pilot.click("#exit-wait")
             await _wait_for(pilot, lambda: app.kernel.state.value == "stopped")
             assert app.kernel.state.value == "stopped"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from kairo_kernel import KairoKernel
@@ -89,7 +90,6 @@ class KairoTuiApp(App[None]):
         self.store: AppStore = bootstrap.store
         self._pump = EventPump(self.kernel, self.store)
         self._breakpoint = Breakpoint.FULL
-        self._exit_when_idle = False
         self._current_page: PageId | None = None
         self._last_theme: str | None = None
         self.store.subscribe(self._on_store_changed)
@@ -287,9 +287,6 @@ class KairoTuiApp(App[None]):
         if state.document.theme != self._last_theme:
             self._last_theme = state.document.theme
             self._apply_theme()
-        if self._exit_when_idle and not state.active_turns:
-            self._exit_when_idle = False
-            self.run_worker(self._shutdown_and_exit())
 
     async def action_quit(self) -> None:
         """Ctrl+Q and the /exit command both route through the confirmation flow."""
@@ -302,13 +299,28 @@ class KairoTuiApp(App[None]):
             return
         from kairo_tui.screens.exit_modal import ExitWithTurnsModal
 
+        # Snapshot the active turn ids BEFORE showing the modal: a turn may end
+        # between the snapshot and the user's choice, and the wait path below
+        # must still complete (kernel.wait on a finished turn returns at once).
+        turn_ids = tuple(str(turn.turn_id) for turn in active)
         choice = await self.push_screen_wait(ExitWithTurnsModal(len(active)))
         if choice == "exit-wait":
-            self._exit_when_idle = True
+            self.run_worker(self._wait_for_turns_and_exit(turn_ids))
         elif choice == "exit-stop":
             await self.kernel.shutdown(ShutdownRequest(grace_period_seconds=5.0, cancel_active_turn=True))
             self.exit()
         # "exit-back": stay
+
+    async def _wait_for_turns_and_exit(self, turn_ids: tuple[str, ...]) -> None:
+        """Wait for the snapshot's turns via the kernel (never poll the store);
+        a turn that finished before or during the modal returns immediately."""
+        if turn_ids:
+            await asyncio.gather(*(self.kernel.wait(TurnId(turn_id)) for turn_id in turn_ids))
+        still_active = await self.kernel.active_turns()
+        if still_active:
+            self.notify("Active turns are still running; exit cancelled.", severity="error", timeout=10)
+            return
+        await self._shutdown_and_exit()
 
     async def _shutdown_and_exit(self) -> None:
         await self.kernel.shutdown(ShutdownRequest(grace_period_seconds=5.0, cancel_active_turn=True))

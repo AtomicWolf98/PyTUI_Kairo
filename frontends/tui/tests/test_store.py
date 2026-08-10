@@ -33,7 +33,7 @@ from kairo_kernel.contracts.identifiers import (
     ToolCallId,
     TurnId,
 )
-from kairo_kernel.contracts.interactions import InteractionChoice, InteractionRequest
+from kairo_kernel.contracts.interactions import InteractionChoice, InteractionRequest, InteractionResponse
 from kairo_kernel.contracts.json import JsonObject
 from kairo_kernel.contracts.lifecycle import ContextStats, KernelStatus  # noqa: F401
 from kairo_kernel.contracts.tools import ToolInvocation, ToolOutputChunk, ToolResult
@@ -231,6 +231,18 @@ def test_tool_events_build_card_stages() -> None:
     assert card.output == (chunk,)
     assert card.result == result
     assert card.sequence == 4
+
+
+def test_interaction_resolved_with_response_only_removes_pending() -> None:
+    """The engine emits resolved events with only the response (interaction_id
+    is never set on the event); the reducer falls back to the response id."""
+    state = AppState()
+    request = _plan_approval_request()
+    state = fold_event(state, _event(1, EventType.INTERACTION, InteractionEvent("requested", request=request)))
+    assert len(state.pending_interactions) == 1
+    response = InteractionResponse(request.interaction_id, request.turn_id, InteractionAction.APPROVE_ONCE)
+    state = fold_event(state, _event(2, EventType.INTERACTION, InteractionEvent("resolved", response=response)))
+    assert state.pending_interactions == ()
 
 
 def test_plan_approval_marks_latest_assistant_message() -> None:

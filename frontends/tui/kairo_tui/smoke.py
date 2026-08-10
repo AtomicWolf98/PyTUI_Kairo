@@ -42,3 +42,7 @@ def run_headless_smoke(options: CliOptions) -> int:
         return 0
 
     return asyncio.run(drive())
+
+
+if __name__ == "__main__":  # pragma: no cover - module entry, exercised by tests
+    raise SystemExit(run_headless_smoke(CliOptions(headless_smoke=True)))

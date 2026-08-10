@@ -79,6 +79,14 @@ def test_toggle_authorization_noop_in_safe_mode(workspace) -> None:
     asyncio.run(drive())
 
 
+async def _wait_for(pilot, predicate, *, polls: int = 80, delay: float = 0.05, description: str) -> None:
+    for _ in range(polls):
+        await pilot.pause(delay)
+        if predicate():
+            return
+    raise AssertionError(f"timed out waiting for: {description}")
+
+
 def test_new_chat_creates_session_and_opens_chat(workspace) -> None:
     bootstrap = build_running_kernel(
         BootstrapOptions(workspace_root=str(workspace), config_path=workspace.parent / "config-v1.json"),
@@ -90,9 +98,24 @@ def test_new_chat_creates_session_and_opens_chat(workspace) -> None:
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             await pilot.press("ctrl+n")
-            await pilot.pause()
+            # _new_chat runs in an async worker; wait for the observable state
+            # transition instead of a single event-loop pause.
+            await _wait_for(
+                pilot,
+                lambda: (
+                    app.store.state.active_session_id is not None
+                    and app.store.state.page is PageId.CHAT
+                    and app.query_one_optional("#chat-screen") is not None
+                ),
+                description="new session created, page CHAT, #chat-screen mounted",
+            )
             assert app.store.state.active_session_id is not None
             assert app.store.state.page is PageId.CHAT
+            assert app.query_one_optional("#chat-screen") is not None
+            # Setup is incomplete on an empty config: the composer stays disabled,
+            # so new-chat can never bypass the setup gate.
+            assert app.store.state.setup_complete is False
+            assert app.query_one("#composer").disabled is True
 
     asyncio.run(drive())
 

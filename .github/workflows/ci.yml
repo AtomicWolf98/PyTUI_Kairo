@@ -51,7 +51,9 @@ jobs:
       - run: python -m build frontends/tui --outdir dist            # TUI -> dist/
       - run: python -m twine check dist/*.whl
       - run: KAIRO_WHEEL=dist/kairo_kernel-0.4.0a2-py3-none-any.whl python -m pytest tests/kernel/packaging
-      - run: KAIRO_TUI_WHEEL=dist/kairo_tui-0.4.0a2-py3-none-any.whl \
-             KAIRO_KERNEL_WHEEL=dist/kairo_kernel-0.4.0a2-py3-none-any.whl \
-             python -m pytest frontends/tui/tests/test_wheel_content.py
+      - name: Validate TUI wheel contents
+        env:
+          KAIRO_TUI_WHEEL: dist/kairo_tui-0.4.0a2-py3-none-any.whl
+          KAIRO_KERNEL_WHEEL: dist/kairo_kernel-0.4.0a2-py3-none-any.whl
+        run: python -m pytest frontends/tui/tests/test_wheel_content.py
       - run: python -m pip_audit .

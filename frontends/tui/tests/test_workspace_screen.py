@@ -28,7 +28,7 @@ from kairo_tui.app import KairoTuiApp
 from kairo_tui.bootstrap import BootstrapOptions, build_running_kernel
 from kairo_tui.config_document import ConfigDocument, ConfigDocumentAdapter, RoleMapping
 from kairo_tui.keyring_store import SecretStore
-from kairo_tui.screens.workspace import WorkspaceTreeWidget
+from kairo_tui.screens.workspace import WorkspaceScreen, WorkspaceTreeWidget
 from kairo_tui.store import EventAction
 from kairo_tui.workspace_model import change_button_id
 from tests.support.fakes import NOW_PROFILE, FakeProvider
@@ -372,5 +372,86 @@ def test_bookmark_empty_state(workspace_app_factory) -> None:
                 pilot, lambda: container.query_one_optional("#workspace-bookmarks-empty", Static) is not None
             )
             assert container.query_one("#workspace-bookmarks-empty", Static).content == "No bookmarks."
+
+    asyncio.run(drive())
+
+
+def test_unmount_cancels_pending_workspace_load(workspace_app_factory) -> None:
+    """A gated changed_files read must never write to the DOM after the screen
+    unmounts: switching away cancels the screen-owned worker (the coroutine dies
+    at its next await with CancelledError) instead of finishing against a
+    detached screen. run_test re-raises any WorkerFailed, so reaching the final
+    assertion means no detached write happened."""
+    app = workspace_app_factory()
+
+    async def drive() -> None:
+        started, release = asyncio.Event(), asyncio.Event()
+        completions = 0
+        original = app.kernel.workspace.changed_files
+
+        async def gated_changed_files():
+            nonlocal completions
+            started.set()
+            await release.wait()
+            completions += 1  # reached only if the worker survives unmount
+            return await original()
+
+        app.kernel.workspace.changed_files = gated_changed_files  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            await _open_workspace(pilot, app)
+            await _wait_for(pilot, lambda: started.is_set())
+            # Switch away before the gated read completes -> WorkspaceScreen unmounts.
+            await pilot.press("ctrl+1")
+            await _wait_for(pilot, lambda: app.query_one_optional("#chat-screen") is not None)
+            release.set()
+            await pilot.pause(0.2)
+            assert app.query_one_optional("#workspace-screen") is None
+            # The unmounted screen's worker was cancelled at its await; it must
+            # never resume after release (completions stays 0).
+            assert completions == 0
+
+    asyncio.run(drive())
+
+
+def test_rapid_workspace_navigation_drops_detached_results(workspace_app_factory) -> None:
+    """Rapid Workspace<->Chat switching with gated reads: every intermediate
+    screen's pending read is cancelled on unmount; exactly one WorkspaceScreen
+    remains and its read completes after release without any worker failure."""
+    app = workspace_app_factory()
+
+    async def drive() -> None:
+        started, release = asyncio.Event(), asyncio.Event()
+        completions = 0
+        original = app.kernel.workspace.changed_files
+
+        async def gated_changed_files():
+            nonlocal completions
+            started.set()
+            await release.wait()
+            completions += 1  # reached only if the worker survives unmount
+            return await original()
+
+        app.kernel.workspace.changed_files = gated_changed_files  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            for _ in range(20):
+                await _open_workspace(pilot, app)
+                await _wait_for(pilot, lambda: len(app.query(WorkspaceScreen)) == 1)
+                if len(app.query(WorkspaceScreen)) != 1:
+                    break  # guard: never assert against a double-mount window
+                await pilot.press("ctrl+1")
+                await _wait_for(pilot, lambda: app.query_one_optional("#chat-screen") is not None)
+            # Final navigation returns to Workspace; only one instance may exist.
+            await _open_workspace(pilot, app)
+            await _wait_for(pilot, lambda: len(app.query(WorkspaceScreen)) == 1)
+            assert len(app.query(WorkspaceScreen)) == 1
+            release.set()
+            await pilot.pause(0.3)
+            # The surviving screen's gated read completed and rendered.
+            assert app.query_one_optional("#workspace-changes") is not None
+            # Every intermediate screen's worker was cancelled at unmount; only
+            # the final (still mounted) screen's read completed.
+            assert completions == 1
 
     asyncio.run(drive())

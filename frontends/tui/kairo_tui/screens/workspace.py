@@ -11,12 +11,14 @@ the recent workspace is recorded (``record_recent_workspace``).
 
 from __future__ import annotations
 
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import cast
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.widgets import Button, Input, Static, Tree
+from textual.worker import Worker
 
 from kairo_tui.page import record_recent_workspace
 from kairo_tui.store import AppStore, WorkspaceAction
@@ -105,6 +107,7 @@ class WorkspaceScreen(Container):
         self.store: AppStore = app.store
         self._change_paths: dict[str, str] = {}   # sanitized id → real relative path
         self._bookmark_names: dict[str, str] = {}  # sanitized id → real bookmark name
+        self._workers: list[Worker[None]] = []  # screen-owned workers, cancelled on unmount
 
     def compose(self) -> ComposeResult:
         yield Static("[b]Workspace[/b]", id="workspace-title")
@@ -130,8 +133,23 @@ class WorkspaceScreen(Container):
             yield Button("Move", id="workspace-move", variant="primary")
         yield Static("", id="workspace-status")
 
+    def _start_worker(self, coroutine: Coroutine[object, object, None]) -> Worker[None]:
+        """Run a screen-owned worker and track it for cancellation on unmount."""
+        worker = self.run_worker(coroutine)
+        self._workers.append(worker)
+        return worker
+
     def on_mount(self) -> None:
-        self.run_worker(self._load_all())
+        self._start_worker(self._load_all())
+
+    def on_unmount(self) -> None:
+        """Cancel every worker this screen started; a cancelled coroutine dies at
+        its next await (``CancelledError`` propagates), so a detached screen can
+        never write to the DOM afterwards."""
+        for worker in self._workers:
+            if worker.is_running:
+                worker.cancel()
+        self._workers.clear()
 
     async def _load_all(self) -> None:
         await self._fetch_tree(".")
@@ -149,7 +167,9 @@ class WorkspaceScreen(Container):
             return  # stale response dropped (tui_plan.md)
         if not self.is_mounted:
             return
-        widget = self.query_one("#workspace-tree", WorkspaceTreeWidget)
+        widget = self.query_one_optional("#workspace-tree", WorkspaceTreeWidget)
+        if widget is None:
+            return  # detached screen: nothing to render into
         widget.root.remove_children()
         for entry in tree.entries:
             label = f"{entry.name}/" if entry.is_directory else entry.name
@@ -178,8 +198,12 @@ class WorkspaceScreen(Container):
             return  # stale response dropped (tui_plan.md)
         if not self.is_mounted:
             return
-        container = self.query_one("#workspace-changes", VerticalScroll)
+        container = self.query_one_optional("#workspace-changes", VerticalScroll)
+        if container is None:
+            return  # detached screen: nothing to render into
         await container.remove_children()
+        if not self.is_mounted:
+            return
         if not changed.is_git_repository:
             await container.mount(Static("Not a git repository.", id="workspace-changes-empty"))
             return
@@ -189,6 +213,8 @@ class WorkspaceScreen(Container):
             return
         self._change_paths = {}
         for row in rows:
+            if not self.is_mounted:
+                return
             key = change_button_id(row.relative_path)
             self._change_paths[key] = row.relative_path
             await container.mount(Button(row.label, id=f"chg-{key}"))
@@ -211,7 +237,10 @@ class WorkspaceScreen(Container):
             text = preview.text
         if preview.truncated:
             text += "\n… truncated …"
-        self.query_one("#workspace-preview", Static).update(text)
+        widget = self.query_one_optional("#workspace-preview", Static)
+        if widget is None:
+            return  # detached screen: nothing to render into
+        widget.update(text)
 
     async def _fetch_diff(self, relative_path: str) -> None:
         result = await self.kernel.workspace.diff(relative_path)
@@ -230,7 +259,10 @@ class WorkspaceScreen(Container):
             text = diff.unified_diff
             if diff.truncated:
                 text += "\n… truncated …"
-        self.query_one("#workspace-diff", Static).update(text)
+        widget = self.query_one_optional("#workspace-diff", Static)
+        if widget is None:
+            return  # detached screen: nothing to render into
+        widget.update(text)
 
     async def _save_bookmark(self) -> None:
         name_input = self.query_one("#workspace-bookmark-name", Input)
@@ -284,13 +316,19 @@ class WorkspaceScreen(Container):
         await self._fetch_changes()
 
     async def _render_bookmarks(self, bookmarks) -> None:
-        container = self.query_one("#workspace-bookmark-list", VerticalScroll)
+        container = self.query_one_optional("#workspace-bookmark-list", VerticalScroll)
+        if container is None:
+            return  # detached screen: nothing to render into
         await container.remove_children()
+        if not self.is_mounted:
+            return
         if not bookmarks:
             await container.mount(Static("No bookmarks.", id="workspace-bookmarks-empty"))
             return
         self._bookmark_names = {}
         for bookmark in bookmarks:
+            if not self.is_mounted:
+                return
             key = change_button_id(bookmark.name)
             self._bookmark_names[key] = bookmark.name
             row = Horizontal(id=f"bm-row-{key}")
@@ -301,23 +339,23 @@ class WorkspaceScreen(Container):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
         if button_id == "workspace-bookmark-save":
-            self.run_worker(self._save_bookmark())
+            self._start_worker(self._save_bookmark())
         elif button_id == "workspace-move":
-            self.run_worker(self._move())
+            self._start_worker(self._move())
         elif button_id.startswith("chg-"):
             path = self._change_paths.get(button_id.removeprefix("chg-"), "")
             if path:
-                self.run_worker(self._fetch_diff(path))
+                self._start_worker(self._fetch_diff(path))
         elif button_id.startswith("bm-remove-"):
             name = self._bookmark_names.get(button_id.removeprefix("bm-remove-"), "")
             if name:
-                self.run_worker(self._remove_bookmark(name))
+                self._start_worker(self._remove_bookmark(name))
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         node = event.node
         path = node.data
         if path is not None:
-            self.run_worker(self._preview(str(path)))
+            self._start_worker(self._preview(str(path)))
 
     def _notice(self, message: str) -> None:
         status = self.query_one_optional("#workspace-status", Static)

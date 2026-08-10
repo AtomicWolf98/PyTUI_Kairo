@@ -103,3 +103,31 @@ class FakeToolRegistry:
 
     async def reload(self) -> KernelResult[tuple[ToolDescriptor, ...]]:
         return KernelResult.success(tuple(tool.descriptor for tool in self.by_name.values()))
+
+
+class GatedProvider(FakeProvider):
+    """Turn-completion gate for deterministic tests: ``started`` fires when the
+    stream begins; the stream does not finish (no terminal event) until
+    ``release`` is set. The cancellation token is still observed so teardown
+    never hangs when a turn is cancelled before release."""
+
+    def __init__(
+        self,
+        *scripts: tuple[ProviderStreamEvent, ...],
+        started: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        super().__init__(*scripts or ((ProviderStreamEvent(kind=ProviderStreamKind.COMPLETED),),))
+        self.started = started
+        self.release = release
+
+    async def _stream(self, cancellation: CancellationToken) -> AsyncIterator[ProviderStreamEvent]:
+        self.started.set()
+        release_task = asyncio.ensure_future(self.release.wait())
+        cancel_task = asyncio.ensure_future(cancellation.wait())
+        done, _ = await asyncio.wait({release_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
+        if release_task not in done:
+            return  # cancelled before release: end the stream without completing the turn
+        for event in self.scripts.pop(0) if self.scripts else ():
+            await asyncio.sleep(0)
+            yield event

@@ -258,13 +258,20 @@ def fold_event(state: AppState, event: KernelEvent) -> AppState:
         if payload.request.kind is InteractionKind.PLAN_APPROVAL:
             state = _replace(state, messages=_mark_plan_for_turn(state.messages, str(payload.request.turn_id)))
         return state
-    if isinstance(payload, InteractionEvent) and payload.action == "resolved" and payload.interaction_id is not None:
-        return _replace(
-            state,
-            pending_interactions=tuple(
-                item for item in state.pending_interactions if item.interaction_id != payload.interaction_id
-            ),
-        )
+    if isinstance(payload, InteractionEvent) and payload.action == "resolved":
+        # The engine emits resolved events carrying only the response (the
+        # interaction_id field is never set); fall back to the response's id.
+        resolved_id = payload.interaction_id
+        if resolved_id is None and payload.response is not None:
+            resolved_id = payload.response.interaction_id
+        if resolved_id is not None:
+            return _replace(
+                state,
+                pending_interactions=tuple(
+                    item for item in state.pending_interactions if item.interaction_id != resolved_id
+                ),
+            )
+        return state
     if isinstance(payload, ChangeEvent) and event.event_type is EventType.WORKSPACE_CHANGED:
         return _replace(state, workspace_revision=payload.revision)
     return state
