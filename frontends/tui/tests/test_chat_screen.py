@@ -591,12 +591,11 @@ def test_approve_once_executes_tool(chat_app_factory) -> None:
             await pilot.pause()
             await _submit_via_composer(pilot, app, "read the file")
             timeline = app.query_one("#chat-timeline", VerticalScroll)
-            await _wait_for(
-                pilot,
-                lambda: timeline.query("#tool-read_file-approve"),
-                polls=200,
-                description="tool approval card appears",
-            )
+            def approve_button_ready() -> bool:
+                button = timeline.query_one_optional("#tool-read_file-approve", Button)
+                return button is not None and button.is_mounted
+
+            await _wait_for(pilot, approve_button_ready, polls=200, description="tool approval button mounted")
             await pilot.click("#tool-read_file-approve")
             await _wait_for(pilot, lambda: tool.calls == 1, polls=200, description="tool executed once")
             text = timeline.query_one(".tool-card-text", Static)
@@ -646,12 +645,12 @@ def test_stop_from_tool_card_cancels_turn(chat_app_factory) -> None:
             await pilot.pause()
             await _submit_via_composer(pilot, app, "read the file")
             timeline = app.query_one("#chat-timeline", VerticalScroll)
-            await _wait_for(
-                pilot,
-                lambda: timeline.query("#tool-read_file-stop"),
-                polls=200,
-                description="tool stop button appears",
-            )
+
+            def stop_button_ready() -> bool:
+                button = timeline.query_one_optional("#tool-read_file-stop", Button)
+                return button is not None and button.is_mounted
+
+            await _wait_for(pilot, stop_button_ready, polls=200, description="tool stop button mounted")
             await pilot.click("#tool-read_file-stop")
             await _wait_for(
                 pilot,
