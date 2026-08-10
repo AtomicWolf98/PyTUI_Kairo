@@ -106,10 +106,15 @@ class FakeToolRegistry:
 
 
 class GatedProvider(FakeProvider):
-    """Turn-completion gate for deterministic tests: ``started`` fires when the
-    stream begins; the stream does not finish (no terminal event) until
-    ``release`` is set. The cancellation token is still observed so teardown
-    never hangs when a turn is cancelled before release."""
+    """Turn-completion gate for deterministic tests.
+
+    ``stream()`` reserves the request's script synchronously (so concurrent
+    streams can never swap A/B content), then defers to ``_gated_stream``:
+    ``started`` fires when the stream begins; no terminal event is produced
+    until ``release`` is set. The cancellation token is always observed and
+    every release/cancel wait task is reaped in ``finally``, so teardown never
+    hangs and no pending task leaks out of the provider.
+    """
 
     def __init__(
         self,
@@ -120,14 +125,37 @@ class GatedProvider(FakeProvider):
         super().__init__(*scripts or ((ProviderStreamEvent(kind=ProviderStreamKind.COMPLETED),),))
         self.started = started
         self.release = release
+        self.active_wait_tasks = 0  # read-only observation point for tests
 
-    async def _stream(self, cancellation: CancellationToken) -> AsyncIterator[ProviderStreamEvent]:
+    def stream(
+        self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+    ) -> AsyncIterator[ProviderStreamEvent]:
+        self.requests.append(request)
+        script = self.scripts.pop(0) if self.scripts else ()
+        return self._gated_stream(script, cancellation)
+
+    async def _gated_stream(
+        self,
+        script: tuple[ProviderStreamEvent, ...],
+        cancellation: CancellationToken,
+    ) -> AsyncIterator[ProviderStreamEvent]:
         self.started.set()
-        release_task = asyncio.ensure_future(self.release.wait())
-        cancel_task = asyncio.ensure_future(cancellation.wait())
-        done, _ = await asyncio.wait({release_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
-        if release_task not in done:
-            return  # cancelled before release: end the stream without completing the turn
-        for event in self.scripts.pop(0) if self.scripts else ():
-            await asyncio.sleep(0)
-            yield event
+        self.active_wait_tasks += 1
+        release_task = asyncio.create_task(self.release.wait())
+        cancel_task = asyncio.create_task(cancellation.wait())
+        tasks = (release_task, cancel_task)
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if cancel_task in done and release_task not in done:
+                return  # cancelled before release: no terminal event
+            for event in script:
+                await asyncio.sleep(0)
+                yield event
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.active_wait_tasks -= 1

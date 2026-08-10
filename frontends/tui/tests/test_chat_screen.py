@@ -741,6 +741,86 @@ def test_countdown_display_only_never_auto_responds(chat_app_factory) -> None:
     asyncio.run(drive())
 
 
+class _NeverCancelToken:
+    """CancellationToken that never fires (stream waits on release only)."""
+
+    cancelled = False
+
+    async def wait(self) -> None:
+        await asyncio.Event().wait()  # pragma: no cover - blocks forever
+
+
+class _ManualCancelToken:
+    """CancellationToken whose wait() completes when the test cancels it."""
+
+    def __init__(self) -> None:
+        self._cancelled = asyncio.Event()
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self._cancelled.set()
+
+    async def wait(self) -> None:
+        await self._cancelled.wait()
+
+
+async def _drain(iterator) -> list[ProviderStreamEvent]:
+    return [event async for event in iterator]
+
+
+def test_gated_provider_reserves_script_per_request() -> None:
+    """Each request binds its own script at stream() time: advancing the streams
+    in reverse creation order must still yield the per-request content."""
+    started, release = asyncio.Event(), asyncio.Event()
+    script_a = (ProviderStreamEvent(ProviderStreamKind.COMPLETED, content=(TextBlock("A"),)),)
+    script_b = (ProviderStreamEvent(ProviderStreamKind.COMPLETED, content=(TextBlock("B"),)),)
+    provider = GatedProvider(script_a, script_b, started=started, release=release)
+    request = ProviderRequest(profile=NOW_PROFILE, messages=(), role="chat")
+    it_a = provider.stream(request, _NeverCancelToken())
+    it_b = provider.stream(request, _NeverCancelToken())
+
+    async def exercise() -> None:
+        release.set()
+        events_b = await _drain(it_b)  # advance B first (reverse creation order)
+        events_a = await _drain(it_a)
+        assert [b.content[0].text for b in events_b] == ["B"]
+        assert [a.content[0].text for a in events_a] == ["A"]
+
+    asyncio.run(exercise())
+
+
+def test_gated_provider_cancellation_reaps_wait_tasks() -> None:
+    """Cancelling before release ends the stream with no terminal event and
+    reaps every release/cancel wait task (no pending tasks leak)."""
+    started, release = asyncio.Event(), asyncio.Event()
+    provider = GatedProvider(started=started, release=release)
+    token = _ManualCancelToken()
+    request = ProviderRequest(profile=NOW_PROFILE, messages=(), role="chat")
+    it = provider.stream(request, token)
+
+    async def exercise() -> None:
+        async def advance() -> tuple[list[ProviderStreamEvent], bool]:
+            events: list[ProviderStreamEvent] = []
+            try:
+                async for event in it:
+                    events.append(event)
+            except asyncio.CancelledError:
+                return events, True
+            return events, False
+
+        advance_task = asyncio.ensure_future(advance())
+        await asyncio.sleep(0.05)  # let the stream reach the wait
+        assert started.is_set()
+        token.cancel()
+        events, cancelled = await advance_task
+        assert not events  # no terminal event was produced
+        assert not cancelled  # the stream ended normally, not via CancelledError
+        assert provider.active_wait_tasks == 0  # both wait tasks were reaped
+
+    asyncio.run(exercise())
+
+
 def _joined(content) -> str:
     """Concatenated TextBlock text of a message's content tuple."""
     return "".join(block.text for block in content if isinstance(block, TextBlock))
@@ -786,14 +866,35 @@ def test_two_sessions_run_in_parallel(chat_app_factory) -> None:
                 description="both turns succeeded",
             )
             assert not app.store.state.active_turns
-            # Each session's timeline carries its own assistant bubble.
+            # Each session's timeline carries its own assistant bubble. The chip
+            # strip is rebuilt asynchronously (remove + remount), so wait for the
+            # target chip to actually be mounted before clicking it.
+            async def _wait_for_session_chip(session_id: str) -> None:
+                await _wait_for(
+                    pilot,
+                    lambda: app.query_one_optional(f"#session-{session_id}", Button) is not None,
+                    description=f"session chip {session_id} mounted",
+                )
+
             timeline = app.query_one("#chat-timeline", VerticalScroll)
+            await _wait_for_session_chip(session_a)
             await pilot.click(f"#session-{session_a}")
+            await _wait_for(
+                pilot,
+                lambda: app.store.state.active_session_id == session_a,
+                description="session A became active",
+            )
             await _wait_for(pilot, lambda: len(timeline.query(".msg-assistant")) == 1, description="session A bubble rendered")
             assistant = timeline.query_one(".msg-assistant", Static)
             assert isinstance(assistant.content, Markdown)
             assert assistant.content.markup == "A says hi"
+            await _wait_for_session_chip(session_b)
             await pilot.click(f"#session-{session_b}")
+            await _wait_for(
+                pilot,
+                lambda: app.store.state.active_session_id == session_b,
+                description="session B became active",
+            )
             await _wait_for(pilot, lambda: len(timeline.query(".msg-assistant")) == 1, description="session B bubble rendered")
             assistant = timeline.query_one(".msg-assistant", Static)
             assert isinstance(assistant.content, Markdown)

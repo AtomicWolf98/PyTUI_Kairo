@@ -47,6 +47,7 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -e "frontends/tui[dev]"
       - run: python -m build                                        # kernel -> dist/
       - run: python -m build frontends/tui --outdir dist            # TUI -> dist/
       - run: python -m twine check dist/*.whl
