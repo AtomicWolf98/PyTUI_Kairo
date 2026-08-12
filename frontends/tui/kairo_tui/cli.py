@@ -1,28 +1,29 @@
-"""Command-line entry point for kairo-tui."""
+"""Command-line entry point for kairo-tui (V2 development shell)."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+from kairo_kernel import KairoKernel
 
 
 @dataclass(frozen=True)
 class CliOptions:
-    """Parsed ``kairo-tui`` invocation; no secrets, no paths resolved yet."""
+    """Parsed invocation; no secrets, no resolved paths."""
 
     workspace: str | None = None
     config_path: str | None = None
-    theme: str | None = None
-    reduced_motion: bool = False
     safe_mode: bool = False
-    headless_smoke: bool = False
 
 
 def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
     parser = argparse.ArgumentParser(
         prog="kairo-tui",
-        description="Kairo Textual TUI (kairo-tui 0.4.0a2).",
+        description="Kairo chat-first TUI (v2).",
     )
     parser.add_argument(
         "workspace",
@@ -35,39 +36,29 @@ def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
         dest="config_path",
         default=None,
         metavar="PATH",
-        help="Path to the global config-v1.json document (default: platformdirs user config dir).",
+        help="Path to the global config-v1.json document.",
     )
-    parser.add_argument("--theme", default=None, metavar="NAME", help="Theme name.")
-    parser.add_argument("--reduced-motion", action="store_true", help="Disable animations.")
     parser.add_argument(
         "--safe-mode",
         action="store_true",
-        help="Force Manual authorization, disable MCP auto-connect and persisted settings writes.",
+        help="Open in-memory: no persistence, no automatic MCP connection.",
     )
-    parser.add_argument(
-        "--headless-smoke",
-        action="store_true",
-        help="Run the deterministic headless smoke check and exit.",
-    )
+    parser.add_argument("--version", action="version", version="kairo-tui 0.4.0a2")
     parsed = parser.parse_args(argv)
-    return CliOptions(
-        workspace=parsed.workspace,
-        config_path=parsed.config_path,
-        theme=parsed.theme,
-        reduced_motion=parsed.reduced_motion,
-        safe_mode=parsed.safe_mode,
-        headless_smoke=parsed.headless_smoke,
-    )
+    return CliOptions(parsed.workspace, parsed.config_path, parsed.safe_mode)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Console entry point; returns the process exit code."""
-    options = parse_args(argv)
-    if options.headless_smoke:
-        from kairo_tui.smoke import run_headless_smoke
-
-        return run_headless_smoke(options)
+    """Start the V2 app. A failed kernel open never blocks input."""
     from kairo_tui.app import KairoTuiApp
+    from kairo_tui.bootstrap import open_tui_kernel
 
-    KairoTuiApp.from_options(options).run()
+    options = parse_args(argv)
+    kernel: KairoKernel | None = None
+    opened = asyncio.run(open_tui_kernel(options))
+    if opened.ok and opened.value is not None:
+        kernel = opened.value.kernel
+    elif opened.error is not None:
+        print(f"Warning: {opened.error.message}", file=sys.stderr)
+    KairoTuiApp(kernel=kernel).run()
     return 0

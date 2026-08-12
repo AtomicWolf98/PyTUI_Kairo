@@ -1,107 +1,89 @@
-"""AST + import-surface boundary tests (tui_plan.md gate)."""
+"""X0 boundary gates: single package, no legacy gates, public-surface imports."""
 
 from __future__ import annotations
 
-import ast
+import re
 from pathlib import Path
 
-PACKAGE = Path(__file__).resolve().parents[1] / "kairo_tui"
-
-FORBIDDEN_ROOTS = {
-    "agent",
-    "tools",
-    # kairo_kernel private modules (only the public surface is allowed)
+ROOT = Path(__file__).parents[1] / "kairo_tui"
+FORBIDDEN_KERNEL_IMPORTS = (
+    "kairo_kernel.kernel",
     "kairo_kernel.engine",
     "kairo_kernel.services",
+    "kairo_kernel.storage",
     "kairo_kernel.runtime",
-    "kairo_kernel.factory",
-    "kairo_kernel.kernel",
+    "kairo_kernel.tools",
+    "kairo_kernel.providers",
     "kairo_kernel.mcp",
     "kairo_kernel.memory",
-    "kairo_kernel.providers",
     "kairo_kernel.skills",
-    "kairo_kernel.storage",
-    "kairo_kernel._version",
-    "kairo_kernel.config_document",
-}
-
-ALLOWED_KERNEL_IMPORTS = {"kairo_kernel", "kairo_kernel.contracts", "kairo_kernel.ports", "kairo_kernel.errors"}
+)
 
 
-def _import_roots() -> list[tuple[Path, str]]:
-    found: list[tuple[Path, str]] = []
-    for path in sorted(PACKAGE.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    found.append((path, alias.name.split(".")[0]))
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                found.append((path, node.module.split(".")[0]))
-    return found
+def _python_files() -> list[Path]:
+    return [path for path in ROOT.rglob("*.py") if "__pycache__" not in path.parts]
 
 
-def test_no_forbidden_imports() -> None:
-    violations = [
-        (str(path), root)
-        for path, root in _import_roots()
-        if root in FORBIDDEN_ROOTS or any(root.startswith(f"{forbidden}.") for forbidden in FORBIDDEN_ROOTS)
-    ]
+def test_no_setup_screen() -> None:
+    source = "\n".join(path.read_text(encoding="utf-8") for path in _python_files())
+    assert "SetupScreen" not in source
+    assert "setup_screen" not in source
+
+
+def test_no_composer_setup_gate() -> None:
+    source = "\n".join(path.read_text(encoding="utf-8") for path in _python_files())
+    assert "setup_complete" not in source
+    assert "composer.disabled" not in source
+
+
+def test_single_tui_package() -> None:
+    package_dirs = [path.name for path in Path(__file__).parents[1].iterdir() if path.is_dir()]
+    assert "kairo_tui" in package_dirs
+    assert "kairo_tui_v2" not in package_dirs
+    assert "legacy" not in package_dirs
+    assert "next" not in package_dirs
+
+
+def test_frontend_imports_only_kernel_public_surface() -> None:
+    violations: list[str] = []
+    for path in _python_files():
+        text = path.read_text(encoding="utf-8")
+        for forbidden in FORBIDDEN_KERNEL_IMPORTS:
+            if re.search(rf"^\s*(from|import)\s+{re.escape(forbidden)}(\.|\s)", text, re.M):
+                violations.append(f"{path}: {forbidden}")
     assert violations == []
 
 
-def test_kernel_imports_are_public_surface_only() -> None:
-    violations = [
-        (str(path), module)
-        for path in sorted(PACKAGE.rglob("*.py"))
-        for module in _kernel_imports(path)
-        if not _is_allowed_kernel_module(module)
-    ]
-    assert violations == []
+def test_widgets_do_not_reference_kernel() -> None:
+    """Widgets never hold the kernel or its services; contract types are fine."""
+    widgets_dir = ROOT / "widgets"
+    for path in widgets_dir.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "KairoKernel" not in text, path
+        assert "TuiController" not in text, path
+        assert "kairo_kernel.kernel" not in text, path
+        assert "kairo_kernel.services" not in text, path
+        assert "kairo_kernel.engine" not in text, path
+        assert "kairo_kernel.storage" not in text, path
+        assert "kairo_kernel.runtime" not in text, path
 
 
-def _is_allowed_kernel_module(module: str) -> bool:
-    """kairo_kernel, kairo_kernel.contracts.*, kairo_kernel.ports.* and kairo_kernel.errors.* only."""
-    if module == "kairo_kernel":
-        return True
-    return any(
-        module == allowed or module.startswith(f"{allowed}.")
-        for allowed in ALLOWED_KERNEL_IMPORTS
-        if allowed != "kairo_kernel"
-    )
+def test_controller_does_not_import_textual_widgets() -> None:
+    controller = ROOT / "controller.py"
+    text = controller.read_text(encoding="utf-8")
+    assert "textual" not in text
+    assert "kairo_tui.widgets" not in text
+    assert "kairo_tui.dialogs" not in text
+    assert "kairo_tui.panels" not in text
 
 
-def _kernel_imports(path: Path) -> list[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    modules: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.extend(alias.name for alias in node.names if alias.name == "kairo_kernel" or alias.name.startswith("kairo_kernel."))
-        elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("kairo_kernel"):
-            modules.append(node.module)
-    return modules
+def test_no_secret_fields_in_app_state() -> None:
+    """AppState has no field that could carry a secret value."""
+    import re
 
-
-def test_public_facade_surface_is_available() -> None:
-    import kairo_kernel
-
-    expected = {
-        "KairoKernel", "__version__", "KernelConfig", "KernelDependencies",
-        "KernelError", "KernelResult", "KERNEL_API_VERSION", "build_kernel",
-        "contracts", "ports",
-    }
-    assert expected <= set(dir(kairo_kernel))
-
-
-def test_compat_screen_deleted() -> None:
-    assert not PACKAGE.joinpath("screens/compat.py").exists()
-
-
-def test_workbench_screen_deleted() -> None:
-    """The pre-shell WorkbenchScreen was replaced by the per-page screens."""
-    assert not PACKAGE.joinpath("screens/workbench.py").exists()
-
-
-def test_legacy_agent_ui_deleted() -> None:
-    agent_ui = PACKAGE.parents[2] / "agent" / "ui"
-    assert not agent_ui.exists()
+    state = ROOT / "state.py"
+    text = state.read_text(encoding="utf-8")
+    dataclass_block = text.split("class AppState:", 1)[1].split("class ", 1)[0]
+    fields = re.findall(r"^    ([a-z_]+):", dataclass_block, re.M)
+    for field in fields:
+        assert field not in ("secret", "api_key", "token", "password", "api_key_value"), field

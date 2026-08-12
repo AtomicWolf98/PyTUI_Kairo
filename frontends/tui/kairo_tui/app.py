@@ -1,471 +1,526 @@
-"""KairoTuiApp: the Textual application shell."""
+"""V2 chat-first application shell."""
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-
 from kairo_kernel import KairoKernel
-from kairo_kernel.contracts.enums import AuthorizationMode
+from kairo_kernel.contracts.content import TextBlock
 from kairo_kernel.contracts.identifiers import TurnId
-from kairo_kernel.contracts.lifecycle import ShutdownRequest
-from kairo_kernel.contracts.preferences import PreferencesPatch
+from kairo_kernel.contracts.interactions import InteractionResponse
+from kairo_kernel.contracts.providers import ProviderConnectionRequest
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, VerticalScroll
-from textual.timer import Timer
-from textual.widgets import Button
 
-from kairo_tui.bootstrap import BootstrapOptions, BootstrapResult, build_running_kernel
-from kairo_tui.cli import CliOptions
-from kairo_tui.event_pump import EventPump
-from kairo_tui.layout import Breakpoint, responsive_layout
-from kairo_tui.page import refresh_sessions
-from kairo_tui.screens.inspector import InspectorPanel
-from kairo_tui.store import (
-    AppStore,
-    CompatAction,
-    DraftAction,
-    InspectorAction,
-    KernelStatusAction,
-    PageAction,
-    PageId,
-    SessionAction,
-    UserTurnAction,
+from kairo_tui._version import __version__
+from kairo_tui.commands import LOCAL_COMMANDS
+from kairo_tui.controller import TuiController
+from kairo_tui.dialogs.approval import ApprovalDialog
+from kairo_tui.dialogs.commands import CommandPalette
+from kairo_tui.dialogs.connect import ConnectDialog
+from kairo_tui.dialogs.models import ModelPicker
+from kairo_tui.dialogs.plan import PlanDialog
+from kairo_tui.dialogs.sessions import SessionPicker
+from kairo_tui.event_loop import KernelEventLoop
+from kairo_tui.panels.context import ContextPanel
+from kairo_tui.panels.diagnostics import DiagnosticsPanel
+from kairo_tui.panels.extensions import ExtensionsPanel
+from kairo_tui.panels.memory import MemoryPanel
+from kairo_tui.panels.settings import SettingsPanel
+from kairo_tui.panels.workspace import WorkspacePanel
+from kairo_tui.reducer import (
+    CloseOverlay,
+    ConnectSaved,
+    DraftChanged,
+    DraftReady,
+    OpenConnectDialog,
+    SessionActivated,
+    SessionsLoaded,
+    StopFinished,
+    StopRequested,
+    SubmitDraft,
+    TurnUpdated,
+    UiAction,
+    reduce,
 )
-from kairo_tui.widgets import Composer, StatusLine, TopBar
+from kairo_tui.state import AppState, OverlayKind, SessionTranscript, TurnView
+from kairo_tui.widgets.composer import Composer
+from kairo_tui.widgets.shell import Shell
+from kairo_tui.widgets.status import StatusLine
+from kairo_tui.widgets.transcript import Transcript
 
 
 class KairoTuiApp(App[None]):
-    TITLE = "Kairo"
-    SUB_TITLE = "0.4.0a2"
-    ENABLE_COMMAND_PALETTE = False
+    """Chat-first workbench; the composer is always focusable and inputable."""
 
-    # OpenCode-style leader bindings are the visible contract.  The old
-    # single-key bindings remain as hidden compatibility aliases for existing
-    # scripts and muscle memory; they do not render a navigation rail.
+    TITLE = "Kairo"
+    SUB_TITLE = __version__
+    CSS_PATH = "theme.tcss"
+
     BINDINGS = [
-        Binding("escape", "esc", "Escape", priority=True, show=False),
-        Binding("ctrl+x", "leader", "Leader", priority=True, show=False),
-        Binding("ctrl+p", "command_palette", "Commands", priority=True, show=False),
         Binding("ctrl+l", "focus_composer", "Composer", show=False),
-        Binding("ctrl+t", "toggle_thinking", "Thinking", show=False),
-        Binding("ctrl+1", "page('chat')", "Chat", show=False),
-        Binding("ctrl+2", "page('sessions')", "Sessions", show=False),
-        Binding("ctrl+3", "page('workspace')", "Workspace", show=False),
-        Binding("ctrl+b", "page('workspace')", "Workspace", show=False),
-        Binding("ctrl+4", "page('memory')", "Memory", show=False),
-        Binding("ctrl+5", "page('extensions')", "Extensions", show=False),
-        Binding("ctrl+6", "page('settings')", "Settings", show=False),
-        Binding("ctrl+7", "page('doctor')", "Doctor", show=False),
-        Binding("ctrl+k", "command_palette", "Commands", show=False),
-        Binding("ctrl+n", "new_chat", "New chat", show=False),
-        Binding("ctrl+a", "toggle_authorization", "Authorization", show=False),
+        Binding("ctrl+p", "command_palette", "Commands", priority=True, show=False),
+        Binding("ctrl+x", "leader", "Leader", priority=True, show=False),
     ]
 
-    CSS = """
-    /* Chat-first shell: legacy nav/inspector stay mounted for compatibility
-       but consume no visual space. They are replaced by the command palette
-       and the opt-in context drawer. */
-    #workbench { layout: vertical; background: $background; }
-    #topbar { height: 2; padding: 0 2; content-align: left middle;
-              color: $text; background: $surface; border-bottom: solid $panel; }
-    #body { layout: horizontal; height: 1fr; position: relative; }
-    #nav { width: 1; min-width: 0; padding: 0; background: $background;
-           opacity: 0; overflow: hidden; }
-    #nav Button { width: 1; min-width: 1; height: 1; padding: 0; }
-    #page { width: 1fr; height: 1fr; min-width: 0; padding: 0 2; }
-    #inspector { width: 42; min-width: 42; position: absolute; dock: right;
-                 height: 1fr; padding: 0 1; background: $surface;
-                 opacity: 0; overflow: hidden; }
-    #inspector.drawer-open { opacity: 1; }
-    #composer { height: auto; min-height: 3; max-height: 8; margin: 0 2;
-                border: round $panel; background: $surface; padding: 0 1; }
-    #composer:focus { border: round $accent; }
-    #status-line { height: 1; padding: 0 2; color: $text-muted; background: $background; }
-    #page > ChatScreen { height: 1fr; }
-    #page > * { width: 1fr; }
-    #page Button { min-width: 0; width: auto; height: 2; padding: 0 1; margin: 0 1 1 0; }
-    /* Dense management forms must remain directly clickable without forcing
-       compatibility tests and keyboard users to scroll between every row. */
-    #page SettingsScreen Button { margin: 0; }
-    #page Input, #page Select { height: 3; margin: 0 0 1 0; }
-    #page SettingsScreen, #page SessionsScreen, #page WorkspaceScreen,
-    #page MemoryScreen, #page ExtensionsScreen, #page DoctorScreen,
-    #page SetupScreen { padding: 1 2; }
-    .bp-narrow #inspector { display: none; }
-    .bp-narrow #inspector.drawer-open { display: block; }
-    .bp-overlay #inspector.drawer-open { width: 1fr; min-width: 0; }
-    .bp-compat #page { padding: 0; }
-    .bp-compat #topbar { padding: 0 1; }
-    .bp-compat #composer { margin: 0; }
-    .bp-reduced-motion #workbench * { transition: none !important; }
-    """
-
-    THEME_ALIASES = {"default": "textual-dark"}
-
-    def __init__(self, bootstrap: BootstrapResult) -> None:
+    def __init__(self, kernel: KairoKernel | None = None) -> None:
         super().__init__()
-        self._bootstrap = bootstrap
-        self.kernel: KairoKernel = bootstrap.kernel
-        self.store: AppStore = bootstrap.store
-        self._pump = EventPump(self.kernel, self.store)
-        self._breakpoint = Breakpoint.FULL
-        self._current_page: PageId | None = None
-        self._last_theme: str | None = None
+        self._kernel = kernel
         self._leader_active = False
-        self._leader_timer: Timer | None = None
-        self._modal_page: PageId | None = None
-        self.store.subscribe(self._on_store_changed)
+        self._leader_timer: object = None
+        self._controller = TuiController(kernel)
+        self._state = AppState()
+        self._last_submitted: str | None = None
+        self._last_ready: str | None = None
+        self._connect_open = False
+        self._interaction_open = False
+        self._sidebar_kind = ""
+        self._event_loop: KernelEventLoop | None = None
 
-    @classmethod
-    def from_options(cls, options: CliOptions) -> KairoTuiApp:
-        workspace = options.workspace or str(Path.cwd())
-        bootstrap = build_running_kernel(
-            BootstrapOptions(
-                workspace_root=workspace,
-                config_path=Path(options.config_path) if options.config_path else None,
-                theme=options.theme,
-                reduced_motion=options.reduced_motion,
-                safe_mode=options.safe_mode,
-            )
-        )
-        return cls(bootstrap)
+    @property
+    def state(self) -> AppState:
+        return self._state
 
     def compose(self) -> ComposeResult:
-        with Container(id="workbench"):
-            yield TopBar(id="topbar")
-            with Horizontal(id="body"):
-                yield VerticalScroll(id="nav", classes="nav")
-                yield Container(id="page")
-                yield InspectorPanel(self, id="inspector")
-            yield Composer(id="composer", placeholder="Ask Kairo… (Enter submits)")
-            yield StatusLine(id="status-line")
+        yield Shell(id="workbench")
+        yield ContextPanel("", id="context-panel", classes="sidebar")
+        yield WorkspacePanel("", id="workspace-panel", classes="sidebar")
+        yield SettingsPanel("", id="settings-panel", classes="sidebar")
+        yield MemoryPanel("", id="memory-panel", classes="sidebar")
+        yield ExtensionsPanel("", id="extensions-panel", classes="sidebar")
+        yield DiagnosticsPanel("", id="diagnostics-panel", classes="sidebar")
 
     def on_mount(self) -> None:
-        self._apply_responsive(self.size.width, self.size.height)
-        self._render_nav()
-        self.run_worker(self._pump_run())
-        self._refresh_store_widgets()
-        self._last_theme = self.store.state.document.theme
-        self._apply_theme()
-        self.set_class(self.store.state.reduced_motion, "bp-reduced-motion")
+        self.query_one("#composer", Composer).focus()
+        if self._kernel is not None:
+            self._event_loop = KernelEventLoop(
+                self._kernel,
+                self._state,
+                emit=self._on_loop_emit,
+                recover=self._recover_state,
+            )
+            self._event_loop.start()
+            self.run_worker(self._initial_load())
 
-    def _apply_theme(self) -> None:
-        name = self.store.state.document.theme or "default"
-        target = self.THEME_ALIASES.get(name, name)
-        if target not in self.available_themes:
-            target = "textual-dark"
-            self.notify(f"Theme '{name}' is not available; using textual-dark.")
-        if self.theme != target:
-            self.theme = target
+    async def _initial_load(self) -> None:
+        for action in await self._controller.load_workspace():
+            self.dispatch_action(action)
+        sessions = await self._controller.load_sessions()
+        if sessions:
+            self.dispatch_action(SessionsLoaded(sessions))
+        for turn in await self._controller.load_active_turns():
+            self.dispatch_action(TurnUpdated(turn))
+        if self._state.active_session_id is None and self._state.sessions:
+            self.dispatch_action(SessionActivated(self._state.sessions[-1].session_id))
 
-    def on_resize(self, event) -> None:
-        self._apply_responsive(event.size.width, event.size.height)
+    def on_unmount(self) -> None:
+        if self._event_loop is not None:
+            self.run_worker(self._event_loop.close(), exclusive=True)
 
-    def _apply_responsive(self, width: int, height: int) -> None:
-        new_breakpoint = responsive_layout((width, height))
-        if new_breakpoint is self._breakpoint:
+    def _on_loop_emit(self, state: AppState, actions: tuple[UiAction, ...]) -> None:
+        self._state = state
+        for action in actions:
+            if isinstance(action, TurnUpdated):
+                self._maybe_clear_stop(action)
+        self._refresh_views()
+
+    def _recover_state(self) -> None:
+        """Recovery: reload everything from the kernel into the state."""
+        self.run_worker(self._reload_all())
+
+    async def _reload_all(self) -> None:
+        if self._state.active_session_id is not None:
+            for action in await self._controller.load_history(self._state.active_session_id):
+                self.dispatch_action(action)
+        sessions = await self._controller.load_sessions()
+        if sessions:
+            self.dispatch_action(SessionsLoaded(sessions))
+        for turn in await self._controller.load_active_turns():
+            self.dispatch_action(TurnUpdated(turn))
+
+    def _maybe_clear_stop(self, action: TurnUpdated) -> None:
+        if self._state.stopping_turn_id == action.turn.turn_id and action.turn.terminal:
+            self._state = reduce(self._state, StopFinished(action.turn.turn_id))
+
+    def dispatch_action(self, action: UiAction) -> None:
+        self._state = reduce(self._state, action)
+        if isinstance(action, DraftReady):
+            self._last_ready = action.text
+        if self._event_loop is not None:
+            self._event_loop.sync_state(self._state)
+        self._refresh_views()
+
+    def _refresh_views(self) -> None:
+        """Mirror overlay state and render the active session views."""
+        if self._state.overlay is OverlayKind.CONNECT:
+            self._open_connect_dialog()
+        else:
+            self._close_connect_dialog()
+        self._sync_interaction_dialog()
+        self.run_worker(self._render_transcript(), exclusive=True, group="render")
+        self._refresh_sidebar_views()
+        composer = self.query_one("#composer", Composer)
+        if composer.text != self._state.draft:
+            composer.text = self._state.draft
+        status = self.query_one("#status-line", StatusLine)
+        status.render_status(
+            self._state.profile_label or self._state.model_label,
+            self._state.notice,
+            self._state.stopping_turn_id is not None,
+        )
+
+    async def _render_transcript(self) -> None:
+        transcript_view = self._active_transcript()
+        await self.query_one("#transcript", Transcript).render_session(
+            transcript_view,
+            stopping=self._state.stopping_turn_id is not None,
+            can_retry=bool(self._last_submitted),
+        )
+
+    def _active_transcript(self) -> SessionTranscript | None:
+        session_id = self._state.active_session_id
+        if session_id is None:
+            return None
+        return next(
+            (item for item in self._state.transcripts if item.session_id == session_id),
+            None,
+        )
+
+    @on(Composer.Submitted)
+    def on_composer_submitted(self, message: Composer.Submitted) -> None:
+        self._last_submitted = message.text
+        self.dispatch_action(SubmitDraft(message.text))
+        self.run_worker(self._handle_submit(message.text))
+
+    @on(Composer.Changed)
+    def on_composer_changed(self, message: Composer.Changed) -> None:
+        self.dispatch_action(DraftChanged(self.query_one("#composer", Composer).text))
+
+    async def _handle_submit(self, text: str) -> None:
+        for action in await self._controller.submit_draft(text):
+            self.dispatch_action(action)
+
+    # ---- ConnectDialog plumbing -------------------------------------------
+
+    def _open_connect_dialog(self) -> None:
+        if self._connect_open:
             return
-        self._breakpoint = new_breakpoint
-        for bp in Breakpoint:
-            self.set_class(bp is new_breakpoint, f"bp-{bp.value}")
-        self.store.dispatch(CompatAction(new_breakpoint is Breakpoint.COMPAT))
+        self._connect_open = True
+        self.push_screen(ConnectDialog())
+
+    def _close_connect_dialog(self) -> None:
+        if not self._connect_open:
+            return
+        self._connect_open = False
+        self._interaction_open = False
+        self._sidebar_kind = ""
+        self.pop_screen()
+
+    @on(ConnectDialog.Canceled)
+    def on_connect_canceled(self, message: ConnectDialog.Canceled) -> None:
+        self._close_connect_dialog()
+        self.dispatch_action(CloseOverlay(restore_draft=True))
+        self.query_one("#composer", Composer).focus()
+
+    @on(ConnectDialog.SaveRequested)
+    def on_connect_save_requested(self, message: ConnectDialog.SaveRequested) -> None:
+        self.run_worker(self._handle_connect_save(message.request, message.send_after))
+
+    async def _handle_connect_save(self, request: ProviderConnectionRequest, send_after: bool) -> None:
+        dialog = self.screen if isinstance(self.screen, ConnectDialog) else None
+        if dialog is None:
+            return
+        revision = await self._controller.catalog_revision()
+        request = dialog.refresh_revision(request, revision)
+        result = await self._controller.connect(request)
+        if result.error is not None:
+            dialog.show_error(result.error.message)
+            return
+        dialog.clear_secret_widget()
+        self._close_connect_dialog()
+        self.dispatch_action(ConnectSaved(send_after=send_after))
+        if send_after:
+            text = self._state.pending_draft or self._last_submitted or ""
+            self.run_worker(self._handle_submit(text))
+
+    # ---- Pending interactions (D1) -----------------------------------------
+
+    def _sync_interaction_dialog(self) -> None:
+        request = self._state.pending_interactions[0] if self._state.pending_interactions else None
+        if request is None:
+            if self._interaction_open:
+                self._interaction_open = False
+                self.pop_screen()
+            return
+        if self._interaction_open:
+            return  # one modal at a time; remaining requests queue in state
+        self._interaction_open = True
+        kind = request.kind.value
+        if kind == "plan_approval":
+            plan_text = (
+                "\n".join(
+                    block.text for block in request.prompt_blocks if isinstance(block, TextBlock)
+                )
+                if hasattr(request, "prompt_blocks")
+                else request.prompt
+            )
+            self.push_screen(PlanDialog(request, plan_text))
+        else:
+            self.push_screen(ApprovalDialog(request))
+
+    @on(ApprovalDialog.Responded)
+    def on_approval_responded(self, message: ApprovalDialog.Responded) -> None:
+        self.run_worker(self._respond(message.response))
+
+    @on(PlanDialog.Responded)
+    def on_plan_responded(self, message: PlanDialog.Responded) -> None:
+        self.run_worker(self._respond(message.response))
+
+    async def _respond(self, response: InteractionResponse) -> None:
+        result = await self._controller.respond_interaction(response)
+        if result.error is not None:
+            dialog = self.screen
+            if isinstance(dialog, (ApprovalDialog, PlanDialog)):
+                dialog.show_error(result.error.message)
+            return
+        if self._interaction_open:
+            self._interaction_open = False
+            self.pop_screen()
+
+    # ---- Stop / retry ------------------------------------------------------
+
+    @on(Transcript.StopPressed)
+    def on_stop_pressed(self, message: Transcript.StopPressed) -> None:
+        self.action_stop()
+
+    @on(Transcript.RetryPressed)
+    def on_retry_pressed(self, message: Transcript.RetryPressed) -> None:
+        self.action_retry()
+
+    def action_stop(self) -> None:
+        if self._state.stopping_turn_id is not None:
+            return  # no duplicate stop requests
+        turn = self._active_turn()
+        if turn is None:
+            return
+        self.dispatch_action(StopRequested(turn.turn_id))
+        self.run_worker(self._handle_stop(turn.turn_id))
+
+    def _active_turn(self) -> TurnView | None:
+        running = [turn for turn in self._state.turns if not turn.terminal]
+        return running[-1] if running else None
+
+    async def _handle_stop(self, turn_id: TurnId) -> None:
+        await self._controller.cancel_turn(turn_id)
+
+    def action_retry(self) -> None:
+        text = self._last_submitted or ""
+        if not text:
+            return
+        self.run_worker(self._handle_retry(text))
+
+    async def _handle_retry(self, text: str) -> None:
+        for action in await self._controller.retry_draft(text):
+            self.dispatch_action(action)
+
+    # ---- Actions ----------------------------------------------------------
+
+    def action_focus_composer(self) -> None:
+        self.query_one("#composer", Composer).focus()
+
+    async def on_event(self, event: events.Event) -> None:
+
+        if isinstance(event, events.Key) and self._leader_active:
+            self._leader_active = False
+            if self._leader_timer is not None:
+                self._leader_timer.stop()  # type: ignore[attr-defined]
+                self._leader_timer = None
+            chord = {
+                "n": "action_new_session",
+                "l": "action_session_picker",
+                "b": "action_toggle_sidebar",
+                "m": "action_model_picker",
+                "c": "action_compress",
+            }
+            if event.key in chord:
+                event.stop()  # type: ignore[union-attr]
+                getattr(self, chord[event.key])()
+                return
+        await super().on_event(event)
 
     def action_leader(self) -> None:
-        """Start the two-key OpenCode-style command chord."""
+        """Start a 2-second leader chord; the next key selects the action."""
         self._leader_active = True
-        if self._leader_timer is not None:
-            self._leader_timer.stop()
         self._leader_timer = self.set_timer(2.0, self._clear_leader)
-        self.notify("Leader: n new · l sessions · b sidebar · c compact · m model · q quit", timeout=2)
 
     def _clear_leader(self) -> None:
         self._leader_active = False
         self._leader_timer = None
 
-    def on_key(self, event) -> None:
-        if not self._leader_active:
+    def action_command_palette(self) -> None:
+        self.run_worker(self._open_command_palette())
+
+    async def _open_command_palette(self) -> None:
+        catalog = await self._controller.kernel_command_catalog()
+        self.push_screen(CommandPalette(LOCAL_COMMANDS, catalog))
+
+    @on(CommandPalette.Chosen)
+    def on_command_chosen(self, message: CommandPalette.Chosen) -> None:
+        self.pop_screen()
+        if message.kernel_command:
+            self.run_worker(self._run_kernel_command(message.name))
             return
-        key = event.key.lower()
-        self._clear_leader()
-        event.stop()
-        actions = {
-            "n": self.action_new_chat,
-            "l": lambda: self.action_page("sessions"),
-            "b": self.action_toggle_sidebar,
-            "c": lambda: self.run_worker(self._run_command("/compress")),
-            "m": lambda: self.run_worker(self._run_command("/model")),
-            "a": self.action_toggle_authorization,
-            "t": self.action_toggle_thinking,
-            "q": self.action_quit,
-        }
-        action = actions.get(key)
-        if action is not None:
-            result = action()
-            if asyncio.iscoroutine(result):
-                self.run_worker(result)
+        if message.name == "sessions":
+            self.action_session_picker()
+        elif message.name == "models":
+            self.action_model_picker()
+        elif message.name == "sidebar":
+            self.action_toggle_sidebar()
+        elif message.name == "connect":
+            self.dispatch_action(OpenConnectDialog(pending_draft=""))
+            self.query_one("#composer", Composer).focus()
+
+    async def _run_kernel_command(self, name: str) -> None:
+        for action in await self._controller.execute_command(name):
+            self.dispatch_action(action)
+
+    def action_new_session(self) -> None:
+        self.run_worker(self._create_session())
+
+    async def _create_session(self) -> None:
+        for action in await self._controller.create_session("Chat"):
+            self.dispatch_action(action)
+        self.run_worker(self._switch_history())
+
+    def action_session_picker(self) -> None:
+        self.run_worker(self._open_session_picker())
+
+    async def _open_session_picker(self) -> None:
+        picker = SessionPicker()
+        await self.push_screen(picker)
+        picker.set_sessions(self._state.sessions)
+
+    @on(SessionPicker.Chosen)
+    def on_session_chosen(self, message: SessionPicker.Chosen) -> None:
+        self.pop_screen()
+        self.dispatch_action(SessionActivated(message.session_id))  # type: ignore[arg-type]
+        self.run_worker(self._switch_history())
+
+    @on(SessionPicker.NewRequested)
+    def on_session_new(self, message: SessionPicker.NewRequested) -> None:
+        self.pop_screen()
+        self.action_new_session()
+
+    @on(SessionPicker.RenameRequested)
+    def on_session_rename(self, message: SessionPicker.RenameRequested) -> None:
+        self.run_worker(self._rename_session(message.session_id, message.name))
+
+    async def _rename_session(self, session_id: object, name: str) -> None:
+        for action in await self._controller.rename_session(session_id, name):
+            self.dispatch_action(action)
+
+    @on(SessionPicker.DeleteRequested)
+    def on_session_delete(self, message: SessionPicker.DeleteRequested) -> None:
+        self.run_worker(self._delete_session(message.session_id))
+
+    async def _delete_session(self, session_id: object) -> None:
+        for action in await self._controller.delete_session(session_id):
+            self.dispatch_action(action)
+
+    async def _switch_history(self) -> None:
+        if self._state.active_session_id is not None:
+            for action in await self._controller.load_history(self._state.active_session_id):
+                self.dispatch_action(action)
+
+    def action_model_picker(self) -> None:
+        self.run_worker(self._open_model_picker())
+
+    async def _open_model_picker(self) -> None:
+        profiles = await self._controller.model_profiles()
+        picker = ModelPicker()
+        await self.push_screen(picker)
+        picker.set_profiles(profiles)
+
+    @on(ModelPicker.ModelChosen)
+    def on_model_chosen(self, message: ModelPicker.ModelChosen) -> None:
+        self.pop_screen()
+        self.run_worker(self._select_model(message.profile_id))
+
+    async def _select_model(self, profile_id: object) -> None:
+        for action in await self._controller.select_model(profile_id):
+            self.dispatch_action(action)
+
+    @on(ModelPicker.ConnectRequested)
+    def on_model_connect(self, message: ModelPicker.ConnectRequested) -> None:
+        self.pop_screen()
+        self.dispatch_action(OpenConnectDialog(pending_draft=""))
 
     def action_toggle_sidebar(self) -> None:
-        inspector = self.query_one_optional("#inspector", InspectorPanel)
-        if inspector is None:
-            return
-        inspector.toggle_class("drawer-open")
-        self.store.dispatch(InspectorAction(inspector.has_class("drawer-open")))
-
-    async def _pump_run(self) -> None:
-        await self._pump.run()
-
-    async def on_unmount(self) -> None:
-        """Best-effort teardown: stop the pump, then shut the kernel down.
-
-        Idempotent — ``kernel.shutdown`` returns the cached report on the
-        second call, so the explicit exit flow may shut down first.
-        """
-        await self._pump.close()
-        await self.kernel.shutdown()
-
-    def _render_nav(self) -> None:
-        nav = self.query_one("#nav", VerticalScroll)
-        nav.remove_children()
-        for page in (
-            PageId.CHAT, PageId.SESSIONS, PageId.WORKSPACE, PageId.MEMORY,
-            PageId.EXTENSIONS, PageId.SETTINGS, PageId.DOCTOR,
-        ):
-            nav.mount(Button(page.value.capitalize(), id=f"nav-{page.value}"))
-
-    def action_page(self, page: str) -> None:
-        try:
-            page_id = PageId(page)
-        except ValueError:
-            return
-        self.store.dispatch(PageAction(page_id))
-        self._show_page(page_id)
-
-    def open_management(self, page: PageId) -> None:
-        """Open a management destination as a modal over the conversation."""
-        if self._modal_page is page:
-            return
-        if self._modal_page is not None and len(self.screen_stack) > 1:
-            self.pop_screen()
-        self._modal_page = page
-        self.store.dispatch(PageAction(page))
-        from kairo_tui.screens.management import ManagementModal
-
-        self.push_screen(ManagementModal(self, page))
-
-    def _show_page(self, page: PageId) -> None:
-        if self._current_page is page:
-            return  # already shown; mounting twice in one turn would duplicate ids
-        self._current_page = page
-        container = self.query_one("#page", Container)
-        container.remove_children()
-        if page is PageId.CHAT:
-            from kairo_tui.screens.chat import ChatScreen
-            container.mount(ChatScreen(self))
-        elif page is PageId.SETUP:
-            from kairo_tui.screens.setup import SetupScreen
-            container.mount(SetupScreen(self))
-        elif page is PageId.SESSIONS:
-            from kairo_tui.screens.sessions import SessionsScreen
-            container.mount(SessionsScreen(self))
-        elif page is PageId.WORKSPACE:
-            from kairo_tui.screens.workspace import WorkspaceScreen
-            container.mount(WorkspaceScreen(self))
-        elif page is PageId.MEMORY:
-            from kairo_tui.screens.memory import MemoryScreen
-            container.mount(MemoryScreen(self))
-        elif page is PageId.EXTENSIONS:
-            from kairo_tui.screens.extensions import ExtensionsScreen
-            container.mount(ExtensionsScreen(self))
-        elif page is PageId.SETTINGS:
-            from kairo_tui.screens.settings import SettingsScreen
-            container.mount(SettingsScreen(self))
-        elif page is PageId.DOCTOR:
-            from kairo_tui.screens.doctor import DoctorScreen
-            container.mount(DoctorScreen(self))
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id or ""
-        if not button_id.startswith("nav-"):
-            return
-        self.action_page(button_id.removeprefix("nav-"))
-
-    def action_focus_composer(self) -> None:
-        self.query_one("#composer", Composer).focus()
-
-    def action_esc(self) -> None:
-        if len(self.screen_stack) > 1:
-            self.pop_screen()
-            return
-        session_id = self.store.state.active_session_id
-        if session_id is None:
-            return
-        foreground = next(
-            (t for t in self.store.state.active_turns if str(t.session_id) == session_id),
-            None,
-        )
-        if foreground is not None:
-            self.run_worker(self._cancel_turn(foreground.turn_id))
-
-    async def _cancel_turn(self, turn_id: str) -> None:
-        await self.kernel.cancel(TurnId(turn_id), "Escape pressed.")
-
-    def action_new_chat(self) -> None:
-        self.run_worker(self._new_chat())
-
-    async def _new_chat(self) -> None:
-        created = await self.kernel.sessions.create("Chat")
-        if created.ok and created.value is not None:
-            self.store.dispatch(SessionAction(str(created.value.session_id)))
-            await refresh_sessions(self)  # store gap: sessions list is not event-driven
-            self.store.dispatch(PageAction(PageId.CHAT))
-            self._show_page(PageId.CHAT)
-
-    def action_toggle_authorization(self) -> None:
-        self.run_worker(self._toggle_preference("authorization_mode"))
-
-    def action_toggle_plan(self) -> None:
-        self.run_worker(self._toggle_preference("plan_mode"))
-
-    def action_toggle_thinking(self) -> None:
-        self.run_worker(self._toggle_preference("thinking_mode"))
-
-    async def _toggle_preference(self, name: str) -> None:
-        if self.store.state.safe_mode and name == "authorization_mode":
-            return  # safe mode forces Manual
-        snapshot = await self.kernel.preferences.snapshot()
-        if name == "authorization_mode":
-            target = (
-                AuthorizationMode.AUTO
-                if snapshot.authorization_mode is AuthorizationMode.MANUAL
-                else AuthorizationMode.MANUAL
-            )
-            patch = PreferencesPatch(snapshot.revision, authorization_mode=target)
-        elif name == "plan_mode":
-            patch = PreferencesPatch(snapshot.revision, plan_mode=not snapshot.plan_mode)
+        """Cycle through the optional sidebars, then close."""
+        order = ("context", "workspace", "settings", "memory", "extensions", "doctor")
+        if self._sidebar_kind in order:
+            index = order.index(self._sidebar_kind)
+            self._sidebar_kind = order[index + 1] if index + 1 < len(order) else ""
         else:
-            patch = PreferencesPatch(snapshot.revision, thinking_mode=not snapshot.thinking_mode)
-        await self.kernel.preferences.patch(patch)
-        # Reflect the toggle in the top bar immediately (the CONFIG_CHANGED
-        # event alone does not refresh kernel_status in the store).
-        status = await self.kernel.status()
-        self.store.dispatch(KernelStatusAction(status))
+            self._sidebar_kind = "context"
+        self._apply_sidebar_classes()
 
-    def action_command_palette(self) -> None:
-        # Push the merged TUI + kernel command registry modal (shared slash/palette registry).
-        from kairo_tui.commands import build_command_palette
-        from kairo_tui.screens.commands import CommandPaletteScreen
+    def _apply_sidebar_classes(self) -> None:
+        context = self.query_one("#context-panel", ContextPanel)
+        workspace = self.query_one("#workspace-panel", WorkspacePanel)
+        settings = self.query_one("#settings-panel", SettingsPanel)
+        memory = self.query_one("#memory-panel", MemoryPanel)
+        extensions = self.query_one("#extensions-panel", ExtensionsPanel)
+        diagnostics = self.query_one("#diagnostics-panel", DiagnosticsPanel)
+        context.set_class(self._sidebar_kind == "context", "sidebar-open")
+        workspace.set_class(self._sidebar_kind == "workspace", "sidebar-open")
+        settings.set_class(self._sidebar_kind == "settings", "sidebar-open")
+        memory.set_class(self._sidebar_kind == "memory", "sidebar-open")
+        extensions.set_class(self._sidebar_kind == "extensions", "sidebar-open")
+        diagnostics.set_class(self._sidebar_kind == "doctor", "sidebar-open")
+        if self._sidebar_kind == "context":
+            context.render_state(self._state)
+        if self._sidebar_kind == "workspace":
+            self.run_worker(self._refresh_workspace_sidebar())
+        if self._sidebar_kind == "settings":
+            self.run_worker(self._refresh_settings_sidebar())
+        if self._sidebar_kind == "memory":
+            self.run_worker(self._refresh_memory_sidebar())
+        if self._sidebar_kind == "extensions":
+            self.run_worker(self._refresh_extensions_sidebar())
+        if self._sidebar_kind == "doctor":
+            self.run_worker(self._refresh_doctor_sidebar())
 
-        self.push_screen(CommandPaletteScreen(self, build_command_palette(self)))
+    async def _refresh_workspace_sidebar(self) -> None:
+        changed = await self._controller.changed_files()
+        workspace = self.query_one("#workspace-panel", WorkspacePanel)
+        if self._state.workspace is not None:
+            workspace.set_changed_files(changed)
+            workspace.render_state(self._state)
 
-    def _on_store_changed(self, state) -> None:
-        self._refresh_store_widgets()
-        if state.document.theme != self._last_theme:
-            self._last_theme = state.document.theme
-            self._apply_theme()
+    def _refresh_sidebar_views(self) -> None:
+        if self._sidebar_kind == "context":
+            self.query_one("#context-panel", ContextPanel).render_state(self._state)
 
-    async def action_quit(self) -> None:
-        """Ctrl+Q and the /exit command both route through the confirmation flow."""
-        await self.request_exit()
+    async def _refresh_settings_sidebar(self) -> None:
+        profiles = await self._controller.model_profiles()
+        self.query_one("#settings-panel", SettingsPanel).render_state(self._state, profiles)
 
-    async def request_exit(self) -> None:
-        active = await self.kernel.active_turns()
-        if not active:
-            await self._shutdown_and_exit()
-            return
-        from kairo_tui.screens.exit_modal import ExitWithTurnsModal
+    async def _refresh_memory_sidebar(self) -> None:
+        entries = await self._controller.memory_entries()
+        self.query_one("#memory-panel", MemoryPanel).render_entries(entries)
 
-        # Snapshot the active turn ids BEFORE showing the modal: a turn may end
-        # between the snapshot and the user's choice, and the wait path below
-        # must still complete (kernel.wait on a finished turn returns at once).
-        turn_ids = tuple(str(turn.turn_id) for turn in active)
-        choice = await self.push_screen_wait(ExitWithTurnsModal(len(active)))
-        if choice == "exit-wait":
-            self.run_worker(self._wait_for_turns_and_exit(turn_ids))
-        elif choice == "exit-stop":
-            await self.kernel.shutdown(ShutdownRequest(grace_period_seconds=5.0, cancel_active_turn=True))
-            self.exit()
-        # "exit-back": stay
+    async def _refresh_extensions_sidebar(self) -> None:
+        skills, mcp = await self._controller.extension_inventory()
+        self.query_one("#extensions-panel", ExtensionsPanel).render_inventory(skills, mcp)
 
-    async def _wait_for_turns_and_exit(self, turn_ids: tuple[str, ...]) -> None:
-        """Wait for the snapshot's turns via the kernel (never poll the store);
-        a turn that finished before or during the modal returns immediately."""
-        if turn_ids:
-            await asyncio.gather(*(self.kernel.wait(TurnId(turn_id)) for turn_id in turn_ids))
-        still_active = await self.kernel.active_turns()
-        if still_active:
-            self.notify("Active turns are still running; exit cancelled.", severity="error", timeout=10)
-            return
-        await self._shutdown_and_exit()
+    async def _refresh_doctor_sidebar(self) -> None:
+        checks = await self._controller.run_diagnostics()
+        self.query_one("#diagnostics-panel", DiagnosticsPanel).render_report(checks)
 
-    async def _shutdown_and_exit(self) -> None:
-        await self.kernel.shutdown(ShutdownRequest(grace_period_seconds=5.0, cancel_active_turn=True))
-        self.exit()
+    def action_compress(self) -> None:
+        self.run_worker(self._compress())
 
-    def _refresh_store_widgets(self) -> None:
-        # Store callbacks may fire while the app is tearing down (the pump folds
-        # shutdown events after app.exit()); the widgets are gone by then, so a
-        # strict query would raise NoMatches inside a worker. Optional queries
-        # make the refresh a no-op on the detached default screen.
-        topbar = self.query_one_optional("#topbar", TopBar)
-        status_line = self.query_one_optional("#status-line", StatusLine)
-        composer = self.query_one_optional("#composer", Composer)
-        if topbar is not None:
-            topbar.render_status(self.store.state)
-        if status_line is not None:
-            status_line.render_state(self.store.state)
-        if composer is not None:
-            composer.disabled = not self.store.state.setup_complete
-        # Mount the page only when it actually changes (never remount Setup on
-        # every store dispatch — that would reset its step state).
-        if self._modal_page is None and self.store.state.page is not self._current_page:
-            self._show_page(self.store.state.page)
-
-    def on_composer_submitted(self, message: Composer.Submitted) -> None:
-        text = message.text.strip()
-        if not text:
-            return
-        if not self.store.state.setup_complete:
-            return
-        composer = self.query_one("#composer", Composer)
-        composer.push_history(text)
-        composer.clear()
-        self.store.dispatch(DraftAction(""))
-        if text.startswith("/"):
-            self.run_worker(self._run_command(text))
-            return
-        self.run_worker(self._submit_turn(text))
-
-    async def _submit_turn(self, text: str) -> None:
-        from kairo_kernel.contracts.identifiers import SessionId
-        from kairo_kernel.contracts.turns import TurnRequest
-
-        session_id = self.store.state.active_session_id
-        if session_id is None:
-            created = await self.kernel.sessions.create("Chat")
-            if not created.ok or created.value is None:
-                return
-            session_id = str(created.value.session_id)
-            self.store.dispatch(SessionAction(session_id))
-        accepted = await self.kernel.submit(TurnRequest(text, session_id=SessionId(session_id)))
-        if accepted.ok and accepted.value is not None:
-            # The TUI inserts its own user bubble (events never carry user
-            # messages); sequence is the last folded event, before this turn's.
-            self.store.dispatch(UserTurnAction(session_id, str(accepted.value.turn_id), text))
-
-    async def _run_command(self, text: str) -> None:
-        from kairo_kernel.contracts.identifiers import SessionId
-
-        from kairo_tui.commands import execute_tui_command, parse_tui_command
-
-        parsed = parse_tui_command(text)
-        if parsed is not None and await execute_tui_command(self, parsed):
-            return
-        parsed_kernel = self.kernel.commands.parse(text)
-        if parsed_kernel.ok and parsed_kernel.value is not None:
-            session_id = self.store.state.active_session_id
-            await self.kernel.commands.execute(
-                parsed_kernel.value,
-                session_id=SessionId(session_id) if session_id else None,
-            )
+    async def _compress(self) -> None:
+        if self._state.active_session_id is not None:
+            await self._kernel.conversations.compress(self._state.active_session_id, "")  # type: ignore[union-attr]
+            self.run_worker(self._switch_history())
