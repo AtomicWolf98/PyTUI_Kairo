@@ -1,16 +1,33 @@
-# kairo-tui
+# kairo-tui (V2)
 
-The Textual frontend uses a chat-first shell inspired by modern agent TUIs:
-the conversation and composer stay on screen, while sessions, workspace,
-settings, extensions, memory, and diagnostics open from the searchable command
-palette (`Ctrl+P`) or a modal. `Ctrl+X` is the leader key (`B` toggles the
-optional context drawer). See `../../docs/tui-redesign.md` for the complete
-interaction and responsive layout contract.
+Chat-first Textual frontend for the Kairo agent.
 
-Version **0.4.0a2** (depends on `kairo-kernel==0.4.0a2`). Launch directly, or
-via the legacy `kairo --tui` compat entry.
+## Layout
 
-Textual-based terminal user interface for the Kairo agent. Provides an
-interactive workspace console over the `kairo_kernel` public API (`kairo` or `kairo-tui`
-[WORKSPACE]`, with `--config`, `--theme`, `--reduced-motion`, `--safe-mode`,
-and `--headless-smoke` options).
+- `kairo_tui/app.py` — the chat-first workbench (TopBar / Transcript / Composer / StatusLine)
+- `kairo_tui/controller.py` — kernel-facing intents; never imports Textual
+- `kairo_tui/state.py` + `reducer.py` — immutable, replayable UI state
+- `kairo_tui/event_loop.py` — kernel event consumption (replay → live, gap/overflow recovery)
+- `kairo_tui/dialogs/` — connect, commands, sessions, models, approval, plan, confirm
+- `kairo_tui/panels/` — context, workspace, settings, memory, extensions, diagnostics sidebars
+- `kairo_tui/widgets/` — shell, transcript, composer, message, tool/plan cards, status
+
+## Running
+
+```powershell
+python -m kairo_tui
+```
+
+Headless smoke gate (used by installers and CI):
+
+```powershell
+python -m kairo_tui --headless-smoke
+```
+
+## Development
+
+```powershell
+python -m pytest tests
+python -m ruff check kairo_tui tests
+python -m mypy kairo_tui
+```

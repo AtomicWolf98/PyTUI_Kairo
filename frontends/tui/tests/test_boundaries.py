@@ -33,7 +33,7 @@ def test_no_setup_screen() -> None:
 def test_no_composer_setup_gate() -> None:
     source = "\n".join(path.read_text(encoding="utf-8") for path in _python_files())
     assert "setup_complete" not in source
-    assert "composer.disabled" not in source
+    assert "composer.disabled = " not in source  # assignment gate, not an assertion
 
 
 def test_single_tui_package() -> None:

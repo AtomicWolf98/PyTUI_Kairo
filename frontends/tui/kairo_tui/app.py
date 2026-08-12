@@ -114,7 +114,9 @@ class KairoTuiApp(App[None]):
 
     def on_unmount(self) -> None:
         if self._event_loop is not None:
-            self.run_worker(self._event_loop.close(), exclusive=True)
+            task = self._event_loop._task
+            if task is not None and not task.done():
+                task.cancel()
 
     def _on_loop_emit(self, state: AppState, actions: tuple[UiAction, ...]) -> None:
         self._state = state
@@ -158,19 +160,23 @@ class KairoTuiApp(App[None]):
         self._sync_interaction_dialog()
         self.run_worker(self._render_transcript(), exclusive=True, group="render")
         self._refresh_sidebar_views()
-        composer = self.query_one("#composer", Composer)
-        if composer.text != self._state.draft:
+        composer = self.query_one_optional("#composer", Composer)
+        if composer is not None and composer.text != self._state.draft:
             composer.text = self._state.draft
-        status = self.query_one("#status-line", StatusLine)
-        status.render_status(
-            self._state.profile_label or self._state.model_label,
-            self._state.notice,
-            self._state.stopping_turn_id is not None,
-        )
+        status = self.query_one_optional("#status-line", StatusLine)
+        if status is not None:
+            status.render_status(
+                self._state.profile_label or self._state.model_label,
+                self._state.notice,
+                self._state.stopping_turn_id is not None,
+            )
 
     async def _render_transcript(self) -> None:
         transcript_view = self._active_transcript()
-        await self.query_one("#transcript", Transcript).render_session(
+        transcript = self.query_one_optional("#transcript", Transcript)
+        if transcript is None:
+            return
+        await transcript.render_session(
             transcript_view,
             stopping=self._state.stopping_turn_id is not None,
             can_retry=bool(self._last_submitted),

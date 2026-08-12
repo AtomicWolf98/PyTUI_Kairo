@@ -8,7 +8,7 @@ Current version / 当前版本：**0.4.0a2**
 
 ## Two-Package Layout / 双包结构
 
-`kairo-tui [WORKSPACE]` launches the Textual interface over the `kairo-kernel` public API. Options: `--config PATH` (global config-v1.json), `--theme NAME`, `--reduced-motion`, `--safe-mode`, and `--headless-smoke`. The legacy `kairo --tui` entry jumps to kairo-tui 0.4.0a2 and prints an install hint (`python -m pip install kairo-tui`) when the package is missing. Legacy `config.json` and sessions are not migrated in this phase.
+`kairo-tui [WORKSPACE]` launches the Textual interface over the `kairo-kernel` public API. Options: `--config PATH` (global config-v1.json), `--theme NAME`, `--reduced-motion`, `--safe-mode`, and `--headless-smoke`. Both `kairo` and `kairo-tui` launch the same V2 TUI. Legacy `config.json` and sessions are not migrated in this phase.
 
 `kairo-tui [WORKSPACE]` 通过 `kairo-kernel` 公共 API 启动 Textual 界面。选项：`--config PATH`（全局 config-v1.json）、`--theme NAME`、`--reduced-motion`、`--safe-mode` 和 `--headless-smoke`。旧入口 `kairo --tui` 跳转到 kairo-tui 0.4.0a2；未安装时打印安装提示（`python -m pip install kairo-tui`）。本阶段不迁移旧版 `config.json` 与会话。
 
@@ -34,7 +34,7 @@ Kairo 0.3.3 对可选本地浏览器工作台进行稳定性收口：更安全�
 
 ## Highlights / 核心能力
 
-- Animated Textual TUI (`kairo-tui`) with reduced-motion mode; the legacy `kairo` command keeps the plain terminal fallback.
+- Textual TUI (`kairo` / `kairo-tui`) with reduced-motion mode and a chat-first shell.
 - Slash command palette reduced to 18 workflow-oriented commands in 0.2.7-beta.
 - `/settings` manages providers, models, API keys, model roles, config validation, backup, restore, import, and export.
 - `/sessions` manages persisted conversations, including switch, search, rename, delete, export, and reveal path.
@@ -71,7 +71,7 @@ Quick run without installing the user-level command:
 .\run-tui.bat
 ```
 
-Manual setup / 手动安装：
+Manual install / 手动安装：
 
 ```powershell
 python -m venv .venv
@@ -96,9 +96,9 @@ Copy-Item config.example.json config.json
 kairo-tui
 ```
 
-Inside Kairo TUI, run the setup page or `/settings` for the full configuration panel. The new TUI uses the versioned `config-v1.json` document and Keyring/environment references; the old `config.json` and legacy plain/WebUI entry points are not part of this installation.
+Inside Kairo TUI, use the command palette (Ctrl+P) or the settings sidebar to configure providers. The new TUI uses the versioned `config-v1.json` document and Keyring/environment references; the old `config.json` and legacy plain/WebUI entry points are not part of this installation.
 
-启动 Kairo TUI 后，可使用 Setup 页面或 `/settings` 打开配置面板。新版 TUI 使用版本化 `config-v1.json` 与 Keyring/环境变量引用；旧版 `config.json` 及 legacy plain/WebUI 入口不属于本安装包。
+启动 Kairo TUI 后，可使用命令面板（Ctrl+P）或设置侧栏配置模型。新版 TUI 使用版本化 `config-v1.json` 与 Keyring/环境变量引用；旧版 `config.json` 及 legacy plain/WebUI 入口不属于本安装包。
 
 ## Common Commands / 常用命令
 
@@ -106,7 +106,6 @@ Inside Kairo TUI, run the setup page or `/settings` for the full configuration p
 | --- | --- |
 | `/help` | Show help / 显示帮助 |
 | `/model` | Switch chat profile / 切换 chat profile |
-| `/setup` | Run first-time setup / 运行首次配置向导 |
 | `/settings` | Manage providers, models, keys, roles and config / 管理模型与配置 |
 | `/mode` | Change authorization, Plan Mode and Thinking Mode / 切换授权与模式 |
 | `/status` | Show runtime status / 显示运行状态 |

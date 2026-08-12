@@ -27,6 +27,12 @@ jobs:
       - run: python -m pip install -e "frontends/tui[dev]"  # satisfies kairo-kernel==0.4.0a2 from the editable install
       - run: python -m pytest tests/kernel --cov=kairo_kernel --cov-report=term-missing
       - run: python -m pytest frontends/tui/tests
+      - name: Headless smoke (all platforms)
+        run: python -m kairo_tui --headless-smoke
+      - name: Headless smoke via installed entrypoint (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: python -m pip install -e frontends/tui && cmd.exe /c "python -m kairo_tui --headless-smoke"
       - run: python -m ruff check kairo_kernel tests/kernel
       - name: Ruff (TUI)
         run: python -m ruff check kairo_tui tests
@@ -57,4 +63,9 @@ jobs:
           KAIRO_TUI_WHEEL: dist/kairo_tui-0.4.0a2-py3-none-any.whl
           KAIRO_KERNEL_WHEEL: dist/kairo_kernel-0.4.0a2-py3-none-any.whl
         run: python -m pytest frontends/tui/tests/test_wheel_content.py
+      - name: Verify both entrypoints from installed wheels
+        run: |
+          python -m pip install dist/kairo_kernel-0.4.0a2-py3-none-any.whl dist/kairo_tui-0.4.0a2-py3-none-any.whl
+          kairo-tui --headless-smoke
+          kairo --headless-smoke
       - run: python -m pip_audit .

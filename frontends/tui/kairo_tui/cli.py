@@ -18,6 +18,7 @@ class CliOptions:
     workspace: str | None = None
     config_path: str | None = None
     safe_mode: bool = False
+    headless_smoke: bool = False
 
 
 def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
@@ -43,17 +44,21 @@ def parse_args(argv: Sequence[str] | None = None) -> CliOptions:
         action="store_true",
         help="Open in-memory: no persistence, no automatic MCP connection.",
     )
+    parser.add_argument("--headless-smoke", action="store_true", help="Run the headless smoke gate and exit.")
     parser.add_argument("--version", action="version", version="kairo-tui 0.4.0a2")
     parsed = parser.parse_args(argv)
-    return CliOptions(parsed.workspace, parsed.config_path, parsed.safe_mode)
+    return CliOptions(parsed.workspace, parsed.config_path, parsed.safe_mode, parsed.headless_smoke)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the V2 app. A failed kernel open never blocks input."""
     from kairo_tui.app import KairoTuiApp
     from kairo_tui.bootstrap import open_tui_kernel
+    from kairo_tui.smoke import run_smoke
 
     options = parse_args(argv)
+    if options.headless_smoke:
+        return asyncio.run(run_smoke())
     kernel: KairoKernel | None = None
     opened = asyncio.run(open_tui_kernel(options))
     if opened.ok and opened.value is not None:
