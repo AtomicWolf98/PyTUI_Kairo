@@ -21,6 +21,8 @@ from kairo_tui_v2.dialogs.models import ModelPicker
 from kairo_tui_v2.dialogs.plan import PlanDialog
 from kairo_tui_v2.dialogs.sessions import SessionPicker
 from kairo_tui_v2.event_loop import KernelEventLoop
+from kairo_tui_v2.panels.context import ContextPanel
+from kairo_tui_v2.panels.workspace import WorkspacePanel
 from kairo_tui_v2.reducer import (
     CloseOverlay,
     ConnectSaved,
@@ -67,6 +69,7 @@ class KairoTuiApp(App[None]):
         self._last_ready: str | None = None
         self._connect_open = False
         self._interaction_open = False
+        self._sidebar_kind = ""
         self._event_loop: KernelEventLoop | None = None
 
     @property
@@ -75,6 +78,8 @@ class KairoTuiApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Shell(id="workbench")
+        yield ContextPanel("", id="context-panel", classes="sidebar")
+        yield WorkspacePanel("", id="workspace-panel", classes="sidebar")
 
     def on_mount(self) -> None:
         self.query_one("#composer", Composer).focus()
@@ -144,6 +149,7 @@ class KairoTuiApp(App[None]):
             self._close_connect_dialog()
         self._sync_interaction_dialog()
         self.run_worker(self._render_transcript(), exclusive=True, group="render")
+        self._refresh_sidebar_views()
         composer = self.query_one("#composer", Composer)
         if composer.text != self._state.draft:
             composer.text = self._state.draft
@@ -198,6 +204,7 @@ class KairoTuiApp(App[None]):
             return
         self._connect_open = False
         self._interaction_open = False
+        self._sidebar_kind = ""
         self.pop_screen()
 
     @on(ConnectDialog.Canceled)
@@ -440,7 +447,37 @@ class KairoTuiApp(App[None]):
         self.dispatch_action(OpenConnectDialog(pending_draft=""))
 
     def action_toggle_sidebar(self) -> None:
-        """M0 adds the context sidebar."""
+        """Cycle: context sidebar -> workspace sidebar -> closed."""
+
+        if self._sidebar_kind == "context":
+            self._sidebar_kind = "workspace"
+            self.run_worker(self._refresh_workspace_sidebar())
+        elif self._sidebar_kind == "workspace":
+            self._sidebar_kind = ""
+        else:
+            self._sidebar_kind = "context"
+        self._apply_sidebar_classes()
+
+    def _apply_sidebar_classes(self) -> None:
+        context = self.query_one("#context-panel", ContextPanel)
+        workspace = self.query_one("#workspace-panel", WorkspacePanel)
+        context.set_class(self._sidebar_kind == "context", "sidebar-open")
+        workspace.set_class(self._sidebar_kind == "workspace", "sidebar-open")
+        if self._sidebar_kind == "context":
+            context.render_state(self._state)
+        if self._sidebar_kind == "workspace":
+            self.run_worker(self._refresh_workspace_sidebar())
+
+    async def _refresh_workspace_sidebar(self) -> None:
+        changed = await self._controller.changed_files()
+        workspace = self.query_one("#workspace-panel", WorkspacePanel)
+        if self._state.workspace is not None:
+            workspace.set_changed_files(changed)
+            workspace.render_state(self._state)
+
+    def _refresh_sidebar_views(self) -> None:
+        if self._sidebar_kind == "context":
+            self.query_one("#context-panel", ContextPanel).render_state(self._state)
 
     def action_compress(self) -> None:
         self.run_worker(self._compress())

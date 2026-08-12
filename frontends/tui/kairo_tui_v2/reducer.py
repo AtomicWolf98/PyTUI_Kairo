@@ -276,6 +276,9 @@ def reduce(state: AppState, action: UiAction) -> AppState:
     if isinstance(action, SequenceAdvanced):
         return replace(state, last_sequence=action.sequence)
     if isinstance(action, WorkspaceUpdated):
+        current = state.workspace
+        if current is not None and action.workspace.revision < current.revision:
+            return state  # stale workspace response dropped (M0)
         return replace(state, workspace=action.workspace)
     if isinstance(action, ProfileUpdated):
         return replace(state, profile_label=action.label)

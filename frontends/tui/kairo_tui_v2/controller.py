@@ -233,6 +233,14 @@ class TuiController:
             return [NoticeSet(result.error.message if result.error else "Model select failed.")]
         return [ProfileUpdated(str(profile_id))]
 
+    async def changed_files(self) -> tuple[str, ...]:
+        if self._kernel is None:
+            return ()
+        result = await self._kernel.workspace.changed_files()
+        if not result.ok or result.value is None:
+            return ()
+        return tuple(getattr(result.value, "files", ()))
+
     async def model_profiles(self) -> tuple[ProviderProfile, ...]:
         if self._kernel is None:
             return ()
