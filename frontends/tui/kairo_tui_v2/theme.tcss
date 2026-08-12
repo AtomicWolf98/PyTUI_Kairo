@@ -103,3 +103,8 @@
     width: 40;
     height: 1fr;
 }
+
+/* Reduced motion: no transitions. */
+.reduced-motion #workbench * {
+    transition: none !important;
+}
