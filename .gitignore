@@ -6,6 +6,8 @@ web/tsconfig.tsbuildinfo
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.pytest-*/
+**/.pytest-*/
 .venv/
 .coverage
 htmlcov/

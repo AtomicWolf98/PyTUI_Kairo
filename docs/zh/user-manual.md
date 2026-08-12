@@ -1,8 +1,8 @@
 ﻿# Kairo 完整用户手册
 
-版本：**0.3.3**
+版本：**0.4.0a2**
 
-Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 TUI，也支持 `--plain` 兼容模式；可以连接 OpenAI-compatible 模型，对本地 workspace 进行文件读写、搜索、patch、Shell、Python、Web fetch、上下文压缩、会话持久化、自定义 skill 调用，并支持在 TUI 内运行时配置 provider 和 model。
+Kairo 0.4.0a2 的当前发行入口是独立的 `kairo-tui`（`kairo` 是兼容别名），通过 `kairo-kernel` 公共 API 运行 Textual TUI。本手册中关于旧版 `config.json`、legacy plain 和 WebUI 的章节只适用于旧版兼容代码；新 TUI 使用版本化 `config-v1.json`，本阶段不迁移旧配置和旧会话。
 
 ## 1. 安装与启动
 
@@ -10,15 +10,15 @@ Kairo 是一个终端原生的 AI coding agent。它默认使用 Textual 全屏 
 
 ```powershell
 .\install.bat
-kairo
+kairo-tui
 ```
 
-`install.bat` 会先卸载旧版 Kairo，再创建 `.venv`、安装当前目录版本、创建 `%LOCALAPPDATA%\Kairo\bin\kairo.bat`，并把该目录放到当前用户 PATH 的最前面。安装完成后请打开新的 PowerShell 窗口，再运行 `kairo`。
+`install.bat` 会安装 `kairo-kernel` 与 `kairo-tui` 两个 wheel，创建 `%LOCALAPPDATA%\Kairo\bin\kairo.bat` 和 `kairo-tui.bat`，并把该目录放到当前用户 PATH 的最前面。安装完成后请打开新的 PowerShell 窗口，再运行 `kairo-tui` 或 `kairo`。
 
 如果只是临时启动、不安装用户级命令：
 
 ```powershell
-.\run.bat
+.\run-tui.bat
 ```
 
 手动安装：
@@ -26,8 +26,8 @@ kairo
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-kairo
+python -m pip install -e . -e frontends/tui
+kairo-tui
 ```
 
 ### macOS / Linux
@@ -35,8 +35,8 @@ kairo
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-kairo
+python -m pip install -e . -e frontends/tui
+kairo-tui
 ```
 
 ### 常用启动参数

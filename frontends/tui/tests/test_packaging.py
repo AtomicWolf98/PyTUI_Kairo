@@ -21,4 +21,7 @@ def test_pyproject_metadata() -> None:
         "platformdirs>=4,<5",
         "kairo-kernel==0.4.0a2",
     ]
-    assert metadata["scripts"] == {"kairo-tui": "kairo_tui.cli:main"}
+    assert metadata["scripts"] == {
+        "kairo": "kairo_tui.cli:main",
+        "kairo-tui": "kairo_tui.cli:main",
+    }

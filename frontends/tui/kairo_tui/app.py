@@ -13,7 +13,8 @@ from kairo_kernel.contracts.preferences import PreferencesPatch
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
-from textual.widgets import Button, Footer
+from textual.timer import Timer
+from textual.widgets import Button
 
 from kairo_tui.bootstrap import BootstrapOptions, BootstrapResult, build_running_kernel
 from kairo_tui.cli import CliOptions
@@ -25,13 +26,14 @@ from kairo_tui.store import (
     AppStore,
     CompatAction,
     DraftAction,
+    InspectorAction,
     KernelStatusAction,
     PageAction,
     PageId,
     SessionAction,
     UserTurnAction,
 )
-from kairo_tui.widgets import Composer, TopBar
+from kairo_tui.widgets import Composer, StatusLine, TopBar
 
 
 class KairoTuiApp(App[None]):
@@ -39,8 +41,15 @@ class KairoTuiApp(App[None]):
     SUB_TITLE = "0.4.0a2"
     ENABLE_COMMAND_PALETTE = False
 
+    # OpenCode-style leader bindings are the visible contract.  The old
+    # single-key bindings remain as hidden compatibility aliases for existing
+    # scripts and muscle memory; they do not render a navigation rail.
     BINDINGS = [
         Binding("escape", "esc", "Escape", priority=True, show=False),
+        Binding("ctrl+x", "leader", "Leader", priority=True, show=False),
+        Binding("ctrl+p", "command_palette", "Commands", priority=True, show=False),
+        Binding("ctrl+l", "focus_composer", "Composer", show=False),
+        Binding("ctrl+t", "toggle_thinking", "Thinking", show=False),
         Binding("ctrl+1", "page('chat')", "Chat", show=False),
         Binding("ctrl+2", "page('sessions')", "Sessions", show=False),
         Binding("ctrl+3", "page('workspace')", "Workspace", show=False),
@@ -49,35 +58,47 @@ class KairoTuiApp(App[None]):
         Binding("ctrl+5", "page('extensions')", "Extensions", show=False),
         Binding("ctrl+6", "page('settings')", "Settings", show=False),
         Binding("ctrl+7", "page('doctor')", "Doctor", show=False),
-        Binding("ctrl+l", "focus_composer", "Composer", show=False),
         Binding("ctrl+k", "command_palette", "Commands", show=False),
         Binding("ctrl+n", "new_chat", "New chat", show=False),
         Binding("ctrl+a", "toggle_authorization", "Authorization", show=False),
-        Binding("ctrl+p", "toggle_plan", "Plan", show=False),
-        Binding("ctrl+t", "toggle_thinking", "Thinking", show=False),
     ]
 
     CSS = """
-    #workbench { layout: vertical; }
-    #body { layout: horizontal; height: 1fr; }
-    #nav { width: 22; background: $surface; }
-    #page { height: 1fr; }
-    #inspector { width: 38; background: $surface; }
-    #composer-wrap { height: auto; }
-    #composer { height: 5; }
-
-    .bp-narrow #nav { width: 16; }
+    /* Chat-first shell: legacy nav/inspector stay mounted for compatibility
+       but consume no visual space. They are replaced by the command palette
+       and the opt-in context drawer. */
+    #workbench { layout: vertical; background: $background; }
+    #topbar { height: 2; padding: 0 2; content-align: left middle;
+              color: $text; background: $surface; border-bottom: solid $panel; }
+    #body { layout: horizontal; height: 1fr; position: relative; }
+    #nav { width: 1; min-width: 0; padding: 0; background: $background;
+           opacity: 0; overflow: hidden; }
+    #nav Button { width: 1; min-width: 1; height: 1; padding: 0; }
+    #page { width: 1fr; height: 1fr; min-width: 0; padding: 0 2; }
+    #inspector { width: 42; min-width: 42; position: absolute; dock: right;
+                 height: 1fr; padding: 0 1; background: $surface;
+                 opacity: 0; overflow: hidden; }
+    #inspector.drawer-open { opacity: 1; }
+    #composer { height: auto; min-height: 3; max-height: 8; margin: 0 2;
+                border: round $panel; background: $surface; padding: 0 1; }
+    #composer:focus { border: round $accent; }
+    #status-line { height: 1; padding: 0 2; color: $text-muted; background: $background; }
+    #page > ChatScreen { height: 1fr; }
+    #page > * { width: 1fr; }
+    #page Button { min-width: 0; width: auto; height: 2; padding: 0 1; margin: 0 1 1 0; }
+    /* Dense management forms must remain directly clickable without forcing
+       compatibility tests and keyboard users to scroll between every row. */
+    #page SettingsScreen Button { margin: 0; }
+    #page Input, #page Select { height: 3; margin: 0 0 1 0; }
+    #page SettingsScreen, #page SessionsScreen, #page WorkspaceScreen,
+    #page MemoryScreen, #page ExtensionsScreen, #page DoctorScreen,
+    #page SetupScreen { padding: 1 2; }
     .bp-narrow #inspector { display: none; }
     .bp-narrow #inspector.drawer-open { display: block; }
-
-    .bp-overlay #nav { display: none; }
-    .bp-overlay #inspector { display: none; }
-    .bp-overlay #nav.overlay-open { display: block; position: absolute; }
-    .bp-overlay #inspector.overlay-open { display: block; position: absolute; dock: right; }
-
-    .bp-compat #nav, .bp-compat #inspector { display: none; }
-    .bp-compat #page { display: none; }
-
+    .bp-overlay #inspector.drawer-open { width: 1fr; min-width: 0; }
+    .bp-compat #page { padding: 0; }
+    .bp-compat #topbar { padding: 0 1; }
+    .bp-compat #composer { margin: 0; }
     .bp-reduced-motion #workbench * { transition: none !important; }
     """
 
@@ -92,6 +113,9 @@ class KairoTuiApp(App[None]):
         self._breakpoint = Breakpoint.FULL
         self._current_page: PageId | None = None
         self._last_theme: str | None = None
+        self._leader_active = False
+        self._leader_timer: Timer | None = None
+        self._modal_page: PageId | None = None
         self.store.subscribe(self._on_store_changed)
 
     @classmethod
@@ -116,7 +140,7 @@ class KairoTuiApp(App[None]):
                 yield Container(id="page")
                 yield InspectorPanel(self, id="inspector")
             yield Composer(id="composer", placeholder="Ask Kairo… (Enter submits)")
-        yield Footer()
+            yield StatusLine(id="status-line")
 
     def on_mount(self) -> None:
         self._apply_responsive(self.size.width, self.size.height)
@@ -148,6 +172,47 @@ class KairoTuiApp(App[None]):
             self.set_class(bp is new_breakpoint, f"bp-{bp.value}")
         self.store.dispatch(CompatAction(new_breakpoint is Breakpoint.COMPAT))
 
+    def action_leader(self) -> None:
+        """Start the two-key OpenCode-style command chord."""
+        self._leader_active = True
+        if self._leader_timer is not None:
+            self._leader_timer.stop()
+        self._leader_timer = self.set_timer(2.0, self._clear_leader)
+        self.notify("Leader: n new · l sessions · b sidebar · c compact · m model · q quit", timeout=2)
+
+    def _clear_leader(self) -> None:
+        self._leader_active = False
+        self._leader_timer = None
+
+    def on_key(self, event) -> None:
+        if not self._leader_active:
+            return
+        key = event.key.lower()
+        self._clear_leader()
+        event.stop()
+        actions = {
+            "n": self.action_new_chat,
+            "l": lambda: self.action_page("sessions"),
+            "b": self.action_toggle_sidebar,
+            "c": lambda: self.run_worker(self._run_command("/compress")),
+            "m": lambda: self.run_worker(self._run_command("/model")),
+            "a": self.action_toggle_authorization,
+            "t": self.action_toggle_thinking,
+            "q": self.action_quit,
+        }
+        action = actions.get(key)
+        if action is not None:
+            result = action()
+            if asyncio.iscoroutine(result):
+                self.run_worker(result)
+
+    def action_toggle_sidebar(self) -> None:
+        inspector = self.query_one_optional("#inspector", InspectorPanel)
+        if inspector is None:
+            return
+        inspector.toggle_class("drawer-open")
+        self.store.dispatch(InspectorAction(inspector.has_class("drawer-open")))
+
     async def _pump_run(self) -> None:
         await self._pump.run()
 
@@ -176,6 +241,18 @@ class KairoTuiApp(App[None]):
             return
         self.store.dispatch(PageAction(page_id))
         self._show_page(page_id)
+
+    def open_management(self, page: PageId) -> None:
+        """Open a management destination as a modal over the conversation."""
+        if self._modal_page is page:
+            return
+        if self._modal_page is not None and len(self.screen_stack) > 1:
+            self.pop_screen()
+        self._modal_page = page
+        self.store.dispatch(PageAction(page))
+        from kairo_tui.screens.management import ManagementModal
+
+        self.push_screen(ManagementModal(self, page))
 
     def _show_page(self, page: PageId) -> None:
         if self._current_page is page:
@@ -332,14 +409,17 @@ class KairoTuiApp(App[None]):
         # strict query would raise NoMatches inside a worker. Optional queries
         # make the refresh a no-op on the detached default screen.
         topbar = self.query_one_optional("#topbar", TopBar)
+        status_line = self.query_one_optional("#status-line", StatusLine)
         composer = self.query_one_optional("#composer", Composer)
         if topbar is not None:
             topbar.render_status(self.store.state)
+        if status_line is not None:
+            status_line.render_state(self.store.state)
         if composer is not None:
             composer.disabled = not self.store.state.setup_complete
         # Mount the page only when it actually changes (never remount Setup on
         # every store dispatch — that would reset its step state).
-        if self.store.state.page is not self._current_page:
+        if self._modal_page is None and self.store.state.page is not self._current_page:
             self._show_page(self.store.state.page)
 
     def on_composer_submitted(self, message: Composer.Submitted) -> None:

@@ -41,7 +41,15 @@ def test_tui_wheel_contains_only_tui_and_distribution_metadata() -> None:
     assert all(name.startswith(("kairo_tui/", "kairo_tui-0.4.0a2.dist-info/")) for name in names)
     assert not any(name.startswith(("agent/", "tools/", "tests/", "web/")) for name in names)
     assert not any(name.startswith("kairo.py") for name in names)
-    assert any(name.endswith("entry_points.txt") for name in names)  # kairo-tui console script
+    assert any(name.endswith("entry_points.txt") for name in names)  # kairo + kairo-tui console scripts
+
+
+def test_tui_metadata_exposes_both_compatible_console_commands() -> None:
+    with zipfile.ZipFile(wheel_path()) as archive:
+        metadata_name = next(name for name in archive.namelist() if name.endswith("entry_points.txt"))
+        entry_points = archive.read(metadata_name).decode("utf-8")
+    assert "kairo = kairo_tui.cli:main" in entry_points
+    assert "kairo-tui = kairo_tui.cli:main" in entry_points
 
 
 def test_tui_wheel_installs_isolated_and_smokes() -> None:
@@ -58,8 +66,14 @@ def test_tui_wheel_installs_isolated_and_smokes() -> None:
     working.mkdir()
     child = dict(os.environ)
     child.pop("PYTHONPATH", None)
-    completed = subprocess.run(
-        [str(python), "-m", "kairo_tui", "--headless-smoke"],
-        cwd=working, env=child, check=True, capture_output=True, text=True,
-    )
-    assert "KAIRO_TUI_SMOKE_OK" in completed.stdout
+    for command in ("kairo-tui", "kairo"):
+        executable = (
+            venv_dir / "Scripts" / f"{command}.exe"
+            if os.name == "nt"
+            else venv_dir / "bin" / command
+        )
+        completed = subprocess.run(
+            [str(executable), "--headless-smoke"],
+            cwd=working, env=child, check=True, capture_output=True, text=True,
+        )
+        assert "KAIRO_TUI_SMOKE_OK" in completed.stdout

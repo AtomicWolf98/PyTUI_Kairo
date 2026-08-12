@@ -1,4 +1,8 @@
-"""Shared TUI widgets."""
+"""Shared TUI widgets.
+
+These widgets intentionally contain presentation only.  They receive the
+immutable AppState snapshot and never call the kernel directly.
+"""
 
 from __future__ import annotations
 
@@ -8,36 +12,58 @@ from textual.widgets import Static, TextArea
 
 
 class TopBar(Static):
-    """Kernel/workspace/profile/authorization status line (store-driven)."""
+    """Compact session/workspace identity line.
+
+    Detailed preferences belong in the status line and command palette.  This
+    prevents a full path and a dozen flags from wrapping above the conversation
+    on ordinary terminals.
+    """
 
     def render_status(self, state) -> None:
         status = state.kernel_status
         if status is None:
-            self.update("Kairo — starting…")
+            self.update("KAIRO   starting")
             return
-        auth = status.authorization_mode.value
-        plan = "Plan" if status.plan_mode else "plan-off"
-        think = "Think" if status.thinking_mode else "think-off"
-        turns = len(state.active_turns)
-        compat = " — [b]compat mode (minimal layout)[/b]" if state.compat_mode else ""
+        session = next(
+            (item.name for item in state.sessions if str(item.session_id) == state.active_session_id),
+            "New session",
+        )
+        root = (status.workspace_root or "workspace").replace("\\", "/").rstrip("/")
+        workspace = root.rsplit("/", 1)[-1] or "workspace"
+        health = "safe-mode" if state.safe_mode else status.state.value.lower()
+        if state.compat_mode:
+            health = "compat mode"
+        thinking = "think" if status.thinking_mode else "think-off"
+        self.update(f"Kairo  {session}   {workspace}  ·  {health} · {thinking}")
+
+
+class StatusLine(Static):
+    """OpenCode-style prompt context and keyboard hints."""
+
+    def render_state(self, state) -> None:
+        status = state.kernel_status
+        if status is None:
+            self.update("starting · ctrl+p commands")
+            return
+        profile = status.active_profile_id or "no-profile"
+        agent = "PLAN" if status.plan_mode else "BUILD"
+        think = "think" if status.thinking_mode else "fast"
+        mode = status.authorization_mode.value
+        active = f"{len(state.active_turns)} active" if state.active_turns else "idle"
         self.update(
-            f"Kairo {status.state.value} | ws:{status.workspace_root} | "
-            f"profile:{status.active_profile_id or 'none'} | {auth} | {plan} | {think} | turns:{turns}{compat}"
+            f"{agent} · {profile} · {mode} · {think} · {active}   "
+            "ctrl+p commands · ctrl+x b sidebar · esc stop",
         )
 
 
 class Composer(TextArea):
-    """Multi-line composer: Enter submits; Shift/Ctrl+Enter inserts a newline.
-
-    Ctrl+Up/Ctrl+Down walk the per-app-lifetime input history. The in-progress
-    draft is remembered when leaving it, so Ctrl+Down restores it before
-    cycling past the end.
-    """
+    """Multi-line composer with history and explicit submit/newline actions."""
 
     BINDINGS = [
         Binding("enter", "submit", "Submit", priority=True),
         Binding("shift+enter", "newline", "New line", priority=True),
         Binding("ctrl+enter", "newline", "New line", priority=True),
+        Binding("alt+enter", "newline", "New line", priority=True),
         Binding("ctrl+up", "history_prev", "Previous input", priority=True),
         Binding("ctrl+down", "history_next", "Next input", priority=True),
     ]
@@ -59,7 +85,7 @@ class Composer(TextArea):
         if not self._history:
             return
         if self._history_index == len(self._history):
-            self._draft = self.text  # remember the in-progress input
+            self._draft = self.text
         self._history_index = max(0, self._history_index - 1)
         self.text = self._history[self._history_index] if self._history_index < len(self._history) else self._draft
 
@@ -70,7 +96,7 @@ class Composer(TextArea):
         if self._history_index < len(self._history):
             self.text = self._history[self._history_index]
         elif self._history_index == len(self._history):
-            self.text = self._draft  # back at the editing slot: restore the draft
+            self.text = self._draft
         else:
             self.text = ""
 
@@ -81,7 +107,7 @@ class Composer(TextArea):
         self.insert("\n")
 
     class Submitted(Message):
-        """Carries the submitted composer text to the app handler."""
+        """Carries the composer text to the app handler."""
 
         def __init__(self, text: str) -> None:
             super().__init__()

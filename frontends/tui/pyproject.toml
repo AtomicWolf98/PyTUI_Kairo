@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 kairo-tui = "kairo_tui.cli:main"
+kairo = "kairo_tui.cli:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "kairo_tui._version.__version__"}

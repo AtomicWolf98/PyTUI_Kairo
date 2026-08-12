@@ -52,10 +52,31 @@ echo [2/6] Validating installation ownership...
 
 if exist "%KAIRO_INSTALL_ROOT%" (
     if not exist "%KAIRO_OWNER_FILE%" (
-        echo [ERROR] The target directory already exists but is not owned by Kairo:
-        echo   "%KAIRO_INSTALL_ROOT%"
-        echo Move it aside or choose a new KAIRO_INSTALL_ROOT. No files were changed.
-        goto :failure
+        rem Migrate only the known stale wrapper from the pre-0.4 installer.
+        rem An unknown existing installation is never overwritten.
+        if exist "%KAIRO_BIN%\kairo.bat" (
+            findstr /I /C:"PyTUI_Kairo_dev" "%KAIRO_BIN%\kairo.bat" >nul
+            if errorlevel 1 (
+                echo [ERROR] The target directory already exists but is not owned by Kairo:
+                echo   "%KAIRO_INSTALL_ROOT%"
+                echo Choose a new KAIRO_INSTALL_ROOT. No files were changed.
+                goto :failure
+            )
+            echo [INFO] Migrating the known stale pre-0.4 kairo wrapper.
+            move /Y "%KAIRO_BIN%\kairo.bat" "%KAIRO_BIN%\kairo.bat.legacy" >nul
+            if errorlevel 1 (
+                echo [ERROR] Could not preserve the stale kairo wrapper.
+                goto :failure
+            )
+        ) else (
+            echo [ERROR] The target directory already exists but is not owned by Kairo:
+            echo   "%KAIRO_INSTALL_ROOT%"
+            echo Choose a new KAIRO_INSTALL_ROOT. No files were changed.
+            goto :failure
+        )
+        >"%KAIRO_OWNER_FILE%" echo schema=1
+        >>"%KAIRO_OWNER_FILE%" echo product=kairo-kernel+tui
+        >>"%KAIRO_OWNER_FILE%" echo installation_id=%KAIRO_OWNER_ID%
     )
     findstr /X /C:"installation_id=%KAIRO_OWNER_ID%" "%KAIRO_OWNER_FILE%" >nul
     if errorlevel 1 (
@@ -97,7 +118,7 @@ if errorlevel 1 (
     goto :failure
 )
 
-echo [5/6] Creating the owned command shim...
+echo [5/6] Creating the owned command shims...
 if not exist "%KAIRO_BIN%" mkdir "%KAIRO_BIN%"
 if errorlevel 1 (
     echo [ERROR] Failed to create the command directory.
@@ -105,10 +126,15 @@ if errorlevel 1 (
 )
 >"%KAIRO_BIN%\kairo-tui.bat" echo @echo off
 >>"%KAIRO_BIN%\kairo-tui.bat" echo "%KAIRO_VENV%\Scripts\kairo-tui.exe" %%*
+>"%KAIRO_BIN%\kairo.bat" echo @echo off
+>>"%KAIRO_BIN%\kairo.bat" echo "%KAIRO_VENV%\Scripts\kairo.exe" %%*
 
-echo Existing commands named "kairo-tui" outside the managed directory are left untouched:
+echo Existing commands named "kairo" or "kairo-tui" outside the managed directory are left untouched:
 for /f "delims=" %%P in ('where kairo-tui 2^>nul') do (
     if /I not "%%~fP"=="%KAIRO_BIN%\kairo-tui.bat" echo   %%~fP
+)
+for /f "delims=" %%P in ('where kairo 2^>nul') do (
+    if /I not "%%~fP"=="%KAIRO_BIN%\kairo.bat" echo   %%~fP
 )
 
 if /I "%KAIRO_SKIP_PATH%"=="1" (

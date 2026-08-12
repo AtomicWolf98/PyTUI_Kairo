@@ -481,16 +481,34 @@ class ChatScreen(Container):
     DEFAULT_CSS = """
     ChatScreen {
         height: 1fr;
+        padding: 0;
     }
+    ChatScreen #chat-header { height: 1; color: $text-muted; padding: 0 1; }
     #chat-timeline {
         height: 1fr;
+        padding: 1 0;
     }
     #session-strip {
-        height: auto;
-        padding: 0 0 1 0;
+        height: 1;
+        padding: 0;
+        opacity: 0;
+        overflow: hidden;
     }
     .session-chip {
         margin: 0 1 0 0;
+    }
+    TurnStatusBar { layout: horizontal; height: 1; padding: 0 1; border: none; background: $background; }
+    TurnStatusBar #turn-status-text { width: 1fr; }
+    TurnStatusBar Button { width: auto; min-width: 0; height: 1; padding: 0 1; margin: 0 1 0 0; }
+    .msg-user, .msg-assistant, .msg-thought, .msg-tool, .msg-plan,
+    .msg-interaction, .msg-media { height: auto; margin: 0 0 1 0; padding: 0 1; border: none; }
+    .msg-user { color: $text; background: $surface; }
+    .msg-thought { color: $text-muted; }
+    .msg-tool { color: $text-muted; border-left: solid $panel; }
+    .msg-plan { border-left: solid $accent; background: $surface; }
+    .tool-card-actions, .plan-card-actions, .media-actions { height: 1; }
+    .tool-card-actions Button, .plan-card-actions Button, .media-actions Button {
+        width: auto; min-width: 0; height: 1; padding: 0 1; margin: 0 1 0 0;
     }
     """
 
@@ -527,6 +545,12 @@ class ChatScreen(Container):
         self._flush_timer.stop()
 
     def _on_store(self, state: AppState) -> None:
+        # Store dispatch can race with page replacement: Textual removes a
+        # screen asynchronously, while an already queued callback may still
+        # arrive.  Never let a detached chat screen crash the app while a
+        # management page is being opened.
+        if not self.is_mounted:
+            return
         if state.messages_epoch != self._last_epoch:
             self._last_epoch = state.messages_epoch
             self._rebind()

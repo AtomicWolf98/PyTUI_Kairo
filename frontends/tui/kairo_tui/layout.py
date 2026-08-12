@@ -6,10 +6,10 @@ from enum import Enum
 
 
 class Breakpoint(str, Enum):
-    FULL = "full"      # >= 140 columns: three columns
-    NARROW = "narrow"  # 100-139: narrow nav + drawer inspector
-    OVERLAY = "overlay"  # 80-99: single page, nav/inspector are overlays
-    COMPAT = "compat"  # <80 wide or <24 tall: compat hint + minimal chat
+    FULL = "full"      # >= 140 columns: chat + optional context drawer
+    NARROW = "narrow"  # 100-139: chat, drawer opens as a controlled overlay
+    OVERLAY = "overlay"  # 80-99: chat-only default, every utility is a modal
+    COMPAT = "compat"  # <80 wide or <24 tall: compact but still usable chat
 
 
 def responsive_layout(size: tuple[int, int]) -> Breakpoint:

@@ -1,8 +1,8 @@
 ﻿# Commands / 命令
 
-Current version / 当前版本：**0.3.3**
+Current version / 当前版本：**0.4.0a2**
 
-WebUI / Web 图形界面：`kairo --web`
+Current TUI / 当前 TUI：`kairo-tui`（`kairo` 为兼容别名）
 
 The complete command reference is maintained in the bilingual manuals:
 

@@ -1,0 +1,1 @@
+{"$type":"kairo_kernel.contracts.support.SessionRecord","compression_count":0,"created_at":{"$datetime":"2026-08-12T14:19:40.998213+00:00"},"messages":{"$tuple":[]},"name":"Chat","session_id":"39bf43b850b34d3993006e35fe76dd99","updated_at":{"$datetime":"2026-08-12T14:19:44.514750+00:00"}}

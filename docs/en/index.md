@@ -1,8 +1,8 @@
 ﻿# Kairo English Docs
 
-Current version: **0.3.3**
+Current version: **0.4.0a2**
 
-WebUI: run `kairo --web`.
+Current TUI: run `kairo-tui` (`kairo` is a compatibility alias).
 
 Start here:
 

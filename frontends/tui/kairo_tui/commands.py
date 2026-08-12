@@ -59,8 +59,13 @@ async def execute_tui_command(app, parsed: ParsedCommand) -> bool:
     name = parsed.name
     if name in PAGE_BY_COMMAND:
         page = PAGE_BY_COMMAND[name]
-        app.store.dispatch(PageAction(page))
-        app._show_page(page)
+        if page is PageId.CHAT:
+            if getattr(app, "_modal_page", None) is not None and len(app.screen_stack) > 1:
+                app.pop_screen()
+            app.store.dispatch(PageAction(page))
+            app._show_page(page)
+        else:
+            app.open_management(page)
         return True
     if name == "/help":
         app.notify("\n".join(f"{k}: {v}" for k, v in TUI_COMMANDS.items()))

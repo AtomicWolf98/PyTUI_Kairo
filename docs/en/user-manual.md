@@ -1,8 +1,8 @@
 ﻿# Kairo Complete User Manual
 
-Version: **0.3.3**
+Version: **0.4.0a2**
 
-Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by default and also supports a `--plain` compatibility mode. It connects to OpenAI-compatible models and can work with local files, search, patching, shell commands, Python execution, web fetching, context compression, persisted conversations, custom skills, and runtime provider/model configuration.
+Kairo 0.4.0a2 is distributed through the standalone `kairo-tui` command (`kairo` is a compatibility alias) over the public `kairo-kernel` API. The later sections that describe legacy `config.json`, plain mode, and WebUI apply only to the legacy compatibility code; the new TUI uses versioned `config-v1.json` and does not migrate old configuration or sessions in this phase.
 
 ## 1. Install And Start
 
@@ -10,15 +10,15 @@ Kairo is a terminal-native AI coding agent. It uses a Textual full-screen TUI by
 
 ```powershell
 .\install.bat
-kairo
+kairo-tui
 ```
 
-`install.bat` removes old Kairo installs, installs this checkout into `.venv`, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat`, and puts that directory first in the current user's PATH. Open a new PowerShell window after installation.
+`install.bat` installs both the `kairo-kernel` and `kairo-tui` wheels, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat` and `kairo-tui.bat`, and puts that directory first in the current user's PATH. Open a new PowerShell window after installation, then run `kairo-tui` or `kairo`.
 
 Quick run without installing the user-level command:
 
 ```powershell
-.\run.bat
+.\run-tui.bat
 ```
 
 Manual setup:
@@ -26,8 +26,8 @@ Manual setup:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-kairo
+python -m pip install -e . -e frontends/tui
+kairo-tui
 ```
 
 ### macOS / Linux
@@ -35,8 +35,8 @@ kairo
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-kairo
+python -m pip install -e . -e frontends/tui
+kairo-tui
 ```
 
 ### Common CLI Flags

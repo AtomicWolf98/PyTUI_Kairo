@@ -1,8 +1,8 @@
 ﻿# Kairo Documentation / Kairo 文档
 
-Current version / 当前版本：**0.3.3**
+Current version / 当前版本：**0.4.0a2**
 
-WebUI / Web 图形界面：`kairo --web`
+Current release entry / 当前发行入口：`kairo-tui`（`kairo` 是兼容别名）
 
 ## Chinese / 中文
 

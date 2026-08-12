@@ -60,15 +60,15 @@ Kairo 0.3.3 对可选本地浏览器工作台进行稳定性收口：更安全�
 
 ```powershell
 .\install.bat
-kairo
+kairo-tui
 ```
 
-`install.bat` installs into the owned `%LOCALAPPDATA%\Kairo` environment, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat`, and puts that folder first in the current user's PATH. It never uninstalls similarly named packages or deletes commands from other Python environments. An existing target without Kairo's ownership manifest is rejected; set `KAIRO_INSTALL_ROOT` to choose a separate managed root. Open a new PowerShell window after installation.
+`install.bat` installs both the `kairo-kernel` and `kairo-tui` wheels into the owned `%LOCALAPPDATA%\Kairo` environment, creates `%LOCALAPPDATA%\Kairo\bin\kairo.bat` and `kairo-tui.bat`, and puts that folder first in the current user's PATH. The two commands launch the same new TUI. A known stale wrapper from pre-0.4 installations is preserved as `.legacy`; an unknown existing target is rejected. Open a new PowerShell window after installation.
 
 Quick run without installing the user-level command:
 
 ```powershell
-.\run.bat
+.\run-tui.bat
 ```
 
 Manual setup / 手动安装：
@@ -76,8 +76,8 @@ Manual setup / 手动安装：
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e .
-kairo
+python -m pip install -e . -e frontends/tui
+kairo-tui
 ```
 
 ### macOS / Linux
@@ -85,20 +85,20 @@ kairo
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-kairo
+python -m pip install -e . -e frontends/tui
+kairo-tui
 ```
 
 ## First Configuration / 首次配置
 
 ```powershell
 Copy-Item config.example.json config.json
-kairo
+kairo-tui
 ```
 
-Inside Kairo, run `/setup` for the first-run wizard or `/settings` for the full configuration panel. Inline API keys may be saved in local `config.json`; Kairo masks keys in UI, logs, session history, doctor, and default exports.
+Inside Kairo TUI, run the setup page or `/settings` for the full configuration panel. The new TUI uses the versioned `config-v1.json` document and Keyring/environment references; the old `config.json` and legacy plain/WebUI entry points are not part of this installation.
 
-启动 Kairo 后，可运行 `/setup` 使用首次配置向导，或运行 `/settings` 打开完整配置面板。inline API key 可以保存到本地 `config.json`；Kairo 会在 UI、日志、会话历史、doctor 和默认导出中掩码显示 key。
+启动 Kairo TUI 后，可使用 Setup 页面或 `/settings` 打开配置面板。新版 TUI 使用版本化 `config-v1.json` 与 Keyring/环境变量引用；旧版 `config.json` 及 legacy plain/WebUI 入口不属于本安装包。
 
 ## Common Commands / 常用命令
 

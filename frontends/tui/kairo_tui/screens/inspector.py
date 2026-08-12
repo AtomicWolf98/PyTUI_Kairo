@@ -54,6 +54,15 @@ class ActivityCard(Container):
 
 
 class InspectorPanel(VerticalScroll):
+    DEFAULT_CSS = """
+    InspectorPanel { height: 1fr; padding: 1; background: $surface; }
+    InspectorPanel TabbedContent { height: 1fr; }
+    InspectorPanel .act-card { height: auto; padding: 1; margin: 0 0 1 0;
+                                border: solid $panel; background: $background; }
+    InspectorPanel Button { width: auto; min-width: 0; margin: 0 1 0 0; }
+    InspectorPanel .changes-row { padding: 0 1; }
+    """
+
     def __init__(self, app, *, id=None) -> None:
         super().__init__(id=id)
         self._app = app
@@ -64,7 +73,7 @@ class InspectorPanel(VerticalScroll):
     def compose(self) -> ComposeResult:
         with TabbedContent():
             with TabPane("Context", id="context"):
-                yield Static("Context — later gate.", id="context-stub")
+                yield Static("Context", id="context-summary")
             with TabPane("Activity", id="activity"):
                 pass
             with TabPane("Changes", id="changes"):
@@ -85,8 +94,24 @@ class InspectorPanel(VerticalScroll):
         self._render_changes()
 
     def _render_panes(self) -> None:
+        self._render_context()
         self._render_activity()
         self._render_changes()
+
+    def _render_context(self) -> None:
+        summary = self.query_one_optional("#context-summary", Static)
+        if summary is None:
+            return
+        state = self.store.state
+        status = state.kernel_status
+        profile = status.active_profile_id if status is not None else None
+        summary.update(
+            "Context\n"
+            f"workspace revision: {state.workspace_revision}\n"
+            f"profile: {profile or 'none'}\n"
+            f"pending approvals: {len(state.pending_interactions)}\n"
+            f"active turns: {len(state.active_turns)}",
+        )
 
     def _render_activity(self) -> None:
         pane = self.query_one_optional("#activity", TabPane)

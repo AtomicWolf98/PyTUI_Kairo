@@ -84,7 +84,9 @@ def test_compat_layout_below_80x24(app_factory) -> None:
         async with app.run_test(size=(60, 20)) as pilot:
             await pilot.pause()
             assert app._breakpoint.value == "compat"
-            assert app.query_one("#page").display is False
+            # Chat-first remains usable even below the legacy 80x24 threshold;
+            # the compat class only removes padding and nonessential chrome.
+            assert app.query_one("#page").display is True
 
     asyncio.run(drive())
 
