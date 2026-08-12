@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from kairo_kernel.contracts.content import ContentBlock, Message, ToolCallBlock
 from kairo_kernel.contracts.enums import ProviderFailureKind, ProviderStreamKind
 from kairo_kernel.contracts.identifiers import ProfileId
 from kairo_kernel.contracts.json import Contract
+from kairo_kernel.contracts.support import SecretInput
 from kairo_kernel.contracts.tools import ToolDescriptor
 
 
@@ -65,3 +66,31 @@ class ProviderStreamEvent(Contract):
             raise ValueError("Usage events require usage.")
         if self.kind is ProviderStreamKind.FAILED and self.failure is None:
             raise ValueError("Failed events require failure.")
+
+
+@dataclass(frozen=True)
+class ProviderConnectionRequest:
+    """Atomic provider connection command; in-process only, never serialized.
+
+    Carries the full profile plus an optional secret input. A profile with a
+    secret reference must be accompanied by the matching ``SecretInput``. This
+    type intentionally does not inherit ``Contract``: it is a command object
+    with in-process semantics, and the secret value never appears in repr,
+    JSON, events or logs (``secret`` is ``repr=False`` / ``compare=False``).
+    """
+
+    profile: ProviderProfile
+    secret: SecretInput | None = field(default=None, repr=False, compare=False)
+    role: str = "chat"
+    make_default: bool = True
+    expected_revision: int = 0
+
+
+@dataclass(frozen=True)
+class ProviderConnectionReceipt(Contract):
+    """Outcome of a successful atomic provider connection."""
+
+    profile_id: ProfileId
+    role: str
+    catalog_revision: int
+    default_profile_id: ProfileId | None

@@ -190,6 +190,29 @@ class DocumentProviderCatalog:
             return KernelResult.failure(updated.error)
         return KernelResult.success(snapshot)
 
+    async def save_with_default(
+        self,
+        snapshot: ProviderCatalogSnapshot,
+        default_profile_id: ProfileId | None,
+    ) -> KernelResult[ProviderCatalogSnapshot]:
+        """Persist profiles, roles and the default profile in one document update."""
+        loaded = await self._store.load()
+        if loaded.error is not None and loaded.error.code is not ErrorCode.NOT_FOUND:
+            return KernelResult.failure(loaded.error)
+        expected = loaded.value.revision if loaded.value is not None else 0
+        updated = await self._store.update(
+            expected,
+            lambda document: replace(
+                document,
+                profiles=snapshot.profiles,
+                roles=snapshot.roles,
+                default_profile_id=default_profile_id or document.default_profile_id,
+            ),
+        )
+        if updated.error is not None:
+            return KernelResult.failure(updated.error)
+        return KernelResult.success(snapshot)
+
 
 def document_to_json(document: KernelConfigDocument) -> dict[str, object]:
     return {

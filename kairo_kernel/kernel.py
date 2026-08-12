@@ -38,7 +38,11 @@ from kairo_kernel.contracts.lifecycle import (
     ShutdownRequest,
 )
 from kairo_kernel.contracts.preferences import PreferencesPatch, PreferencesSnapshot
-from kairo_kernel.contracts.providers import ProviderProfile
+from kairo_kernel.contracts.providers import (
+    ProviderConnectionReceipt,
+    ProviderConnectionRequest,
+    ProviderProfile,
+)
 from kairo_kernel.contracts.support import (
     ConfigSnapshot,
     MemoryEntry,
@@ -662,6 +666,28 @@ class _Providers:
 
     async def probe(self, profile_id: ProfileId) -> KernelResult[ProviderProbeResult]:
         return await self._service.probe(profile_id)
+
+    async def configure(
+        self,
+        request: ProviderConnectionRequest,
+    ) -> KernelResult[ProviderConnectionReceipt]:
+        """Atomically connect a provider profile; emits exactly one change event."""
+        error = self._kernel._mutation_error("provider.configure")
+        if error is not None:
+            return KernelResult.failure(error)
+        result = await self._service.configure(request)
+        if result.error is not None:
+            if bool(result.error.details.get("compensation_failed")):
+                await self._kernel.mark_degraded("Provider connection compensation failed.")
+            return result
+        assert result.value is not None
+        await self._kernel._emit_change(
+            EventType.PROVIDER_CHANGED,
+            result.value.catalog_revision,
+            str(result.value.profile_id),
+            "Provider connected.",
+        )
+        return result
 
     async def store_secret(self, secret: SecretInput) -> KernelResult[SecretRef]:
         error = self._kernel._mutation_error("provider.secret.store")

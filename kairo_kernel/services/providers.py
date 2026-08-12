@@ -9,7 +9,12 @@ from urllib.parse import urlparse
 
 from kairo_kernel.contracts.enums import ErrorCode
 from kairo_kernel.contracts.identifiers import ProfileId, SecretId
-from kairo_kernel.contracts.providers import ProviderProfile
+from kairo_kernel.contracts.json import JsonObject
+from kairo_kernel.contracts.providers import (
+    ProviderConnectionReceipt,
+    ProviderConnectionRequest,
+    ProviderProfile,
+)
 from kairo_kernel.contracts.support import SecretInput
 from kairo_kernel.errors import KernelError, KernelResult
 from kairo_kernel.ports.services import SecretPort
@@ -46,20 +51,42 @@ class ProviderCatalogRepository(Protocol):
 
     async def save(self, snapshot: ProviderCatalogSnapshot) -> KernelResult[ProviderCatalogSnapshot]: ...
 
+    async def save_with_default(
+        self,
+        snapshot: ProviderCatalogSnapshot,
+        default_profile_id: ProfileId | None,
+    ) -> KernelResult[ProviderCatalogSnapshot]:
+        """Persist profiles/roles and, when given, the default profile atomically."""
+
 
 class ProviderProbePort(Protocol):
     async def probe(self, profile: ProviderProfile, secrets: SecretPort) -> KernelResult[ProviderProfile]: ...
 
 
 class InMemoryProviderCatalog:
-    def __init__(self, initial: ProviderCatalogSnapshot = ProviderCatalogSnapshot(0)) -> None:
+    def __init__(
+        self,
+        initial: ProviderCatalogSnapshot = ProviderCatalogSnapshot(0),
+        default_profile_id: ProfileId | None = None,
+    ) -> None:
         self._snapshot = initial
+        self._default_profile_id = default_profile_id
 
     async def load(self) -> KernelResult[ProviderCatalogSnapshot]:
         return KernelResult.success(self._snapshot)
 
     async def save(self, snapshot: ProviderCatalogSnapshot) -> KernelResult[ProviderCatalogSnapshot]:
         self._snapshot = snapshot
+        return KernelResult.success(snapshot)
+
+    async def save_with_default(
+        self,
+        snapshot: ProviderCatalogSnapshot,
+        default_profile_id: ProfileId | None,
+    ) -> KernelResult[ProviderCatalogSnapshot]:
+        self._snapshot = snapshot
+        if default_profile_id is not None:
+            self._default_profile_id = default_profile_id
         return KernelResult.success(snapshot)
 
 
@@ -323,6 +350,93 @@ class ProviderService:
         self._snapshot = candidate
         return KernelResult.success(candidate)
 
+    async def configure(
+        self,
+        request: ProviderConnectionRequest,
+    ) -> KernelResult[ProviderConnectionReceipt]:
+        """Atomically connect one provider profile (K1 use case).
+
+        A single request performs secret staging, one config-document update
+        (profiles + role mapping + default profile) and only then the live
+        catalog swap. Any failure leaves the live snapshot and the document
+        untouched; a freshly created secret is removed as compensation.
+        Because ``SecretPort`` offers no staging/compare-and-swap, replacing
+        an existing secret value is refused with a typed failure instead of a
+        non-atomic overwrite.
+        """
+        validation = _validate_profile(request.profile)
+        if validation is not None:
+            return KernelResult.failure(validation)
+        role = request.role.strip()
+        if not role:
+            return _connect_failure(ErrorCode.INVALID_ARGUMENT, "Provider role is required.", "provider.configure")
+        if request.secret is not None and (
+            not request.profile.secret_id or str(request.secret.secret_id) != request.profile.secret_id
+        ):
+            return _connect_failure(
+                ErrorCode.INVALID_ARGUMENT,
+                "Secret reference does not match the provider profile.",
+                "provider.configure",
+            )
+        async with self._lock:
+            conflict = self._conflict(request.expected_revision, "provider.configure")
+            if conflict is not None:
+                assert conflict.error is not None
+                return KernelResult.failure(conflict.error)
+            if any(item.profile_id == request.profile.profile_id for item in self._snapshot.profiles):
+                return _connect_failure(
+                    ErrorCode.CONFLICT,
+                    "Provider profile already exists.",
+                    "provider.configure",
+                )
+            created_secret = False
+            if request.secret is not None:
+                described = await self._secrets.describe(request.secret.secret_id)
+                if not described.ok or described.value is None:
+                    code = (
+                        described.error.code if described.error is not None else ErrorCode.CONFIG_PERSISTENCE_FAILED
+                    )
+                    return _connect_failure(code, "Secret store could not be inspected.", "provider.configure")
+                if described.value.present:
+                    return _connect_failure(
+                        ErrorCode.CONFIG_PERSISTENCE_FAILED,
+                        "Replacing an existing secret value is not supported by the secret store.",
+                        "provider.configure",
+                    )
+                stored = await self._secrets.store(request.secret)
+                if not stored.ok:
+                    code = stored.error.code if stored.error is not None else ErrorCode.CONFIG_PERSISTENCE_FAILED
+                    return _connect_failure(code, "Secret could not be stored.", "provider.configure")
+                created_secret = True
+            profiles = self._snapshot.profiles + (request.profile,)
+            roles = tuple(item for item in self._snapshot.roles if item.role != role)
+            roles += (ProviderRoleMapping(role, request.profile.profile_id),)
+            candidate = ProviderCatalogSnapshot(self._snapshot.revision + 1, profiles, roles)
+            default_profile_id = request.profile.profile_id if request.make_default else None
+            saved = await self._repository.save_with_default(candidate, default_profile_id)
+            if not saved.ok:
+                compensation_failed = False
+                secret = request.secret
+                if created_secret and secret is not None:
+                    deleted = await self._secrets.delete(secret.secret_id)
+                    compensation_failed = not deleted.ok
+                code = saved.error.code if saved.error is not None else ErrorCode.CONFIG_PERSISTENCE_FAILED
+                return _connect_failure(
+                    code,
+                    "Provider connection could not be persisted.",
+                    "provider.configure",
+                    compensation_failed=compensation_failed,
+                )
+            self._snapshot = candidate
+            return KernelResult.success(
+                ProviderConnectionReceipt(
+                    request.profile.profile_id,
+                    role,
+                    candidate.revision,
+                    default_profile_id,
+                )
+            )
+
 
 def profile_with_secret(profile: ProviderProfile, reference: SecretRef | None) -> ProviderProfile:
     """Attach only an opaque reference; secret material never enters the profile."""
@@ -357,6 +471,17 @@ def _validate_catalog(snapshot: ProviderCatalogSnapshot) -> KernelError | None:
 
 def _provider_failure(code: ErrorCode, message: str, operation: str) -> KernelResult[ProviderCatalogSnapshot]:
     return KernelResult.failure(KernelError(code, message, operation=operation))
+
+
+def _connect_failure(
+    code: ErrorCode,
+    message: str,
+    operation: str,
+    *,
+    compensation_failed: bool = False,
+) -> KernelResult[ProviderConnectionReceipt]:
+    details = JsonObject.from_pairs(("compensation_failed", True)) if compensation_failed else JsonObject()
+    return KernelResult.failure(KernelError(code, message, operation=operation, details=details))
 
 
 def _profile_failure(code: ErrorCode, message: str, operation: str) -> KernelResult[ProviderProfile]:

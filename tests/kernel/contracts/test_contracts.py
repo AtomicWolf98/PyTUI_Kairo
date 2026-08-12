@@ -400,3 +400,5 @@ def test_public_import_smoke() -> None:
     assert inspect.isclass(kairo_kernel.KernelOpenOptions)
     assert inspect.isclass(kairo_kernel.OpenedKernel)
     assert inspect.iscoroutinefunction(kairo_kernel.open_kernel)
+    assert inspect.isclass(kairo_kernel.contracts.providers.ProviderConnectionRequest)
+    assert inspect.isclass(kairo_kernel.contracts.providers.ProviderConnectionReceipt)

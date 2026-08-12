@@ -206,3 +206,29 @@ Semantics:
 - A failed `kernel.start()` shuts down every opened resource (including the
   database) before the failure is returned.
 
+## Atomic provider connection (K1)
+
+`await kernel.providers.configure(request) -> KernelResult[ProviderConnectionReceipt]`
+connects one provider profile atomically; frontends must not chain
+secret/profile/role/default mutations themselves.
+
+| Type | Meaning |
+|---|---|
+| `ProviderConnectionRequest(profile, secret=None, role="chat", make_default=True, expected_revision=0)` | in-process command object; intentionally does not inherit `Contract`, is never persisted/serialized, and its secret value never appears in repr, JSON, events or logs |
+| `ProviderConnectionReceipt(profile_id, role, catalog_revision, default_profile_id)` | typed success outcome |
+
+Transaction semantics (all-or-nothing, guarded by the kernel mutation gate):
+
+- Validates expected catalog revision, profile, role and secret reference
+  (`secret.secret_id` must equal the profile's secret reference).
+- A new secret is staged first; profiles + role mapping + default profile are
+  written in one config-document update; only after persistence succeeds is
+  the live catalog snapshot swapped.
+- On failure the live snapshot is unchanged, the document revision does not
+  advance, and a freshly created secret is removed as compensation. If
+  compensation also fails the kernel transitions to degraded.
+- Replacing an existing secret value is refused with a typed
+  `CONFIG_PERSISTENCE_FAILED` (the current `SecretPort` has no
+  staging/compare-and-swap), instead of a non-atomic overwrite.
+- Success emits exactly one `PROVIDER_CHANGED` event.
+
