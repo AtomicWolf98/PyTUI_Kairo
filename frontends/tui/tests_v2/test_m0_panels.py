@@ -87,7 +87,7 @@ class WorkspaceKernel:
 
 async def test_sidebar_hidden_by_default() -> None:
     app = KairoTuiApp(kernel=WorkspaceKernel())  # type: ignore[arg-type]
-    async with app.run_test() as pilot:
+    async with app.run_test():
         context = app.query_one("#context-panel", ContextPanel)
         workspace = app.query_one("#workspace-panel", WorkspacePanel)
         assert not context.has_class("sidebar-open")
