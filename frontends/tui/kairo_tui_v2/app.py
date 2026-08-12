@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from kairo_kernel import KairoKernel
+from kairo_kernel.contracts.content import TextBlock
 from kairo_kernel.contracts.identifiers import TurnId
+from kairo_kernel.contracts.interactions import InteractionResponse
 from kairo_kernel.contracts.providers import ProviderConnectionRequest
 from textual import events, on
 from textual.app import App, ComposeResult
@@ -12,9 +14,11 @@ from textual.binding import Binding
 from kairo_tui_v2._version import __version__
 from kairo_tui_v2.commands import LOCAL_COMMANDS
 from kairo_tui_v2.controller import TuiController
+from kairo_tui_v2.dialogs.approval import ApprovalDialog
 from kairo_tui_v2.dialogs.commands import CommandPalette
 from kairo_tui_v2.dialogs.connect import ConnectDialog
 from kairo_tui_v2.dialogs.models import ModelPicker
+from kairo_tui_v2.dialogs.plan import PlanDialog
 from kairo_tui_v2.dialogs.sessions import SessionPicker
 from kairo_tui_v2.event_loop import KernelEventLoop
 from kairo_tui_v2.reducer import (
@@ -62,6 +66,7 @@ class KairoTuiApp(App[None]):
         self._last_submitted: str | None = None
         self._last_ready: str | None = None
         self._connect_open = False
+        self._interaction_open = False
         self._event_loop: KernelEventLoop | None = None
 
     @property
@@ -137,6 +142,7 @@ class KairoTuiApp(App[None]):
             self._open_connect_dialog()
         else:
             self._close_connect_dialog()
+        self._sync_interaction_dialog()
         self.run_worker(self._render_transcript(), exclusive=True, group="render")
         composer = self.query_one("#composer", Composer)
         if composer.text != self._state.draft:
@@ -191,6 +197,7 @@ class KairoTuiApp(App[None]):
         if not self._connect_open:
             return
         self._connect_open = False
+        self._interaction_open = False
         self.pop_screen()
 
     @on(ConnectDialog.Canceled)
@@ -219,6 +226,50 @@ class KairoTuiApp(App[None]):
         if send_after:
             text = self._state.pending_draft or self._last_submitted or ""
             self.run_worker(self._handle_submit(text))
+
+    # ---- Pending interactions (D1) -----------------------------------------
+
+    def _sync_interaction_dialog(self) -> None:
+        request = self._state.pending_interactions[0] if self._state.pending_interactions else None
+        if request is None:
+            if self._interaction_open:
+                self._interaction_open = False
+                self.pop_screen()
+            return
+        if self._interaction_open:
+            return  # one modal at a time; remaining requests queue in state
+        self._interaction_open = True
+        kind = request.kind.value
+        if kind == "plan_approval":
+            plan_text = (
+                "\n".join(
+                    block.text for block in request.prompt_blocks if isinstance(block, TextBlock)
+                )
+                if hasattr(request, "prompt_blocks")
+                else request.prompt
+            )
+            self.push_screen(PlanDialog(request, plan_text))
+        else:
+            self.push_screen(ApprovalDialog(request))
+
+    @on(ApprovalDialog.Responded)
+    def on_approval_responded(self, message: ApprovalDialog.Responded) -> None:
+        self.run_worker(self._respond(message.response))
+
+    @on(PlanDialog.Responded)
+    def on_plan_responded(self, message: PlanDialog.Responded) -> None:
+        self.run_worker(self._respond(message.response))
+
+    async def _respond(self, response: InteractionResponse) -> None:
+        result = await self._controller.respond_interaction(response)
+        if result.error is not None:
+            dialog = self.screen
+            if isinstance(dialog, (ApprovalDialog, PlanDialog)):
+                dialog.show_error(result.error.message)
+            return
+        if self._interaction_open:
+            self._interaction_open = False
+            self.pop_screen()
 
     # ---- Stop / retry ------------------------------------------------------
 

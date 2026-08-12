@@ -10,6 +10,7 @@ from __future__ import annotations
 from kairo_kernel import KairoKernel
 from kairo_kernel.contracts.enums import ErrorCode
 from kairo_kernel.contracts.identifiers import SessionId, TurnId
+from kairo_kernel.contracts.interactions import InteractionReceipt, InteractionResponse
 from kairo_kernel.contracts.providers import (
     ProviderConnectionReceipt,
     ProviderConnectionRequest,
@@ -246,6 +247,16 @@ class TuiController:
     @property
     def _active_session_hint(self) -> None:
         return None
+
+    async def respond_interaction(
+        self,
+        response: InteractionResponse,
+    ) -> KernelResult[InteractionReceipt]:
+        if self._kernel is None:
+            return KernelResult.failure(
+                KernelError(ErrorCode.KERNEL_NOT_RUNNING, "Kernel is not available.", operation="interaction.respond")
+            )
+        return await self._kernel.interactions.respond(response)
 
     async def catalog_revision(self) -> int:
         if self._kernel is None:
