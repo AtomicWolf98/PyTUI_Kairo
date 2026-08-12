@@ -21,7 +21,7 @@ class ContextPanel(Static):
         turn = next((item for item in state.turns if not item.terminal), None)
         phase = turn.phase.value if turn is not None and turn.phase is not None else "idle"
         lines.append(f"Turn: {phase}")
-        for turn_id, stats in state.usage:
+        for _turn_id, stats in state.usage:
             used = getattr(stats, "used_tokens", 0)
             window = getattr(stats, "context_window", 0)
             lines.append(f"Context: {used}/{window} tokens")
