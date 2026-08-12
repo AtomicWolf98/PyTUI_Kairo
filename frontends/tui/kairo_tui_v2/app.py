@@ -22,6 +22,10 @@ from kairo_tui_v2.dialogs.plan import PlanDialog
 from kairo_tui_v2.dialogs.sessions import SessionPicker
 from kairo_tui_v2.event_loop import KernelEventLoop
 from kairo_tui_v2.panels.context import ContextPanel
+from kairo_tui_v2.panels.diagnostics import DiagnosticsPanel
+from kairo_tui_v2.panels.extensions import ExtensionsPanel
+from kairo_tui_v2.panels.memory import MemoryPanel
+from kairo_tui_v2.panels.settings import SettingsPanel
 from kairo_tui_v2.panels.workspace import WorkspacePanel
 from kairo_tui_v2.reducer import (
     CloseOverlay,
@@ -80,6 +84,10 @@ class KairoTuiApp(App[None]):
         yield Shell(id="workbench")
         yield ContextPanel("", id="context-panel", classes="sidebar")
         yield WorkspacePanel("", id="workspace-panel", classes="sidebar")
+        yield SettingsPanel("", id="settings-panel", classes="sidebar")
+        yield MemoryPanel("", id="memory-panel", classes="sidebar")
+        yield ExtensionsPanel("", id="extensions-panel", classes="sidebar")
+        yield DiagnosticsPanel("", id="diagnostics-panel", classes="sidebar")
 
     def on_mount(self) -> None:
         self.query_one("#composer", Composer).focus()
@@ -447,13 +455,11 @@ class KairoTuiApp(App[None]):
         self.dispatch_action(OpenConnectDialog(pending_draft=""))
 
     def action_toggle_sidebar(self) -> None:
-        """Cycle: context sidebar -> workspace sidebar -> closed."""
-
-        if self._sidebar_kind == "context":
-            self._sidebar_kind = "workspace"
-            self.run_worker(self._refresh_workspace_sidebar())
-        elif self._sidebar_kind == "workspace":
-            self._sidebar_kind = ""
+        """Cycle through the optional sidebars, then close."""
+        order = ("context", "workspace", "settings", "memory", "extensions", "doctor")
+        if self._sidebar_kind in order:
+            index = order.index(self._sidebar_kind)
+            self._sidebar_kind = order[index + 1] if index + 1 < len(order) else ""
         else:
             self._sidebar_kind = "context"
         self._apply_sidebar_classes()
@@ -461,12 +467,28 @@ class KairoTuiApp(App[None]):
     def _apply_sidebar_classes(self) -> None:
         context = self.query_one("#context-panel", ContextPanel)
         workspace = self.query_one("#workspace-panel", WorkspacePanel)
+        settings = self.query_one("#settings-panel", SettingsPanel)
+        memory = self.query_one("#memory-panel", MemoryPanel)
+        extensions = self.query_one("#extensions-panel", ExtensionsPanel)
+        diagnostics = self.query_one("#diagnostics-panel", DiagnosticsPanel)
         context.set_class(self._sidebar_kind == "context", "sidebar-open")
         workspace.set_class(self._sidebar_kind == "workspace", "sidebar-open")
+        settings.set_class(self._sidebar_kind == "settings", "sidebar-open")
+        memory.set_class(self._sidebar_kind == "memory", "sidebar-open")
+        extensions.set_class(self._sidebar_kind == "extensions", "sidebar-open")
+        diagnostics.set_class(self._sidebar_kind == "doctor", "sidebar-open")
         if self._sidebar_kind == "context":
             context.render_state(self._state)
         if self._sidebar_kind == "workspace":
             self.run_worker(self._refresh_workspace_sidebar())
+        if self._sidebar_kind == "settings":
+            self.run_worker(self._refresh_settings_sidebar())
+        if self._sidebar_kind == "memory":
+            self.run_worker(self._refresh_memory_sidebar())
+        if self._sidebar_kind == "extensions":
+            self.run_worker(self._refresh_extensions_sidebar())
+        if self._sidebar_kind == "doctor":
+            self.run_worker(self._refresh_doctor_sidebar())
 
     async def _refresh_workspace_sidebar(self) -> None:
         changed = await self._controller.changed_files()
@@ -478,6 +500,22 @@ class KairoTuiApp(App[None]):
     def _refresh_sidebar_views(self) -> None:
         if self._sidebar_kind == "context":
             self.query_one("#context-panel", ContextPanel).render_state(self._state)
+
+    async def _refresh_settings_sidebar(self) -> None:
+        profiles = await self._controller.model_profiles()
+        self.query_one("#settings-panel", SettingsPanel).render_state(self._state, profiles)
+
+    async def _refresh_memory_sidebar(self) -> None:
+        entries = await self._controller.memory_entries()
+        self.query_one("#memory-panel", MemoryPanel).render_entries(entries)
+
+    async def _refresh_extensions_sidebar(self) -> None:
+        skills, mcp = await self._controller.extension_inventory()
+        self.query_one("#extensions-panel", ExtensionsPanel).render_inventory(skills, mcp)
+
+    async def _refresh_doctor_sidebar(self) -> None:
+        checks = await self._controller.run_diagnostics()
+        self.query_one("#diagnostics-panel", DiagnosticsPanel).render_report(checks)
 
     def action_compress(self) -> None:
         self.run_worker(self._compress())

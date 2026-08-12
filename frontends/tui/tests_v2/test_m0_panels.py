@@ -37,8 +37,13 @@ class WorkspaceKernel:
         self.events = FakeEvents()
         self._changed = ("README.md", "src/main.py")
         self.workspace = WorkspaceKernel._Workspace(self)
+        self.providers = WorkspaceKernel._Providers()
         self.sessions = WorkspaceKernel._Sessions()
         self.conversations = WorkspaceKernel._Conversations()
+        self.memory = WorkspaceKernel._Memory()
+        self.skills = WorkspaceKernel._Skills()
+        self.mcp = WorkspaceKernel._Mcp()
+        self.diagnostics = WorkspaceKernel._Diagnostics()
 
     class _Workspace:
         def __init__(self, owner: WorkspaceKernel) -> None:
@@ -48,6 +53,12 @@ class WorkspaceKernel:
             from kairo_kernel.services.workspaces import ChangedFiles
 
             return KernelResult.success(ChangedFiles("/workspace", 7, True, tuple(self._owner._changed)))
+
+    class _Providers:
+        async def snapshot(self):
+            from kairo_kernel.services.providers import ProviderCatalogSnapshot
+
+            return ProviderCatalogSnapshot(0)
 
     class _Sessions:
         async def list(self) -> KernelResult[tuple]:
@@ -63,6 +74,26 @@ class WorkspaceKernel:
     class _Conversations:
         async def history(self, session_id: object) -> KernelResult[tuple]:
             return KernelResult.success(())
+
+    class _Memory:
+        async def search(self, query: object) -> KernelResult[tuple]:
+            return KernelResult.success(())
+
+    class _Skills:
+        async def inspect(self) -> object:
+            from kairo_kernel.skills import SkillInventory
+
+            return SkillInventory("digest", "ok", ())
+
+    class _Mcp:
+        def catalog(self) -> tuple:
+            return ()
+
+    class _Diagnostics:
+        async def local(self) -> KernelResult[object]:
+            from kairo_kernel.services.diagnostics import DiagnosticReport
+
+            return KernelResult.success(DiagnosticReport("local", (), 0.0))
 
     async def status(self) -> KernelStatus:
         return KernelStatus(
@@ -94,7 +125,7 @@ async def test_sidebar_hidden_by_default() -> None:
         assert not workspace.has_class("sidebar-open")
 
 
-async def test_toggle_cycles_context_workspace_closed() -> None:
+async def test_toggle_cycles_sidebars_and_closes() -> None:
     app = KairoTuiApp(kernel=WorkspaceKernel())  # type: ignore[arg-type]
     async with app.run_test() as pilot:
         context = app.query_one("#context-panel", ContextPanel)
@@ -106,8 +137,10 @@ async def test_toggle_cycles_context_workspace_closed() -> None:
         await pilot.pause()
         await pilot.pause()
         assert workspace.has_class("sidebar-open")
-        app.action_toggle_sidebar()
-        await pilot.pause()
+        # Cycle through settings/memory/extensions/doctor then close.
+        for _ in range(4):
+            app.action_toggle_sidebar()
+            await pilot.pause()
         assert not context.has_class("sidebar-open")
         assert not workspace.has_class("sidebar-open")
 

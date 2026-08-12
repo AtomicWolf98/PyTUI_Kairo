@@ -241,6 +241,32 @@ class TuiController:
             return ()
         return tuple(getattr(result.value, "files", ()))
 
+    async def memory_entries(self) -> tuple[object, ...]:
+        if self._kernel is None:
+            return ()
+        from kairo_kernel.contracts.support import MemoryQuery
+
+        result = await self._kernel.memory.search(MemoryQuery("", ""))
+        if not result.ok or result.value is None:
+            return ()
+        return result.value
+
+    async def extension_inventory(self) -> tuple[tuple[object, ...], tuple[object, ...]]:
+        if self._kernel is None:
+            return (), ()
+        result = await self._kernel.skills.inspect()
+        skills = tuple(result.skills) if hasattr(result, "skills") else ()
+        mcp_catalog = self._kernel.mcp.catalog()
+        return tuple(skills), tuple(mcp_catalog)
+
+    async def run_diagnostics(self) -> tuple[object, ...]:
+        if self._kernel is None:
+            return ()
+        result = await self._kernel.diagnostics.local()
+        if not result.ok or result.value is None:
+            return ()
+        return tuple(getattr(result.value, "checks", ()))
+
     async def model_profiles(self) -> tuple[ProviderProfile, ...]:
         if self._kernel is None:
             return ()
