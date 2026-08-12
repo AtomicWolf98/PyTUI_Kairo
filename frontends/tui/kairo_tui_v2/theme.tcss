@@ -41,3 +41,45 @@
     color: $text-muted;
     background: $background;
 }
+
+/* Connect modal: fixed field order, always on-screen, never full width. */
+#connect-modal {
+    width: 76;
+    max-width: 100%;
+    max-height: 100%;
+    margin: 1 2;
+    padding: 1 2;
+    background: $surface;
+    border: thick $accent;
+}
+
+#connect-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#connect-modal Label {
+    margin-top: 1;
+}
+
+#connect-modal Input,
+#connect-modal Select {
+    height: 3;
+    width: 100%;
+}
+
+#connect-error {
+    color: $error;
+    height: 2;
+    margin-top: 1;
+}
+
+#connect-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+#connect-actions Button {
+    min-width: 0;
+    margin: 0 1 0 0;
+}
