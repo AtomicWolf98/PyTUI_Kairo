@@ -33,12 +33,6 @@ TURN = TurnId("turn-1")
 class InteractionKernel:
     """Fake kernel recording interaction responses."""
 
-    def __init__(self) -> None:
-        self.responded: list[InteractionResponse] = []
-        self.fail_respond: KernelError | None = None
-        self.events = FakeEvents()
-        self.interactions = InteractionKernel._Interactions(self)
-
     class _Interactions:
         def __init__(self, owner: InteractionKernel) -> None:
             self._owner = owner
