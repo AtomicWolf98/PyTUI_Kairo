@@ -5,19 +5,24 @@ from __future__ import annotations
 from kairo_kernel import KairoKernel
 from kairo_kernel.contracts.identifiers import TurnId
 from kairo_kernel.contracts.providers import ProviderConnectionRequest
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
 from kairo_tui_v2._version import __version__
+from kairo_tui_v2.commands import LOCAL_COMMANDS
 from kairo_tui_v2.controller import TuiController
+from kairo_tui_v2.dialogs.commands import CommandPalette
 from kairo_tui_v2.dialogs.connect import ConnectDialog
+from kairo_tui_v2.dialogs.models import ModelPicker
+from kairo_tui_v2.dialogs.sessions import SessionPicker
 from kairo_tui_v2.event_loop import KernelEventLoop
 from kairo_tui_v2.reducer import (
     CloseOverlay,
     ConnectSaved,
     DraftChanged,
     DraftReady,
+    OpenConnectDialog,
     SessionActivated,
     SessionsLoaded,
     StopFinished,
@@ -50,6 +55,8 @@ class KairoTuiApp(App[None]):
     def __init__(self, kernel: KairoKernel | None = None) -> None:
         super().__init__()
         self._kernel = kernel
+        self._leader_active = False
+        self._leader_timer: object = None
         self._controller = TuiController(kernel)
         self._state = AppState()
         self._last_submitted: str | None = None
@@ -254,8 +261,140 @@ class KairoTuiApp(App[None]):
     def action_focus_composer(self) -> None:
         self.query_one("#composer", Composer).focus()
 
-    def action_command_palette(self) -> None:
-        """D0 adds the command palette."""
+    async def on_event(self, event: events.Event) -> None:
+
+        if isinstance(event, events.Key) and self._leader_active:
+            self._leader_active = False
+            if self._leader_timer is not None:
+                self._leader_timer.stop()  # type: ignore[attr-defined]
+                self._leader_timer = None
+            chord = {
+                "n": "action_new_session",
+                "l": "action_session_picker",
+                "b": "action_toggle_sidebar",
+                "m": "action_model_picker",
+                "c": "action_compress",
+            }
+            if event.key in chord:
+                event.stop()  # type: ignore[union-attr]
+                getattr(self, chord[event.key])()
+                return
+        await super().on_event(event)
 
     def action_leader(self) -> None:
-        """D0 adds leader chords."""
+        """Start a 2-second leader chord; the next key selects the action."""
+        self._leader_active = True
+        self._leader_timer = self.set_timer(2.0, self._clear_leader)
+
+    def _clear_leader(self) -> None:
+        self._leader_active = False
+        self._leader_timer = None
+
+    def action_command_palette(self) -> None:
+        self.run_worker(self._open_command_palette())
+
+    async def _open_command_palette(self) -> None:
+        catalog = await self._controller.kernel_command_catalog()
+        self.push_screen(CommandPalette(LOCAL_COMMANDS, catalog))
+
+    @on(CommandPalette.Chosen)
+    def on_command_chosen(self, message: CommandPalette.Chosen) -> None:
+        self.pop_screen()
+        if message.kernel_command:
+            self.run_worker(self._run_kernel_command(message.name))
+            return
+        if message.name == "sessions":
+            self.action_session_picker()
+        elif message.name == "models":
+            self.action_model_picker()
+        elif message.name == "sidebar":
+            self.action_toggle_sidebar()
+        elif message.name == "connect":
+            self.dispatch_action(OpenConnectDialog(pending_draft=""))
+            self.query_one("#composer", Composer).focus()
+
+    async def _run_kernel_command(self, name: str) -> None:
+        for action in await self._controller.execute_command(name):
+            self.dispatch_action(action)
+
+    def action_new_session(self) -> None:
+        self.run_worker(self._create_session())
+
+    async def _create_session(self) -> None:
+        for action in await self._controller.create_session("Chat"):
+            self.dispatch_action(action)
+        self.run_worker(self._switch_history())
+
+    def action_session_picker(self) -> None:
+        self.run_worker(self._open_session_picker())
+
+    async def _open_session_picker(self) -> None:
+        picker = SessionPicker()
+        await self.push_screen(picker)
+        picker.set_sessions(self._state.sessions)
+
+    @on(SessionPicker.Chosen)
+    def on_session_chosen(self, message: SessionPicker.Chosen) -> None:
+        self.pop_screen()
+        self.dispatch_action(SessionActivated(message.session_id))  # type: ignore[arg-type]
+        self.run_worker(self._switch_history())
+
+    @on(SessionPicker.NewRequested)
+    def on_session_new(self, message: SessionPicker.NewRequested) -> None:
+        self.pop_screen()
+        self.action_new_session()
+
+    @on(SessionPicker.RenameRequested)
+    def on_session_rename(self, message: SessionPicker.RenameRequested) -> None:
+        self.run_worker(self._rename_session(message.session_id, message.name))
+
+    async def _rename_session(self, session_id: object, name: str) -> None:
+        for action in await self._controller.rename_session(session_id, name):
+            self.dispatch_action(action)
+
+    @on(SessionPicker.DeleteRequested)
+    def on_session_delete(self, message: SessionPicker.DeleteRequested) -> None:
+        self.run_worker(self._delete_session(message.session_id))
+
+    async def _delete_session(self, session_id: object) -> None:
+        for action in await self._controller.delete_session(session_id):
+            self.dispatch_action(action)
+
+    async def _switch_history(self) -> None:
+        if self._state.active_session_id is not None:
+            for action in await self._controller.load_history(self._state.active_session_id):
+                self.dispatch_action(action)
+
+    def action_model_picker(self) -> None:
+        self.run_worker(self._open_model_picker())
+
+    async def _open_model_picker(self) -> None:
+        profiles = await self._controller.model_profiles()
+        picker = ModelPicker()
+        await self.push_screen(picker)
+        picker.set_profiles(profiles)
+
+    @on(ModelPicker.ModelChosen)
+    def on_model_chosen(self, message: ModelPicker.ModelChosen) -> None:
+        self.pop_screen()
+        self.run_worker(self._select_model(message.profile_id))
+
+    async def _select_model(self, profile_id: object) -> None:
+        for action in await self._controller.select_model(profile_id):
+            self.dispatch_action(action)
+
+    @on(ModelPicker.ConnectRequested)
+    def on_model_connect(self, message: ModelPicker.ConnectRequested) -> None:
+        self.pop_screen()
+        self.dispatch_action(OpenConnectDialog(pending_draft=""))
+
+    def action_toggle_sidebar(self) -> None:
+        """M0 adds the context sidebar."""
+
+    def action_compress(self) -> None:
+        self.run_worker(self._compress())
+
+    async def _compress(self) -> None:
+        if self._state.active_session_id is not None:
+            await self._kernel.conversations.compress(self._state.active_session_id, "")  # type: ignore[union-attr]
+            self.run_worker(self._switch_history())

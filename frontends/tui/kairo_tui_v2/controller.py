@@ -13,6 +13,7 @@ from kairo_kernel.contracts.identifiers import SessionId, TurnId
 from kairo_kernel.contracts.providers import (
     ProviderConnectionReceipt,
     ProviderConnectionRequest,
+    ProviderProfile,
 )
 from kairo_kernel.contracts.turns import TurnRequest
 from kairo_kernel.errors import KernelError, KernelResult
@@ -168,6 +169,83 @@ class TuiController:
                 WorkspaceView(status.workspace_root, status.workspace_revision)
             )
         ]
+
+
+    async def create_session(self, name: str) -> list[UiAction]:
+        from kairo_tui_v2.reducer import NoticeSet, SessionActivated, SessionsLoaded
+
+        if self._kernel is None:
+            return [NoticeSet("Kernel is not available.")]
+        created = await self._kernel.sessions.create(name)
+        if not created.ok or created.value is None:
+            return [NoticeSet(created.error.message if created.error else "Session create failed.")]
+        loaded = await self.load_sessions()
+        return [SessionsLoaded(loaded), SessionActivated(created.value.session_id)]
+
+    async def rename_session(self, session_id: object, name: str) -> list[UiAction]:
+        from kairo_tui_v2.reducer import NoticeSet, SessionsLoaded
+
+        if self._kernel is None:
+            return [NoticeSet("Kernel is not available.")]
+        result = await self._kernel.sessions.rename(session_id, name)  # type: ignore[arg-type]
+        if not result.ok:
+            return [NoticeSet(result.error.message if result.error else "Rename failed.")]
+        loaded = await self.load_sessions()
+        return [SessionsLoaded(loaded)]
+
+    async def delete_session(self, session_id: object) -> list[UiAction]:
+        from kairo_tui_v2.reducer import NoticeSet, SessionsLoaded
+
+        if self._kernel is None:
+            return [NoticeSet("Kernel is not available.")]
+        result = await self._kernel.sessions.delete(session_id)  # type: ignore[arg-type]
+        if not result.ok:
+            return [NoticeSet(result.error.message if result.error else "Delete failed.")]
+        loaded = await self.load_sessions()
+        return [SessionsLoaded(loaded)]
+
+    async def execute_command(self, name: str) -> list[UiAction]:
+        from kairo_tui_v2.reducer import NoticeSet
+
+        if self._kernel is None:
+            return [NoticeSet("Kernel is not available.")]
+        command_text = f"/{name}" if not name.startswith("/") else name
+        parsed = self._kernel.commands.parse(command_text)
+        if not parsed.ok or parsed.value is None:
+            return [NoticeSet(parsed.error.message if parsed.error else "Unknown command.")]
+        result = await self._kernel.commands.execute(parsed.value, self._active_session_hint)
+        if not result.ok:
+            return [NoticeSet(result.error.message if result.error else "Command failed.")]
+        return [NoticeSet("")]
+
+    async def select_model(self, profile_id: object) -> list[UiAction]:
+        from kairo_kernel.contracts.preferences import PreferencesPatch
+
+        from kairo_tui_v2.reducer import NoticeSet, ProfileUpdated
+
+        if self._kernel is None:
+            return [NoticeSet("Kernel is not available.")]
+        result = await self._kernel.preferences.patch(
+            PreferencesPatch(expected_revision=0, profile_id=profile_id)  # type: ignore[arg-type]
+        )
+        if not result.ok:
+            return [NoticeSet(result.error.message if result.error else "Model select failed.")]
+        return [ProfileUpdated(str(profile_id))]
+
+    async def model_profiles(self) -> tuple[ProviderProfile, ...]:
+        if self._kernel is None:
+            return ()
+        snapshot = await self._kernel.providers.snapshot()
+        return snapshot.profiles
+
+    async def kernel_command_catalog(self) -> tuple[object, ...]:
+        if self._kernel is None:
+            return ()
+        return self._kernel.commands.catalog()
+
+    @property
+    def _active_session_hint(self) -> None:
+        return None
 
     async def catalog_revision(self) -> int:
         if self._kernel is None:
