@@ -243,7 +243,6 @@ async def test_multiple_interactions_queue_one_modal() -> None:
     kernel = InteractionKernel()
     app = KairoTuiApp(kernel=kernel)  # type: ignore[arg-type]
     async with app.run_test() as pilot:
-        second = _tool_request()
         app.dispatch_action(
             InteractionsUpdated(
                 (
