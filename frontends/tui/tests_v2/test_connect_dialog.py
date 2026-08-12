@@ -37,7 +37,81 @@ class FakeKernel:
         self.resolve_found = resolve_found
         self.configure_failure = configure_failure
         self.configure_calls: list[ProviderConnectionRequest] = []
+        self.submitted: list[str] = []
+        from tests_v2.support.fakes import FakeEvents
+
+        self.events = FakeEvents()
         self.providers = FakeKernel._Providers(self)
+        self.sessions = FakeKernel._Sessions(self)
+        self.conversations = FakeKernel._Conversations(self)
+
+    class _Sessions:
+        def __init__(self, owner: FakeKernel) -> None:
+            self._owner = owner
+
+        async def list(self) -> KernelResult[tuple]:
+            return KernelResult.success(())
+
+        async def create(self, name: str):
+            from datetime import datetime, timezone
+
+            from kairo_kernel.contracts.support import SessionSummary
+
+            return KernelResult.success(
+                SessionSummary(
+                    ProfileId("session-1"),
+                    name,
+                    0,
+                    datetime.now(timezone.utc),
+                    datetime.now(timezone.utc),
+                )
+            )
+
+    class _Conversations:
+        def __init__(self, owner: FakeKernel) -> None:
+            self._owner = owner
+
+        async def history(self, session_id: object) -> KernelResult[tuple]:
+            return KernelResult.success(())
+
+    async def status(self):
+        from datetime import datetime, timezone
+
+        from kairo_kernel.contracts.enums import AuthorizationMode, LifecycleState
+        from kairo_kernel.contracts.identifiers import KernelId
+        from kairo_kernel.contracts.lifecycle import ContextStats, KernelStatus
+
+        return KernelStatus(
+            KernelId("kernel-1"),
+            LifecycleState.RUNNING,
+            "0.4.0a2",
+            datetime.now(timezone.utc),
+            "/",
+            0,
+            None,
+            None,
+            None,
+            AuthorizationMode.MANUAL,
+            False,
+            False,
+            ContextStats(0, 0, 0.0),
+        )
+
+    async def active_turns(self) -> tuple:
+        return ()
+
+    async def submit(self, request):
+        from datetime import datetime, timezone
+
+        from kairo_kernel.contracts.turns import TurnAccepted
+
+        self.submitted.append(request.text)
+        return KernelResult.success(TurnAccepted("turn-1", "session-1", datetime.now(timezone.utc)))
+
+    async def cancel(self, turn_id: object, reason: str = ""):
+        from kairo_kernel.contracts.turns import CancelReceipt
+
+        return KernelResult.success(CancelReceipt(turn_id, True))
 
     class _Providers:
         def __init__(self, owner: FakeKernel) -> None:
@@ -222,7 +296,7 @@ async def test_save_and_send_retries_exact_original_draft() -> None:
         dialog.query_one("#model").value = "gpt-4o"
         await _focus_and_enter(dialog, "save-and-send", pilot)
         assert app.state.overlay is None
-        assert app._last_ready == "hi"
+        assert kernel.submitted == ["hi"]  # exact original draft retried
 
 
 async def test_api_key_never_enters_app_state_repr() -> None:

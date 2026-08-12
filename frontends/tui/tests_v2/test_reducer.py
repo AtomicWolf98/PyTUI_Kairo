@@ -34,6 +34,7 @@ from kairo_tui_v2.reducer import (
     OpenConnectDialog,
     SessionsLoaded,
     SubmitDraft,
+    TranscriptMerged,
     TranscriptReplaced,
     TurnUpdated,
     fold_event,
@@ -197,19 +198,30 @@ def test_fold_interaction_requested_and_resolved() -> None:
     assert state.pending_interactions == ()
 
 
-def test_fold_message_appends_transcript() -> None:
+def test_fold_message_merges_transcript() -> None:
     state = AppState()
     state, actions = fold_event(
         state,
         _event(
             1,
             EventType.MESSAGE,
-            MessageEvent(MessageId("message-1"), "append", (TextBlock("hi"),)),
+            MessageEvent(MessageId("message-1"), "delta", (TextBlock("hi"),)),
             session_id=SESSION,
         ),
     )
-    assert actions and isinstance(actions[0], TranscriptReplaced)
+    assert actions and isinstance(actions[0], TranscriptMerged)
     assert len(state.transcripts) == 1
+    state, actions = fold_event(
+        state,
+        _event(
+            2,
+            EventType.MESSAGE,
+            MessageEvent(MessageId("message-1"), "delta", (TextBlock(" there"),)),
+            session_id=SESSION,
+        ),
+    )
+    transcript = next(item for item in state.transcripts if item.session_id == SESSION)
+    assert len(transcript.entries) == 1  # merged by message_id
 
 
 def test_fold_notice_secret_marker_redacted() -> None:
