@@ -397,3 +397,6 @@ def test_public_import_smoke() -> None:
     assert inspect.isclass(kairo_kernel.contracts.preferences.PreferencesSnapshot)
     assert inspect.isclass(kairo_kernel.ports.preferences.PreferencesPort)
     assert kairo_kernel.ports.PreferencesPort is kairo_kernel.ports.preferences.PreferencesPort
+    assert inspect.isclass(kairo_kernel.KernelOpenOptions)
+    assert inspect.isclass(kairo_kernel.OpenedKernel)
+    assert inspect.iscoroutinefunction(kairo_kernel.open_kernel)

@@ -180,3 +180,29 @@ receive `CONFLICT`.
 `DocumentProviderCatalog(store)` persists provider profile/role mutations
 through that document; the default factory catalog stays in-memory unless
 `KernelDependencies.provider_catalog` is supplied.
+
+## Public bootstrap (frontends use only this)
+
+`open_kernel(options, *, secrets=None, provider=None, tools=None)` is the one
+supported way for a frontend to open a kernel; it never calls `asyncio.run`
+and never reads or logs secret values.
+
+| Type | Meaning |
+|---|---|
+| `KernelOpenOptions(workspace_root, config_path, safe_mode=False, package_version=None)` | everything a frontend decides before opening |
+| `OpenedKernel(kernel, config_revision, config_missing, config_warning)` | started kernel plus document facts |
+| `await open_kernel(...)` | `KernelResult[OpenedKernel]` |
+
+Semantics:
+
+- A missing config document starts an empty kernel with `config_missing=True`
+  (not an error). An invalid document returns a typed failure and is never
+  overwritten.
+- Profiles, role mappings, MCP servers and the default profile are loaded
+  from the document; in normal mode the provider catalog repository is
+  `DocumentProviderCatalog` over the same document, so provider CRUD and role
+  map/unmap persist to it. Safe mode uses an in-memory catalog, never
+  auto-connects MCP and does not relax authorization.
+- A failed `kernel.start()` shuts down every opened resource (including the
+  database) before the failure is returned.
+
