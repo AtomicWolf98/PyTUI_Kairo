@@ -44,14 +44,15 @@ version = {attr = "kairo_tui._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["kairo_tui", "kairo_tui.*"]
+include = ["kairo_tui", "kairo_tui.*", "kairo_tui_v2", "kairo_tui_v2.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
 kairo_tui = ["py.typed"]
+kairo_tui_v2 = ["theme.tcss"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tests_v2"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
 pythonpath = ["."]

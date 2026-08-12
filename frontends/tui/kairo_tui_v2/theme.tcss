@@ -1,0 +1,43 @@
+/* Chat-first shell layout: TopBar / Transcript / Composer / StatusLine.
+   No nav rail, no setup screen, no global width:1fr on form widgets. */
+
+#workbench {
+    layout: vertical;
+    background: $background;
+}
+
+#topbar {
+    height: 2;
+    padding: 0 2;
+    content-align: left middle;
+    color: $text;
+    background: $surface;
+    border-bottom: solid $panel;
+}
+
+#transcript {
+    height: 1fr;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#composer {
+    height: 5;
+    min-height: 3;
+    max-height: 8;
+    margin: 0 2 1 2;
+    padding: 1 1;
+    border: round $panel;
+    background: $surface;
+}
+
+#composer:focus {
+    border: round $accent;
+}
+
+#status-line {
+    height: 1;
+    padding: 0 2;
+    color: $text-muted;
+    background: $background;
+}
