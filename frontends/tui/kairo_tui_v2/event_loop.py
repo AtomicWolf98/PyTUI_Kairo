@@ -45,6 +45,10 @@ class KernelEventLoop:
     def state(self) -> AppState:
         return self._state
 
+    def sync_state(self, state: AppState) -> None:
+        """Adopt externally-applied state so folds never lose app actions."""
+        self._state = state
+
     def start(self) -> None:
         if self._task is not None and not self._task.done():
             return

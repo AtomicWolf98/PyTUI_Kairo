@@ -73,6 +73,31 @@ class WorkspaceView:
 
 
 @dataclass(frozen=True)
+class ToolCardView:
+    """One tool invocation's lifecycle; updated by TOOL events."""
+
+    tool_call_id: str
+    name: str
+    status: str = "requested"  # requested -> started -> running -> completed
+    arguments: object = None  # JsonObject
+    output: tuple[ContentBlock, ...] = ()
+    result_status: str = ""
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class PlanCardView:
+    """Structured plan card; never mixed into ordinary content."""
+
+    session_id: SessionId
+    turn_id: TurnId
+    message_id: MessageId
+    title: str = "Plan"
+    blocks: tuple[ContentBlock, ...] = ()
+    instructions: str = ""
+
+
+@dataclass(frozen=True)
 class AppState:
     """Read-only view state; no secrets, no mutable collections, no widgets."""
 
@@ -96,3 +121,8 @@ class AppState:
     workspace: WorkspaceView | None = None
     profile_label: str = ""
     notice: str = ""
+    # C1: chat workflow view state.
+    tool_cards: tuple[ToolCardView, ...] = ()
+    plan_cards: tuple[PlanCardView, ...] = ()
+    usage: tuple[tuple[TurnId, object], ...] = ()  # (turn_id, ContextStats) once per turn
+    stopping_turn_id: TurnId | None = None

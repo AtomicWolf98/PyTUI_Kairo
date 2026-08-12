@@ -9,18 +9,26 @@ from __future__ import annotations
 
 from kairo_kernel import KairoKernel
 from kairo_kernel.contracts.enums import ErrorCode
+from kairo_kernel.contracts.identifiers import SessionId, TurnId
 from kairo_kernel.contracts.providers import (
     ProviderConnectionReceipt,
     ProviderConnectionRequest,
 )
+from kairo_kernel.contracts.turns import TurnRequest
 from kairo_kernel.errors import KernelError, KernelResult
 
 from kairo_tui_v2.reducer import (
-    DraftReady,
+    DraftAccepted,
+    NoticeSet,
     OpenConnectDialog,
+    SessionActivated,
     SubmitFailed,
+    TurnStarted,
     UiAction,
 )
+from kairo_tui_v2.state import SessionView, TurnView, WorkspaceView
+
+TERMINAL_STATUSES = frozenset({"succeeded", "cancelled", "failed"})
 
 
 class TuiController:
@@ -36,12 +44,130 @@ class TuiController:
         if self._kernel is None:
             return [OpenConnectDialog(pending_draft=text)]
         resolved = await self._kernel.providers.resolve(role="chat")
-        if resolved.ok:
-            return [DraftReady(text)]
-        error = resolved.error
-        if error is not None and error.code is ErrorCode.NOT_FOUND:
-            return [OpenConnectDialog(pending_draft=text)]
-        return [SubmitFailed(text, error.message if error is not None else "Provider lookup failed.")]
+        if not resolved.ok:
+            error = resolved.error
+            if error is not None and error.code is ErrorCode.NOT_FOUND:
+                return [OpenConnectDialog(pending_draft=text)]
+            return [SubmitFailed(text, error.message if error is not None else "Provider lookup failed.")]
+        return await self._start_turn(text)
+
+    async def _start_turn(self, text: str) -> list[UiAction]:
+        assert self._kernel is not None
+        session_id = await self._ensure_session()
+        try:
+            request = TurnRequest(text, session_id)
+        except ValueError:
+            return [SubmitFailed(text, "Turn text must not be empty.")]
+        accepted = await self._kernel.submit(request)
+        if not accepted.ok or accepted.value is None:
+            error = accepted.error
+            return [
+                SubmitFailed(
+                    text,
+                    error.message if error is not None else "Turn was not accepted.",
+                )
+            ]
+        turn = accepted.value
+        return [
+            DraftAccepted(turn.session_id),
+            TurnStarted(turn.turn_id, turn.session_id),
+            SessionActivated(turn.session_id),
+        ]
+
+    async def retry_draft(self, text: str) -> list[UiAction]:
+        """Retry uses the exact last user message text; old records stay."""
+        if not text.strip():
+            return []
+        if self._kernel is None:
+            return [SubmitFailed(text, "Kernel is not available.")]
+        return await self._start_turn(text)
+
+    async def cancel_turn(self, turn_id: TurnId) -> list[UiAction]:
+        if self._kernel is None:
+            return [NoticeSet("Kernel is not available.")]
+        result = await self._kernel.cancel(turn_id, "User pressed stop.")
+        if not result.ok:
+            return [NoticeSet(result.error.message if result.error is not None else "Stop failed.")]
+        return [NoticeSet("")]
+
+    async def _ensure_session(self) -> SessionId:
+        """Reuse the newest session or create one; never duplicates implicitly."""
+        assert self._kernel is not None
+        loaded = await self._kernel.sessions.list()
+        if loaded.ok and loaded.value:
+            return loaded.value[-1].session_id
+        created = await self._kernel.sessions.create("Chat")
+        if created.ok and created.value is not None:
+            return created.value.session_id
+        raise RuntimeError("Could not create a session.")
+
+    async def load_sessions(self) -> tuple[SessionView, ...]:
+        if self._kernel is None:
+            return ()
+        loaded = await self._kernel.sessions.list()
+        if not loaded.ok or loaded.value is None:
+            return ()
+        active_turns = await self._kernel.active_turns()
+        running = {turn.session_id for turn in active_turns}
+        return tuple(
+            SessionView(
+                item.session_id,
+                item.name,
+                item.message_count,
+                item.updated_at,
+                item.session_id in running,
+            )
+            for item in loaded.value
+        )
+
+    async def load_active_turns(self) -> tuple[TurnView, ...]:
+        if self._kernel is None:
+            return ()
+        active = await self._kernel.active_turns()
+        return tuple(
+            TurnView(
+                turn.turn_id,
+                turn.session_id,
+                turn.status,
+                turn.phase,
+                turn.status.value in TERMINAL_STATUSES,
+            )
+            for turn in active
+        )
+
+    async def load_history(self, session_id: SessionId) -> list[UiAction]:
+        """Full transcript reload for recovery and session switches."""
+        from kairo_tui_v2.reducer import TranscriptReplaced
+        from kairo_tui_v2.state import TranscriptEntry
+
+        if self._kernel is None:
+            return []
+        loaded = await self._kernel.conversations.history(session_id)
+        if not loaded.ok or loaded.value is None:
+            return [NoticeSet("History could not be loaded.")]
+        entries = tuple(
+            TranscriptEntry(
+                message.message_id,
+                message.role.value,
+                message.kind.value,
+                message.content,
+                message.name,
+            )
+            for message in loaded.value
+        )
+        return [TranscriptReplaced(session_id, entries)]
+
+    async def load_workspace(self) -> list[UiAction]:
+        from kairo_tui_v2.reducer import WorkspaceUpdated
+
+        if self._kernel is None:
+            return []
+        status = await self._kernel.status()
+        return [
+            WorkspaceUpdated(
+                WorkspaceView(status.workspace_root, status.workspace_revision)
+            )
+        ]
 
     async def catalog_revision(self) -> int:
         if self._kernel is None:

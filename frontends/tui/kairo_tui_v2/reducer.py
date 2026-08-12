@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from kairo_kernel.contracts.content import ContentBlock
 from kairo_kernel.contracts.enums import EventType, TurnStatus
 from kairo_kernel.contracts.events import KernelEvent
-from kairo_kernel.contracts.identifiers import SessionId, TurnId
+from kairo_kernel.contracts.identifiers import MessageId, SessionId, TurnId
 from kairo_kernel.contracts.lifecycle import KernelStatus
 
 from kairo_tui_v2.state import (
     AppState,
     OverlayKind,
+    PlanCardView,
     SessionTranscript,
     SessionView,
+    ToolCardView,
     TranscriptEntry,
     TurnView,
     WorkspaceView,
@@ -139,6 +142,55 @@ class NoticeSet:
     text: str
 
 
+@dataclass(frozen=True)
+class TurnStarted:
+    """The kernel accepted a turn; the draft is cleared and the turn is active."""
+
+    turn_id: TurnId
+    session_id: SessionId
+
+
+@dataclass(frozen=True)
+class TranscriptMerged:
+    """One assistant message accumulated by message_id; content is complete."""
+
+    session_id: SessionId
+    message_id: MessageId
+    role: str
+    content: tuple[ContentBlock, ...]
+
+
+@dataclass(frozen=True)
+class ToolCardUpdated:
+    card: ToolCardView
+
+
+@dataclass(frozen=True)
+class PlanCardUpdated:
+    card: PlanCardView
+
+
+@dataclass(frozen=True)
+class UsageRecorded:
+    turn_id: TurnId
+    stats: object  # ContextStats
+
+
+@dataclass(frozen=True)
+class StopRequested:
+    turn_id: TurnId
+
+
+@dataclass(frozen=True)
+class StopFinished:
+    turn_id: TurnId
+
+
+@dataclass(frozen=True)
+class RetryRequested:
+    text: str
+
+
 UiAction = (
     DraftChanged
     | SubmitDraft
@@ -159,6 +211,14 @@ UiAction = (
     | WorkspaceUpdated
     | ProfileUpdated
     | NoticeSet
+    | TurnStarted
+    | TranscriptMerged
+    | ToolCardUpdated
+    | PlanCardUpdated
+    | UsageRecorded
+    | StopRequested
+    | StopFinished
+    | RetryRequested
 )
 
 
@@ -221,7 +281,49 @@ def reduce(state: AppState, action: UiAction) -> AppState:
         return replace(state, profile_label=action.label)
     if isinstance(action, NoticeSet):
         return replace(state, notice=action.text)
+    if isinstance(action, TurnStarted):
+        return replace(state, draft="", active_turn_id=action.turn_id, pending_draft=None)
+    if isinstance(action, TranscriptMerged):
+        return _merge_transcript(state, action.session_id, action.message_id, action.role, action.content)
+    if isinstance(action, ToolCardUpdated):
+        tool_rest = tuple(card for card in state.tool_cards if card.tool_call_id != action.card.tool_call_id)
+        return replace(state, tool_cards=tool_rest + (action.card,))
+    if isinstance(action, PlanCardUpdated):
+        plan_rest = tuple(card for card in state.plan_cards if card.message_id != action.card.message_id)
+        return replace(state, plan_cards=plan_rest + (action.card,))
+    if isinstance(action, UsageRecorded):
+        if any(turn_id == action.turn_id for turn_id, _ in state.usage):
+            return state  # usage recorded exactly once per turn
+        return replace(state, usage=state.usage + ((action.turn_id, action.stats),))
+    if isinstance(action, StopRequested):
+        return replace(state, stopping_turn_id=action.turn_id)
+    if isinstance(action, StopFinished):
+        return replace(state, stopping_turn_id=None)
+    if isinstance(action, RetryRequested):
+        return state
     return state
+
+
+def _merge_transcript(
+    state: AppState,
+    session_id: SessionId,
+    message_id: MessageId,
+    role: str,
+    content: tuple[ContentBlock, ...],
+) -> AppState:
+    """Merge a delta into the session transcript by message_id."""
+    transcript = next(
+        (item for item in state.transcripts if item.session_id == session_id),
+        None,
+    )
+    entries = list(transcript.entries) if transcript is not None else []
+    existing = next((item for item in entries if item.message_id == message_id), None)
+    if existing is None:
+        entries.append(TranscriptEntry(message_id, role, "assistant", content))
+    else:
+        index = entries.index(existing)
+        entries[index] = TranscriptEntry(message_id, existing.role, "assistant", existing.content + content)
+    return _replace_transcript(state, session_id, tuple(entries))
 
 
 def fold_event(state: AppState, event: KernelEvent) -> tuple[AppState, tuple[UiAction, ...]]:
@@ -282,19 +384,75 @@ def fold_event(state: AppState, event: KernelEvent) -> tuple[AppState, tuple[UiA
             return next_state, ()  # stale revision dropped
     elif event_type is EventType.MESSAGE:
         message_id = payload.message_id  # type: ignore[union-attr]
-        role = str(event.session_id)  # placeholder; C1 maps real roles
-        entry = TranscriptEntry(message_id, role, payload.action, payload.content)  # type: ignore[union-attr]
+        action = payload.action  # type: ignore[union-attr]
+        content = payload.content  # type: ignore[union-attr]
         session_id = event.session_id or SessionId("")
-        current = next(
-            (item for item in next_state.transcripts if item.session_id == session_id),
-            None,
-        )
-        entries = current.entries + (entry,) if current is not None else (entry,)
-        next_state = _replace_transcript(next_state, session_id, entries)
-        actions.append(TranscriptReplaced(session_id, entries))
-    # LIFECYCLE, TOOL, USAGE, CONTEXT, SESSION_CHANGED, CONFIG_CHANGED,
-    # SKILLS_CHANGED, PROVIDER_CHANGED, MEMORY_CHANGED: no state change in C0.
+        turn_id = event.turn_id
+        if action == "plan_delta" or (action == "completed" and _turn_in_phase(next_state, turn_id, "planning")):
+            # Plan output is a structured card, never plain content.
+            plan_card = next((card for card in next_state.plan_cards if card.message_id == message_id), None)
+            blocks = plan_card.blocks + content if plan_card is not None else content
+            card = PlanCardView(session_id, turn_id or TurnId(""), message_id, "Plan", blocks)
+            next_state = _fold_replace_plan(next_state, card)
+            actions.append(PlanCardUpdated(card))
+        else:
+            merged = _merge_transcript(next_state, session_id, message_id, "assistant", content)
+            next_state = merged
+            actions.append(TranscriptMerged(session_id, message_id, "assistant", content))
+    elif event_type is EventType.TOOL:
+        tool_action = payload.action  # type: ignore[union-attr]
+        invocation = payload.invocation  # type: ignore[union-attr]
+        if invocation is None:
+            return next_state, ()
+        tool_call_id = str(invocation.tool_call_id)
+        tool_card = next((card for card in next_state.tool_cards if card.tool_call_id == tool_call_id), None)
+        if tool_action == "requested":
+            tool_view = ToolCardView(tool_call_id, invocation.name, "requested", invocation.arguments)
+        elif tool_action == "started":
+            base = tool_card or ToolCardView(tool_call_id, invocation.name, "started")
+            tool_view = replace(base, status="started")
+        elif tool_action == "output":
+            chunk = payload.output  # type: ignore[union-attr]
+            base = tool_card or ToolCardView(tool_call_id, invocation.name, "running")
+            output = base.output + chunk.content if chunk is not None else base.output
+            tool_view = replace(base, status="running", output=output)
+        else:  # completed
+            result = payload.result  # type: ignore[union-attr]
+            base = tool_card or ToolCardView(tool_call_id, invocation.name, "completed")
+            tool_view = replace(
+                base,
+                status="completed",
+                result_status=result.status.value if result is not None else "",
+                error=result.error_message if result is not None else "",
+            )
+        next_state = _fold_replace_tool(next_state, tool_view)
+        actions.append(ToolCardUpdated(tool_view))
+    elif event_type is EventType.USAGE:
+        stats = payload  # type: ignore[union-attr]
+        turn_id = event.turn_id
+        if turn_id is not None:
+            next_state = replace(next_state, usage=next_state.usage + ((turn_id, stats),))
+            actions.append(UsageRecorded(turn_id, stats))
+    # LIFECYCLE, CONTEXT, SESSION_CHANGED, CONFIG_CHANGED, SKILLS_CHANGED,
+    # PROVIDER_CHANGED, MEMORY_CHANGED: no state change in C1.
     return next_state, tuple(actions)
+
+
+def _fold_replace_tool(state: AppState, card: ToolCardView) -> AppState:
+    rest = tuple(item for item in state.tool_cards if item.tool_call_id != card.tool_call_id)
+    return replace(state, tool_cards=rest + (card,))
+
+
+def _fold_replace_plan(state: AppState, card: PlanCardView) -> AppState:
+    rest = tuple(item for item in state.plan_cards if item.message_id != card.message_id)
+    return replace(state, plan_cards=rest + (card,))
+
+
+def _turn_in_phase(state: AppState, turn_id: TurnId | None, phase: str) -> bool:
+    if turn_id is None:
+        return False
+    turn = next((item for item in state.turns if item.turn_id == turn_id), None)
+    return turn is not None and turn.phase is not None and turn.phase.value == phase
 
 
 def _contains_secret_marker(text: str) -> bool:
