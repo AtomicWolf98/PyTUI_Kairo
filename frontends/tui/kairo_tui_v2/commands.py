@@ -17,4 +17,7 @@ LOCAL_COMMANDS: tuple[LocalCommand, ...] = (
     LocalCommand("sidebar", "Toggle the context sidebar"),
     LocalCommand("settings", "Open settings"),
     LocalCommand("connect", "Connect a model"),
+    LocalCommand("memory", "Open memory"),
+    LocalCommand("extensions", "Open extensions"),
+    LocalCommand("doctor", "Open diagnostics"),
 )
